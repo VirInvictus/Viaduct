@@ -1,0 +1,23 @@
+[package]
+name = "viaduct"
+version = "1.0.0-dev"
+edition = "2024"
+description = "A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire."
+license = "GPL-3.0"
+
+[dependencies]
+gtk = { version = "0.9", package = "gtk4", features = ["v4_16"] }
+adw = { version = "0.7", package = "libadwaita", features = ["v1_7"] }
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.32", features = ["bundled", "time", "url"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+quick-xml = { version = "0.36", features = ["serialize"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ammonia = "4.0"
+crossbeam-channel = "0.5"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+url = "2.5"
+chrono = "0.4"
