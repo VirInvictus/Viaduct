@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.svg" alt="Viaduct" width="420">
+  <img src="logo.svg" alt="viaduct" width="420">
 </p>
 
 <p align="center">
@@ -10,13 +10,13 @@
 
 ---
 
-# Viaduct
+# viaduct
 
-A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire. Viaduct is a direct translation of the NetNewsWire architectural philosophy into the Linux ecosystem via Rust and GTK4, built specifically for local-only, private reading.
+A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire. viaduct is a direct translation of the NetNewsWire architectural philosophy into the Linux ecosystem via Rust and GTK4, built specifically for local-only, private reading.
 
 ## Why this exists
 
-Modern readers often rely on web engines that consume excessive memory. Viaduct completely isolates the network and data layers from the UI thread using Rust's async ecosystem. It handles massive subscription lists without locking the UI thread. It targets an idle memory footprint of 250MB, trading ultra-minimalist asceticism for rock-solid performance, offline image caching, and local data sovereignty.
+Modern readers often rely on web engines that consume excessive memory. viaduct completely isolates the network and data layers from the UI thread using Rust's async ecosystem. It handles massive subscription lists without locking the UI thread. It targets idle RAM of 100–300 MB with a hard 500 MB peak ceiling, trading ultra-minimalist asceticism for rock-solid performance, offline image caching, and local data sovereignty.
 
 ## Features
 
@@ -30,7 +30,7 @@ Modern readers often rely on web engines that consume excessive memory. Viaduct 
 
 ## Installation
 
-Viaduct is packaged as a Flatpak-first application.
+viaduct is packaged as a Flatpak-first application.
 
 ```bash
 # Build via Cargo

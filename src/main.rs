@@ -1,15 +1,25 @@
 pub mod database;
+pub mod error;
+pub mod models;
 pub mod network;
 pub mod parser;
+pub mod paths;
 pub mod ui;
 
 use adw::prelude::*;
 use gtk::glib;
-use tracing::info;
+use tracing::{error, info};
+use tracing_subscriber::{EnvFilter, fmt};
 
 fn main() -> glib::ExitCode {
-    tracing_subscriber::fmt::init();
-    info!("Starting Viaduct...");
+    init_tracing();
+
+    if let Err(err) = paths::ensure_dirs() {
+        error!(?err, "failed to create XDG directories; aborting");
+        return glib::ExitCode::FAILURE;
+    }
+
+    info!(version = env!("CARGO_PKG_VERSION"), "Starting viaduct");
 
     let app = adw::Application::builder()
         .application_id("org.virinvictus.Viaduct")
@@ -20,10 +30,15 @@ fn main() -> glib::ExitCode {
     app.run()
 }
 
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    fmt().with_env_filter(filter).init();
+}
+
 fn build_ui(app: &adw::Application) {
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Viaduct")
+        .title("viaduct")
         .default_width(1200)
         .default_height(800)
         .build();

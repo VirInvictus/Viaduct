@@ -1,4 +1,4 @@
-# Viaduct — Application Specification
+# viaduct — Application Specification
 
 **Version:** 1.0  
 **Target:** GNOME 50+, GTK4/libadwaita  
@@ -10,9 +10,9 @@
 
 ## 1. Mission Statement
 
-Viaduct is a fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire. It is a direct translation of the NetNewsWire architectural philosophy—strict background threading, aggressive SQLite caching, and native text rendering—into the Linux ecosystem via Rust and GTK4. 
+viaduct is a fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire's **local account**. It is a direct translation of the NetNewsWire architectural philosophy—strict background threading, aggressive SQLite caching, and native text rendering—into the Linux ecosystem via Rust and GTK4.
 
-Design philosophy: **Speed and Data Sovereignty.** Viaduct handles massive subscription lists and complex sync states without locking the UI thread. It targets an idle memory footprint of 250MB, trading ultra-minimalist asceticism for rock-solid performance, offline image caching, and multi-threaded sync reliability. 
+Design philosophy: **Speed and Data Sovereignty.** viaduct handles massive subscription lists without locking the UI thread. It targets idle RAM of **100–300 MB** and a hard peak ceiling of **500 MB**, trading ultra-minimalist asceticism for rock-solid performance and offline image caching. Remote sync engines are out of scope for v1.0 — the app is a pure local RSS client.
 
 ---
 
@@ -20,34 +20,36 @@ Design philosophy: **Speed and Data Sovereignty.** Viaduct handles massive subsc
 
 ### 2.1 The Rust Engine Port
 
-Viaduct completely isolates the network and data layers from the UI thread using Rust's async ecosystem.
+viaduct completely isolates the network and data layers from the UI thread using Rust's async ecosystem.
 
 ```text
 ┌─────────────────────────────────────┐
-│          Viaduct Engine (Rust)      │
+│          viaduct Engine (Rust)      │
 │  (tokio multi-thread runtime)       │
 ├─────────────────────────────────────┤
-│  [Sync & Fetch Coordinators]        │
-│   ├─ Local OPML Engine              │
-│   ├─ FreshRSS / Miniflux API        │
-│   └─ Feedbin / Nextcloud API        │
+│  [Refresh Coordinator]              │
+│   ├─ DownloadSession (reqwest)      │
+│   ├─ Parser pool (quick-xml/serde)  │
+│   └─ LocalAccount orchestrator      │
 ├─────────────────────────────────────┤
-│  [Data Layer - rusqlite]            │
-│   ├─ feeds & folders                │
-│   ├─ articles (HTML, unread, FTS)   │
-│   └─ sync_state (cursors, tokens)   │
+│  [Data Layer]                       │
+│   ├─ ArticlesDatabase (rusqlite)    │
+│   │    articles + statuses + FTS5   │
+│   ├─ FeedSettingsDatabase (rusqlite)│
+│   │    ETag / icon / overrides      │
+│   └─ OPML file (feeds + folders)    │
 └──────────┬──────────────────────────┘
-           │ (crossbeam channels)
+           │ (tokio mpsc + glib channel)
     ┌──────┴────────────────────┐
     │  GTK4 Main UI Thread      │
     └───────────────────────────┘
 ```
 
-**Thread Safety:** The GTK thread only ever reads from local models or sends commands down the channel. It never waits on a network socket.
+**Thread Safety:** A dedicated writer task owns both SQLite connections. The GTK thread only ever reads from local models or sends commands down the channel — it never waits on a network socket or a database write.
 
 ### 2.2 Native Render Pipeline (No WebKit)
 
-Web engines are memory black holes. To hit the 250MB RAM target, Viaduct uses native GTK widgets.
+Web engines are memory black holes. To hit the 250MB RAM target, viaduct uses native GTK widgets.
 
 1. **Fetch:** Raw XML is fetched and parsed via `quick-xml`.
 2. **Sanitize:** The HTML payload is stripped of scripts, iframes, trackers, and inline styles using `ammonia`.
@@ -62,18 +64,18 @@ AdwApplicationWindow
 ├── AdwHeaderBar
 │   ├── [left]  AdwSplitButton (sidebar toggle)
 │   ├── [left]  GtkButton (mark all read)
-│   ├── [title] GtkLabel (Viaduct)
+│   ├── [title] GtkLabel (viaduct)
 │   ├── [right] GtkToggleButton (search)
 │   └── [right] GtkMenuButton (primary menu)
-├── AdwOverlaySplitView
+├── AdwNavigationSplitView (responsive; collapses on narrow windows)
 │   ├── [sidebar] GtkScrolledWindow
 │   │   └── GtkListView (Smart Feeds, Folders, Subscriptions)
-│   └── [content] AdwOverlaySplitView
+│   └── [content] AdwNavigationSplitView
 │       ├── [sidebar] GtkScrolledWindow
-│       │   └── GtkListView (Article List - Recycled)
+│       │   └── GtkListView (Article List — recycled via GtkSignalListItemFactory)
 │       └── [content] GtkScrolledWindow
 │           └── GtkTextView (Article Body)
-└── [bottom] GtkActionBar (Sync progress / Background tasks)
+└── [bottom] GtkActionBar (refresh progress / background tasks)
 ```
 
 ---
@@ -108,13 +110,13 @@ Virtual feeds generated dynamically via SQLite queries, automatically updating a
 * **All Unread:** Global unread aggregate.
 * **Starred/Saved:** User-flagged articles retained indefinitely.
 
-### 4.2 Sync Engines
-Full implementation of state-machine logic to handle conflict resolution and API rate limits.
-* **Local:** Default. OPML intake, direct RSS fetching.
-* **Feedbin:** Full REST API sync.
-* **Miniflux:** Google Reader API endpoint sync.
-* **FreshRSS:** Google Reader API endpoint sync.
-* **Nextcloud News:** Native API sync.
+### 4.2 Local Account (Only Account in v1.0)
+viaduct ships a single account type in v1.0: **Local**. OPML intake, direct RSS/Atom/JSON Feed fetching, all state stored on disk under `$XDG_DATA_HOME/viaduct/`.
+
+Remote sync engines (Feedbin, Miniflux, FreshRSS, CloudKit, NewsBlur, Inoreader) are explicitly out of scope for v1.0. They may be added post-1.0, but only if they can be implemented without compromising the local-first architecture or the RAM budget.
+
+### 4.3 Reader View (Optional, RAM-Gated)
+A local Readability-style extractor for truncated feeds. Runs on-demand only (hotkey or toolbar), never eagerly, and is gated by the 500 MB peak-RAM ceiling. If the extractor can't hit that budget running in-process, it either runs in a short-lived subprocess or is cut from v1.0. NetNewsWire's Reader View calls a remote Mercury service, which is not an option here.
 
 ---
 
@@ -138,11 +140,18 @@ Standard desktop accelerators, prioritizing spatial navigation without forcing a
 
 ## 6. Storage & State Persistence
 
-All state is maintained in `$XDG_DATA_HOME/viaduct/viaduct.db`.
+All state lives under `$XDG_DATA_HOME/viaduct/`:
+
+* `local.opml` — feed + folder hierarchy (coalesced save, ~500 ms debounce, atomic temp-file + rename).
+* `articles.sqlite` — `articles`, `statuses`, `authors`, `authorsLookup`, FTS5 `search`.
+* `feed-settings.sqlite` — per-feed cache: ETag, Last-Modified, Cache-Control, favicon URLs, edited names, authors JSON, folder-relationship JSON, last-check date, per-feed Reader View preference.
+
+Image and favicon caches live under `$XDG_CACHE_HOME/viaduct/`.
 
 ### 6.1 SQLite Configuration
-* **WAL Mode:** Write-Ahead Logging is enforced. The background fetcher can write thousands of new articles to the database while the user is actively scrolling and reading without throwing database locks or stuttering the UI.
-* **FTS5:** Full-Text Search is enabled on the `articles` table for instantaneous local querying.
+* **WAL Mode:** Write-Ahead Logging is enforced on both databases. The background fetcher can write thousands of new articles while the user actively scrolls without throwing database locks or stuttering the UI.
+* **Single writer:** A dedicated `tokio` task owns both connections and serializes all writes; the GTK thread holds only a `Sender`.
+* **FTS5:** Full-Text Search is enabled on the `articles` table for instantaneous local querying. (NetNewsWire uses FTS4; we modernize.)
 
 ### 6.2 The Pruning Engine
 To enforce the memory and disk footprint, the database is regularly vacuumed.
@@ -171,7 +180,7 @@ To enforce the memory and disk footprint, the database is regularly vacuumed.
 
 ## 8. Flatpak Distribution
 
-Viaduct is packaged as a Flatpak-first application.
+viaduct is packaged as a Flatpak-first application.
 
 * **Permissions:** Strictly locked down.
     * `network`: Required for feed fetching.
@@ -181,7 +190,7 @@ Viaduct is packaged as a Flatpak-first application.
 
 ---
 
-## 9. What Viaduct Is Not
+## 9. What viaduct Is Not
 
 Explicitly out of scope for v1.0 and likely forever:
 
@@ -193,11 +202,11 @@ Explicitly out of scope for v1.0 and likely forever:
 
 ## 10. Success Criteria
 
-Viaduct v1.0 is done when:
+viaduct v1.0 is done when:
 
 1. It can import a 500-feed OPML file without hanging the GTK main thread.
 2. The background engine can fetch and parse 1,000 new articles while the user smoothly scrolls the list view.
-3. Idle memory consumption stabilizes between 200MB and 300MB after a full sync and image cache phase.
-4. Miniflux, FreshRSS, and Feedbin sync bidirectional read/star states perfectly without data loss.
-5. Search finds text across all cached articles instantly using FTS5.
-6. The application completely complies with GNOME HIG and libadwaita styling.
+3. Idle memory consumption stabilizes between 100 MB and 300 MB after a full refresh and image-cache warm; peak never exceeds 500 MB across any supported operation.
+4. FTS5 search returns results in under 50 ms against a 50,000-article corpus.
+5. The application fully complies with GNOME HIG and libadwaita 1.7 styling.
+6. A Flathub-accepted Flatpak build runs in a strict sandbox (network permission only; OPML I/O through portals).

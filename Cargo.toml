@@ -1,6 +1,6 @@
 [package]
 name = "viaduct"
-version = "1.0.0-dev"
+version = "0.2.0"
 edition = "2024"
 description = "A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire."
 license = "GPL-3.0"
@@ -17,7 +17,9 @@ serde_json = "1.0"
 ammonia = "4.0"
 crossbeam-channel = "0.5"
 anyhow = "1.0"
+thiserror = "2.0"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
 chrono = "0.4"
+md-5 = "0.10"
