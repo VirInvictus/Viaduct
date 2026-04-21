@@ -36,12 +36,6 @@ fn init_tracing() {
 }
 
 fn build_ui(app: &adw::Application) {
-    let window = adw::ApplicationWindow::builder()
-        .application(app)
-        .title("viaduct")
-        .default_width(1200)
-        .default_height(800)
-        .build();
-
+    let window = ui::window::ViaductWindow::new(app);
     window.present();
 }

@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <template class="ViaductWindow" parent="AdwApplicationWindow">
+    <property name="title">viaduct</property>
+    <property name="default-width">1200</property>
+    <property name="default-height">800</property>
+    <property name="content">
+      <object class="AdwNavigationSplitView" id="outer_split_view">
+        <property name="sidebar">
+          <object class="AdwNavigationPage" id="sidebar_page">
+            <property name="title">Feeds</property>
+            <property name="child">
+              <object class="AdwToolbarView">
+                <child type="top">
+                  <object class="AdwHeaderBar">
+                    <child type="start">
+                      <object class="GtkButton" id="mark_all_read_btn">
+                        <property name="icon-name">checkbox-checked-symbolic</property>
+                      </object>
+                    </child>
+                    <child type="end">
+                      <object class="GtkToggleButton" id="search_btn">
+                        <property name="icon-name">system-search-symbolic</property>
+                      </object>
+                    </child>
+                    <child type="end">
+                      <object class="GtkMenuButton" id="menu_btn">
+                        <property name="icon-name">open-menu-symbolic</property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <property name="content">
+                  <object class="GtkScrolledWindow">
+                    <property name="child">
+                      <object class="GtkListView" id="sidebar_list_view"/>
+                    </property>
+                  </object>
+                </property>
+                <child type="bottom">
+                  <object class="GtkActionBar" id="bottom_action_bar">
+                    <property name="revealed">False</property>
+                  </object>
+                </child>
+              </object>
+            </property>
+          </object>
+        </property>
+        <property name="content">
+          <object class="AdwNavigationPage" id="content_page">
+            <property name="title">Articles</property>
+            <property name="child">
+              <object class="AdwNavigationSplitView" id="inner_split_view">
+                <property name="sidebar">
+                  <object class="AdwNavigationPage" id="timeline_page">
+                    <property name="title">Timeline</property>
+                    <property name="child">
+                      <object class="AdwToolbarView">
+                        <child type="top">
+                          <object class="AdwHeaderBar">
+                            <!-- Show sidebar toggle only on narrow screens? -->
+                          </object>
+                        </child>
+                        <property name="content">
+                          <object class="GtkScrolledWindow">
+                            <property name="child">
+                              <object class="GtkListView" id="timeline_list_view"/>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
+                    </property>
+                  </object>
+                </property>
+                <property name="content">
+                  <object class="AdwNavigationPage" id="article_page">
+                    <property name="title">Article</property>
+                    <property name="child">
+                      <object class="AdwToolbarView">
+                        <child type="top">
+                          <object class="AdwHeaderBar">
+                            <!-- Show sidebar toggle only on narrow screens? -->
+                          </object>
+                        </child>
+                        <property name="content">
+                          <object class="GtkScrolledWindow">
+                            <property name="child">
+                              <object class="GtkTextView" id="article_text_view">
+                                <property name="editable">False</property>
+                                <property name="wrap-mode">word</property>
+                                <property name="cursor-visible">False</property>
+                              </object>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
+                    </property>
+                  </object>
+                </property>
+              </object>
+            </property>
+          </object>
+        </property>
+      </object>
+    </property>
+  </template>
+</interface>

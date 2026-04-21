@@ -101,13 +101,13 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] 25-hour special-case cutoff for feeds flagged as high-frequency (NNW's `specialCaseCutoffDate`).
 
 ## Phase 5: UI Skeleton + Coalescing Primitives
-- [ ] `AdwApplicationWindow` + three-pane `AdwNavigationSplitView` scaffolded in `.ui` XML.
-- [ ] `BatchUpdate` analog: a coalescer that suppresses UI notifications during bulk DB writes and flushes on transaction commit.
-- [ ] `FetchRequestQueue` analog: cancellable timeline-fetch pipeline so rapid sidebar clicks don't pile up stale work.
-- [ ] Sidebar: `GtkListView` bound to a `gio::ListModel` backed by the OPML tree, with expandable folder rows.
-- [ ] Timeline: `GtkListView` + `GtkSignalListItemFactory` + custom `gio::ListModel` backed by `ArticlesDatabase` paging. Title, source, date, 2-line preview.
-- [ ] Article pane: placeholder `GtkTextView` (populated in Phase 6).
-- [ ] Unread-count badges on sidebar rows, recalculated off `StatusesTable` deltas.
+- [x] `AdwApplicationWindow` + three-pane `AdwNavigationSplitView` scaffolded in `.ui` XML.
+- [x] `BatchUpdate` analog: a coalescer that suppresses UI notifications during bulk DB writes and flushes on transaction commit.
+- [x] `FetchRequestQueue` analog: cancellable timeline-fetch pipeline so rapid sidebar clicks don't pile up stale work.
+- [x] Sidebar: `GtkListView` bound to a `gio::ListModel` backed by the OPML tree, with expandable folder rows.
+- [x] Timeline: `GtkListView` + `GtkSignalListItemFactory` + custom `gio::ListModel` backed by `ArticlesDatabase` paging. Title, source, date, 2-line preview.
+- [x] Article pane: placeholder `GtkTextView` (populated in Phase 6).
+- [x] Unread-count badges on sidebar rows, recalculated off `StatusesTable` deltas.
 
 ## Phase 6: Native HTML → GtkTextBuffer Rendering
 - [ ] `ammonia` whitelist configuration (strip scripts, iframes, inline styles, trackers).

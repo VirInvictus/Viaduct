@@ -14,7 +14,7 @@ NetNewsWire is open-source, battle-tested, and has already solved every hard pro
 
 If you catch yourself thinking "I have a better idea" — you don't. Go read the corresponding Swift file in `.netnewswire/` and port *that*. The app is local-only, no sync backends, no WebKit, strict memory budget. Targets **GNOME 50+** and **libadwaita 1.7+** on Wayland.
 
-Current version: **v0.2.0** (Phases 0–4 complete — scaffolding, data layer, parsers, network/refresh engine). Phase 5 (UI skeleton + coalescing primitives) is next. See `roadmap.md` for the live phase plan and `patchnotes.md` for the shipped log.
+Current version: **v0.3.1** (Phases 0–4 complete; Phase 5 UI skeleton in progress). See `roadmap.md` for the live phase plan and `patchnotes.md` for the shipped log.
 
 **License:** GPLv3. **Edition:** Rust 2024.
 
@@ -86,6 +86,10 @@ The GTK4 + libadwaita native view layer. Phase 5+ work lives here.
 
 * `window.rs` — root `AdwApplicationWindow` and nested `AdwNavigationSplitView` scaffolding (three-pane: sidebar → timeline → article body).
 * `sidebar.rs` — feeds/folders list bound to a `gio::ListModel` backed by the OPML tree. Smart Feeds pinned (Today / All Unread / Starred). Unread badges.
+* `tree.rs` — `TreeController` and `TreeNode` primitives, porting the `RSTree` module from NetNewsWire. Maps domain models into `glib::Object` items for `gio::ListModel`.
+* `batch.rs` — `BatchUpdate` analog to suppress UI notification storms.
+* `coalescing_queue.rs` — `CoalescingQueue` analog for throttled, deduplicated UI operations on the main thread.
+* `fetch_queue.rs` — `FetchRequestQueue` analog for cancelling stale timeline fetches on rapid sidebar clicks.
 * `timeline.rs` — article list via `GtkListView` + `GtkSignalListItemFactory`. **Strict widget recycling.** Rendering 10,000 articles must cost the same RAM as rendering 10. Custom `gio::ListModel` backed by `ArticlesDatabase` paging.
 * `article.rs` — reading pane. Sanitized HTML → native `GtkTextTag` ranges inside a `GtkTextView`. **WebKit is forbidden.**
 

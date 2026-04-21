@@ -1,0 +1,184 @@
+use gtk::glib;
+use gtk::prelude::*;
+use gtk::subclass::prelude::*;
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
+
+/// A trait porting `TreeControllerDelegate` from `TreeController.swift`.
+pub trait TreeControllerDelegate {
+    fn child_nodes_for(&self, tree_controller: &TreeController, node: &TreeNode) -> Vec<TreeNode>;
+}
+
+glib::wrapper! {
+    /// Port of `Node.swift`. Must be a `glib::Object` so it can be used in `gio::ListModel`.
+    pub struct TreeNode(ObjectSubclass<imp::TreeNode>);
+}
+
+pub mod imp {
+    use super::*;
+    use gtk::gio;
+    use std::cell::Cell;
+
+    #[derive(Default)]
+    pub struct TreeNode {
+        pub represented_object: RefCell<Option<Rc<dyn std::any::Any>>>,
+        pub can_have_child_nodes: Cell<bool>,
+        pub is_group_item: Cell<bool>,
+        pub unread_count: Cell<usize>,
+        pub child_nodes: RefCell<Vec<super::TreeNode>>,
+        pub parent: RefCell<Option<glib::WeakRef<super::TreeNode>>>,
+        // The list store exposed to GTK for this node's children
+        pub list_store: RefCell<Option<gio::ListStore>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for TreeNode {
+        const NAME: &'static str = "ViaductTreeNode";
+        type Type = super::TreeNode;
+    }
+
+    impl ObjectImpl for TreeNode {}
+}
+
+impl TreeNode {
+    pub fn new(represented_object: Rc<dyn std::any::Any>, parent: Option<&TreeNode>) -> Self {
+        let node: Self = glib::Object::builder().build();
+        node.imp()
+            .represented_object
+            .replace(Some(represented_object));
+
+        if let Some(p) = parent {
+            node.imp().parent.replace(Some(p.downgrade()));
+        }
+        node
+    }
+
+    pub fn generic_root_node() -> Self {
+        let node: Self = glib::Object::builder().build();
+        // TopLevelRepresentedObject analog
+        node.imp().represented_object.replace(Some(Rc::new(())));
+        node.imp().can_have_child_nodes.set(true);
+        node
+    }
+
+    pub fn parent(&self) -> Option<TreeNode> {
+        self.imp()
+            .parent
+            .borrow()
+            .as_ref()
+            .and_then(|w| w.upgrade())
+    }
+
+    pub fn represented_object(&self) -> Option<Rc<dyn std::any::Any>> {
+        self.imp().represented_object.borrow().clone()
+    }
+
+    pub fn can_have_child_nodes(&self) -> bool {
+        self.imp().can_have_child_nodes.get()
+    }
+
+    pub fn set_can_have_child_nodes(&self, val: bool) {
+        self.imp().can_have_child_nodes.set(val)
+    }
+
+    pub fn is_group_item(&self) -> bool {
+        self.imp().is_group_item.get()
+    }
+
+    pub fn set_is_group_item(&self, val: bool) {
+        self.imp().is_group_item.set(val)
+    }
+
+    pub fn unread_count(&self) -> usize {
+        self.imp().unread_count.get()
+    }
+
+    pub fn set_unread_count(&self, count: usize) {
+        self.imp().unread_count.set(count)
+    }
+
+    pub fn child_nodes(&self) -> Vec<TreeNode> {
+        self.imp().child_nodes.borrow().clone()
+    }
+
+    pub fn set_child_nodes(&self, new_nodes: Vec<TreeNode>) {
+        *self.imp().child_nodes.borrow_mut() = new_nodes;
+    }
+
+    pub fn number_of_child_nodes(&self) -> usize {
+        self.imp().child_nodes.borrow().len()
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.parent().is_none()
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        self.number_of_child_nodes() == 0
+    }
+
+    // Methods mimicking Swift's `childAtIndex`, `indexOfChild`, etc. could be added here.
+}
+
+/// Port of `TreeController.swift`.
+pub struct TreeController {
+    pub root_node: TreeNode,
+    delegate: Weak<RefCell<dyn TreeControllerDelegate>>,
+}
+
+impl TreeController {
+    pub fn new(delegate: Weak<RefCell<dyn TreeControllerDelegate>>, root_node: TreeNode) -> Self {
+        let controller = Self {
+            root_node,
+            delegate,
+        };
+        controller.rebuild();
+        controller
+    }
+
+    pub fn new_with_generic_root(delegate: Weak<RefCell<dyn TreeControllerDelegate>>) -> Self {
+        Self::new(delegate, TreeNode::generic_root_node())
+    }
+
+    pub fn rebuild(&self) -> bool {
+        self.rebuild_child_nodes(&self.root_node)
+    }
+
+    fn rebuild_child_nodes(&self, node: &TreeNode) -> bool {
+        if !node.can_have_child_nodes() {
+            return false;
+        }
+
+        let mut child_nodes_did_change = false;
+
+        let new_child_nodes = if let Some(delegate_rc) = self.delegate.upgrade() {
+            delegate_rc.borrow().child_nodes_for(self, node)
+        } else {
+            Vec::new()
+        };
+
+        // Note: simplified equality check based on pointers/identity could be done here.
+        // For now, assume if rebuilt, it might change.
+        // A complete equality would check identity of glib::Object.
+        let old_nodes = node.child_nodes();
+
+        let are_equal = old_nodes.len() == new_child_nodes.len()
+            && old_nodes
+                .iter()
+                .zip(new_child_nodes.iter())
+                .all(|(a, b)| a == b);
+
+        if !are_equal {
+            node.set_child_nodes(new_child_nodes.clone());
+            child_nodes_did_change = true;
+        }
+
+        for child in new_child_nodes {
+            if self.rebuild_child_nodes(&child) {
+                child_nodes_did_change = true;
+            }
+        }
+
+        child_nodes_did_change
+    }
+}
