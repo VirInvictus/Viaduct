@@ -14,15 +14,24 @@ NetNewsWire is open-source, battle-tested, and has already solved every hard pro
 
 If you catch yourself thinking "I have a better idea" — you don't. Go read the corresponding Swift file in `.netnewswire/` and port *that*. The app is local-only, no sync backends, no WebKit, strict memory budget. Targets **GNOME 50+** and **libadwaita 1.7+** on Wayland.
 
-Current version: **v0.3.1** (Phases 0–4 complete; Phase 5 UI skeleton in progress). See `roadmap.md` for the live phase plan and `patchnotes.md` for the shipped log.
+Current version: **v0.5.0** (Phases 0–8 complete; Phase 9 Keyboard Spatial Navigation next). See `roadmap.md` for the live phase plan and `patchnotes.md` for the shipped log.
 
-**License:** GPLv3. **Edition:** Rust 2024.
+**License:** MIT. **Edition:** Rust 2024.
 
 ---
 
 ## 2. Source of Truth: `.netnewswire/`
 
 A full clone of NetNewsWire lives at `.netnewswire/` in this repo. **It is already there — do not re-clone, re-download, or `git submodule add` it.** Treat it as read-only reference material.
+
+> **Note on Latest Upstream Sync (April 23, 2026):**
+> The `.netnewswire` reference folder has been updated to the latest upstream state (Commit `ec06277`). Key architectural and feature changes to be aware of when porting:
+> *   **C-to-Swift Port (`StripHTML`):** A major refactor has moved the core HTML stripping logic from legacy C (`striphtml.c`) to a native Swift implementation (`StripHTML.swift`) within the `RSCore` module. This includes significant performance optimizations and new test suites for `CollapsingWhitespace` and `StripHTML`.
+> *   **Swift 6 Integration:** Ongoing work to align `RSCore` and `RSParser` with Swift 6 concurrency and language modes.
+> *   **HTML Entity Decoding:** Enhanced robustness in `RSParser` for handling complex HTML entities within the XML module.
+> *   **New UI Themes:** Added *Biblioteca*, *Tiqoe Dark*, and *Verdana Revival* themes (check `Shared/Resources/`).
+> *   **Sync Optimization:** Implementation of the "Do not sync unread article content" toggle, which reduces iCloud database bloat.
+> *   **Enhanced Performance Testing:** New benchmarks for `ArticleStringFormatter` and `NSAttributedString` HTML rendering have been added to the test targets.
 
 When you need to implement a feature, port from this local tree. Do not invent bespoke logic.
 
@@ -130,19 +139,19 @@ Ambiguous user request → go read `.netnewswire/`. That is the default plan.
 * `.netnewswire/AppStore/`, `.netnewswire/Appcasts/` — distribution plumbing for Apple platforms. Irrelevant; we ship Flatpak.
 * `.netnewswire/buildscripts/`, `.netnewswire/xcconfig/`, `.netnewswire/NetNewsWire.xcodeproj/` — Xcode build system. Irrelevant.
 
-**viaduct is local-only. We are not porting any remote-account or sync code.** Brandon doesn't use those services and isn't going to maintain code for them. This is a hard scope boundary, not a "we'll get to it later."
+**viaduct supports local accounts and Inoreader.** We are not porting other remote-account or sync code. This is a hard scope boundary, not a "we'll get to it later."
 
 Explicitly skip the following directories/modules when porting:
 
 * `.netnewswire/Modules/CloudKitSync/` — iCloud sync. Skip entirely.
 * `.netnewswire/Modules/NewsBlur/` — NewsBlur API client. Skip.
-* `.netnewswire/Modules/SyncDatabase/` — exists to support remote sync. Skip.
-* `.netnewswire/Modules/Secrets/` — holds credentials for remote services. Skip.
-* Anything inside `Modules/Account/` related to `FeedbinAccountDelegate`, `FeedlyAccountDelegate`, `FreshRSSAccountDelegate`, `NewsBlurAccountDelegate`, `InoreaderAccountDelegate`, `BazQuxAccountDelegate`, `TheOldReaderAccountDelegate`. Port only `LocalAccountDelegate` and the shared account scaffolding it needs.
+* `.netnewswire/Modules/SyncDatabase/` — exists to support remote sync. Port this to support Inoreader.
+* `.netnewswire/Modules/Secrets/` — holds credentials for remote services. Port this to support Inoreader credentials.
+* Anything inside `Modules/Account/` related to `FeedbinAccountDelegate`, `FeedlyAccountDelegate`, `FreshRSSAccountDelegate`, `NewsBlurAccountDelegate`, `BazQuxAccountDelegate`, `TheOldReaderAccountDelegate`. Port only `LocalAccountDelegate`, `InoreaderAccountDelegate`, and the shared account scaffolding they need.
 
-When porting a file that mixes local-account logic with remote-sync logic, take the local branches and drop the rest. Do not leave stubs, `todo!()` placeholders, or "future sync" interfaces — cut the code out cleanly. If a generic abstraction exists solely to accommodate both local and remote accounts, collapse it to the local-only shape.
+When porting a file that mixes local-account/Inoreader logic with other remote-sync logic, take the local and Inoreader branches and drop the rest. Do not leave stubs, `todo!()` placeholders, or "future sync" interfaces — cut the other code out cleanly. If a generic abstraction exists solely to accommodate unsupported remote accounts, collapse it to the local and Inoreader shapes.
 
-If you're unsure whether something is local-only or remote-sync, ask. Don't port "just in case."
+If you're unsure whether something is local-only/Inoreader or other remote-sync, ask. Don't port "just in case."
 
 ### Where to map
 

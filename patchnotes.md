@@ -1,5 +1,29 @@
 # viaduct — Patch Notes
 
+## v0.5.0 — Assets, Smart Feeds, & Search
+
+Phases 7 and 8 are complete, bringing native image caching, Smart Feeds, and FTS5 search to the application while maintaining strict Wayland memory budgets.
+
+### Added
+- **Image & Favicon Caching:** Built an async `tokio` network worker (`src/network/cache.rs`) to fetch and disk-cache assets using MD5 hashes (`$XDG_CACHE_HOME/viaduct/`).
+- **Memory Strictness:** Implemented a fixed-size LRU cache (250 items) for in-memory `gdk::Texture` objects to strictly guarantee the 500 MB peak RAM budget, compensating for the lack of a reliable low-memory broadcast on Linux.
+- **AdwAvatar Fallback:** Integrated `libadwaita`'s `AdwAvatar` to natively generate color-hashed circular widgets with feed initials for missing favicons, replacing NetNewsWire's custom `ColorHash` and CoreGraphics code.
+- **Smart Feeds:** Ported NNW's `SmartFeedDelegate` architecture to Rust, implementing "Today", "All Unread", and "Starred" pseudo-feeds right into the GTK sidebar.
+- **FTS5 Search:** Added a `GtkSearchBar` with a debounced (~150ms) entry that executes native SQLite `MATCH` queries against the FTS5 virtual table without blocking the UI thread.
+
+## v0.4.0 — Native Reader & Inoreader Pivot
+
+Phase 6 is complete, and the project scope has been officially expanded to support Inoreader.
+
+### Added
+- **Native HTML Pipeline:** Built a native `GtkTextTag` string walker (`src/ui/article.rs`) to safely render sanitized HTML inside a `GtkTextView`.
+- **System Typography:** Applied GNOME HIG spacing, system typography, and programmatic styling to map structural HTML (h1-h6, p, blockquote, lists, code) into GTK primitives without relying on WebKit.
+- **Interactive Links:** Attached gesture controllers to parse buffer coordinates, extracting and launching URLs natively via `gio::AppInfo::launch_default_for_uri`.
+
+### Changed
+- **Project Scope Expansion:** Officially expanded the roadmap, spec, and Claude system prompt to include support for Inoreader as the sole supported remote sync backend. Inserted Phase 14 for Inoreader integration into the roadmap.
+- **Refactor Plan:** Documented that we will port NNW's `Account` / `AccountDelegate` abstractions to restructure the `LocalAccount` work from earlier phases to handle `InoreaderAccountDelegate`.
+
 ## v0.3.1 — Sidebar Glue & Delegation
 
 - **Sidebar Delegate:** Added `SidebarTreeControllerDelegate` port from NetNewsWire to `src/ui/sidebar.rs`. This correctly implements the `TreeControllerDelegate` trait, handling the logic of turning the parsed OPML (Folders and standalone Feeds) and Smart Feeds into the `TreeNode` structure that the `TreeController` manages. This completes the loop between the OPML on disk and the GTK Sidebar.
@@ -62,4 +86,5 @@ Phase 4 is complete.
 
 ## v1.0.0 (Planned)
 
-Target: NetNewsWire local-account feature parity on GNOME 50. See [roadmap.md](roadmap.md) for the phase-by-phase plan.
+Target: NetNewsWire local-account and Inoreader feature parity on GNOME 50. See [roadmap.md](roadmap.md) for the phase-by-phase plan.
+n.

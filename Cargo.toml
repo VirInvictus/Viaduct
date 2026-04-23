@@ -1,9 +1,9 @@
 [package]
 name = "viaduct"
-version = "0.3.1"
+version = "0.5.0"
 edition = "2024"
 description = "A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire."
-license = "GPL-3.0"
+license = "MIT"
 
 [dependencies]
 gtk = { version = "0.9", package = "gtk4", features = ["v4_16"] }
@@ -23,3 +23,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
 chrono = "0.4"
 md-5 = "0.10"
+lru = "0.17.0"
+readability = "0.3.0"

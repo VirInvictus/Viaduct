@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Language-Rust-blue" alt="Language: Rust"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-yellow.svg" alt="License: GPLv3"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://ko-fi.com/bdkl"><img src="https://img.shields.io/badge/support-Ko--fi-ff5f5f?logo=kofi" alt="Ko-fi"></a>
 </p>
 
@@ -12,7 +12,7 @@
 
 # viaduct
 
-A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire. viaduct is a direct translation of the NetNewsWire architectural philosophy into the Linux ecosystem via Rust and GTK4, built specifically for local-only, private reading.
+A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire. viaduct is a direct translation of the NetNewsWire architectural philosophy into the Linux ecosystem via Rust and GTK4, built specifically for local and Inoreader reading.
 
 ## Why this exists
 

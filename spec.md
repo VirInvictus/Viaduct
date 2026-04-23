@@ -1,6 +1,6 @@
 # viaduct — Application Specification
 
-**Version:** 1.0  
+**Version:** 0.5.0  
 **Target:** GNOME 50+, GTK4/libadwaita  
 **Language:** Rust (2024 Edition)  
 **Build System:** Cargo / Meson (for Flatpak packaging)  
@@ -10,9 +10,9 @@
 
 ## 1. Mission Statement
 
-viaduct is a fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire's **local account**. It is a direct translation of the NetNewsWire architectural philosophy—strict background threading, aggressive SQLite caching, and native text rendering—into the Linux ecosystem via Rust and GTK4.
+viaduct is a fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire's **local and Inoreader accounts**. It is a direct translation of the NetNewsWire architectural philosophy—strict background threading, aggressive SQLite caching, and native text rendering—into the Linux ecosystem via Rust and GTK4.
 
-Design philosophy: **Speed and Data Sovereignty.** viaduct handles massive subscription lists without locking the UI thread. It targets idle RAM of **100–300 MB** and a hard peak ceiling of **500 MB**, trading ultra-minimalist asceticism for rock-solid performance and offline image caching. Remote sync engines are out of scope for v1.0 — the app is a pure local RSS client.
+Design philosophy: **Speed and Data Sovereignty.** viaduct handles massive subscription lists without locking the UI thread. It targets idle RAM of **100–300 MB** and a hard peak ceiling of **500 MB**, trading ultra-minimalist asceticism for rock-solid performance and offline image caching. Other remote sync engines are out of scope for v1.0 — the app supports local accounts and Inoreader sync.
 
 ---
 

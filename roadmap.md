@@ -1,6 +1,6 @@
 # viaduct — Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-only** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v1.0.0-dev.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.5.0.
 
 ---
 
@@ -110,25 +110,25 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Unread-count badges on sidebar rows, recalculated off `StatusesTable` deltas.
 
 ## Phase 6: Native HTML → GtkTextBuffer Rendering
-- [ ] `ammonia` whitelist configuration (strip scripts, iframes, inline styles, trackers).
-- [ ] HTML walker that maps structural tags to `GtkTextTag` instances: `h1`-`h6`, `p`, `blockquote`, `pre`, `code`, `strong`, `em`, `a`, `ul`/`ol`/`li`, `hr`.
-- [ ] System-font typography with monospace override for `pre`/`code`; GNOME 50 styling conventions.
-- [ ] Link handling: click → `xdg-open` (also bound to Enter key per spec).
-- [ ] Image `<img>` tags register an anchor; actual image fetch lives in Phase 7.
+- [x] `ammonia` whitelist configuration (strip scripts, iframes, inline styles, trackers).
+- [x] HTML walker that maps structural tags to `GtkTextTag` instances: `h1`-`h6`, `p`, `blockquote`, `pre`, `code`, `strong`, `em`, `a`, `ul`/`ol`/`li`, `hr`.
+- [x] System-font typography with monospace override for `pre`/`code`; GNOME 50 styling conventions.
+- [x] Link handling: click → `xdg-open` (also bound to Enter key per spec).
+- [x] Image `<img>` tags register an anchor; actual image fetch lives in Phase 7.
 
 ## Phase 7: Asset & Memory Management
-- [ ] `IconImageCache` analog: favicon fetch → scale → disk cache in `$XDG_CACHE_HOME/viaduct/favicons/`.
-- [ ] Favicon generator fallback (NNW `ColorHash` + `FaviconGenerator`): hashed color + first letter for feeds with no icon.
-- [ ] Inline image fetch worker: async download, decode to `GdkTexture`, disk cache in `$XDG_CACHE_HOME/viaduct/images/`, LRU eviction.
-- [ ] Image placeholder widget until the texture is ready; no main-thread blocking.
-- [ ] **Memory checkpoint**: profile with `heaptrack` under a 500-feed / 5,000-article scenario. Idle must sit 100–300 MB; peak during image warmup must stay under 500 MB. Cut features that bust the budget.
+- [x] `IconImageCache` analog: favicon fetch → scale → disk cache in `$XDG_CACHE_HOME/viaduct/favicons/`.
+- [x] Favicon generator fallback (NNW `ColorHash` + `FaviconGenerator`): hashed color + first letter for feeds with no icon.
+- [x] Inline image fetch worker: async download, decode to `GdkTexture`, disk cache in `$XDG_CACHE_HOME/viaduct/images/`, LRU eviction.
+- [x] Image placeholder widget until the texture is ready; no main-thread blocking.
+- [x] **Memory checkpoint**: profile with `heaptrack` under a 500-feed / 5,000-article scenario. Idle must sit 100–300 MB; peak during image warmup must stay under 500 MB. Cut features that bust the budget.
 
 ## Phase 8: Smart Feeds & Search
-- [ ] `SmartFeedDelegate` analog: virtual feeds with pluggable fetch strategy.
-- [ ] "Today" (articles since midnight local time), "All Unread" (aggregate across all feeds), "Starred" (retained indefinitely).
-- [ ] `GtkSearchEntry` wired to FTS5 `MATCH` queries with ranking and snippet extraction.
-- [ ] Search-scope toggle: current feed vs. all feeds.
-- [ ] Live-filter as the user types, debounced to ~150ms.
+- [x] `SmartFeedDelegate` analog: virtual feeds with pluggable fetch strategy.
+- [x] "Today" (articles since midnight local time), "All Unread" (aggregate across all feeds), "Starred" (retained indefinitely).
+- [x] `GtkSearchEntry` wired to FTS5 `MATCH` queries with ranking and snippet extraction.
+- [x] Search-scope toggle: current feed vs. all feeds.
+- [x] Live-filter as the user types, debounced to ~150ms.
 
 ## Phase 9: Keyboard Spatial Navigation
 - [ ] `Space`: smart read — scroll article if not at bottom; otherwise jump to next unread and mark current read.
@@ -158,13 +158,25 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [ ] `GSettings` schema for user prefs (refresh interval, retention days, font overrides).
 
 ## Phase 13: The Pruning Engine
-- [ ] Port NNW's `RetentionStyle.feedBased` — local accounts prune against the feed's own content.
+- [ ] Port NNW's `RetentionStyle.feedBased` — local and Inoreader accounts prune against the feed's own content.
 - [ ] Age-based purge: articles older than the configured retention (default 30 days) and not starred are deleted.
 - [ ] Unread status does not protect from pruning (NNW semantics).
 - [ ] Periodic `VACUUM` on startup; coalesced with OPML load so it runs off the main thread.
 - [ ] Cascade: deleting an article row triggers FTS5 row deletion via the existing trigger.
 
-## Phase 14: Flatpak Sandboxing & 1.0 Release
+## Phase 14: Inoreader Sync Engine (NetNewsWire Port)
+- [ ] Refactor `LocalAccount` into a generic `Account` structure backed by an `AccountDelegate` trait, strictly mirroring NetNewsWire's abstraction.
+- [ ] Port `SyncDatabase` from `.netnewswire/Modules/SyncDatabase/` to track remote sync state (article UUIDs, read/starred sync status).
+- [ ] Port `InoreaderAccountDelegate` and the API caller from `.netnewswire/Modules/Account/` into Rust. We will strictly port the Swift networking logic, token-bucket approach, and batch sync rules.
+- [ ] Secure credentials storage via `libsecret` (porting the concepts from `.netnewswire/Modules/Secrets/`).
+
+## Phase 15: QA, Test Suites, & Debug Mode
+- [ ] Implement a `viaduct --debug` flag or environment variable that enables verbose `tracing` logs, disables database WAL truncation (for easier inspection), and adds a hidden Debug menu to the UI.
+- [ ] Build out integration test suites for the refresh pipeline (`LocalAccountRefresher` and Inoreader sync), mocking the network layer.
+- [ ] Implement UI test harnesses to ensure sidebar/timeline/article pane state transitions are rock solid.
+- [ ] Port any remaining applicable unit tests from `.netnewswire/Tests/` and module test directories.
+
+## Phase 16: Flatpak Sandboxing & 1.0 Release
 - [ ] Flatpak manifest: `network` permission only; no `--filesystem=home`. OPML I/O entirely via `org.freedesktop.portal.FileChooser`.
 - [ ] AppStream metadata (`appdata.xml`), icons at all required sizes, desktop entry.
 - [ ] Reproducible build verified against the target Flathub runtime.
@@ -180,3 +192,4 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 4. FTS5 search across all cached articles returns results in under 50 ms on a 50k-article corpus.
 5. Full compliance with GNOME HIG and libadwaita 1.7 styling.
 6. Flathub-accepted Flatpak build running in a strict sandbox.
+ox.

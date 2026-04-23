@@ -1,3 +1,7 @@
+// Copyright (c) 2002-2026 Brent Simmons, Ranchero Software
+// Copyright (c) 2026 Brandon LaRocque
+// Licensed under the MIT License. See LICENSE in the project root for details.
+
 //! The Database Worker module provides the single serialization point for all SQLite writes.
 //!
 //! As mandated by the architecture spec, this module avoids UI thread blocking by offloading
