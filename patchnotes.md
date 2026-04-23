@@ -1,5 +1,23 @@
 # viaduct — Patch Notes
 
+## v0.5.1 — Licensing, Attribution, & Upstream Sync
+
+Maintenance update to align the project with NetNewsWire's licensing and update core reference materials.
+
+### Added
+- **MIT License Transition:** Switched project license from GPL-3.0 to MIT for full compatibility with NetNewsWire. Updated `Cargo.toml`, `LICENSE`, and `README.md`.
+- **Comprehensive Attributions:** Created `ATTRIBUTIONS.md` to formally credit Brent Simmons, Ranchero Software, and the diverse Rust ecosystem libraries powering the engine.
+- **License Headers:** Injected MIT license headers into all Rust source files and UI XML templates.
+- **Upstream Sync:** Updated the `.netnewswire` reference folder to commit `ec06277`. 
+    - *Architectural Note:* Documented the major upstream refactor of `StripHTML` from legacy C to native Swift, including new performance benchmarks for whitespace collapsing.
+    - *Assets:* Synchronized new themes (*Biblioteca*, *Tiqoe Dark*, *Verdana Revival*).
+
+### Fixed
+- **Runtime Reconstruction:** Restored the global `tokio` runtime (`static RUNTIME`) and asynchronous infrastructure in `src/main.rs` that was inadvertently reverted during maintenance. This includes the proper initialization of the database worker and the `LocalAccount` orchestrator via `block_on`.
+
+### Changed
+- **CLAUDE.md Verbosity:** Expanded the architectural guidelines to include detailed notes on the latest upstream changes to assist with future porting efforts.
+
 ## v0.5.0 — Assets, Smart Feeds, & Search
 
 Phases 7 and 8 are complete, bringing native image caching, Smart Feeds, and FTS5 search to the application while maintaining strict Wayland memory budgets.
