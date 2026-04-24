@@ -56,7 +56,7 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Cargo project skeleton with GTK4 / libadwaita / tokio / rusqlite / reqwest / quick-xml / ammonia.
 - [x] Module layout: `database/`, `network/`, `parser/`, `ui/`.
 - [x] Basic `adw::Application` window that opens and closes cleanly.
-- [ ] Meson build wrapper so `cargo` output can be packaged as Flatpak without hand-rolled plumbing. *(deferred to Phase 14)*
+- [ ] Meson build wrapper so `cargo` output can be packaged as Flatpak without hand-rolled plumbing. *(deferred to Phase 17)*
 - [x] XDG path helpers: `$XDG_DATA_HOME/viaduct/` for OPML + DBs, `$XDG_CACHE_HOME/viaduct/` for images + favicons. *(v0.0.1)*
 - [x] Error type hierarchy via `thiserror` (`DatabaseError`, `NetworkError`, `ParseError`, `ViaductError`). *(v0.0.1)*
 - [x] `tracing-subscriber` configured with env-filter. *(v0.0.1)*
@@ -160,33 +160,45 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [ ] Capture RSS/Atom `<language>` so the reading pane can tag text direction / hyphenation.
 - [ ] Atom `type="xhtml"` `<content>` and `<summary>` currently parse as plain text. NNW uses `XMLSAXParser.captureRawInnerContent` to hand back the raw inner bytes; `quick-xml` has no direct analog. Options: (a) accept degraded fidelity, (b) detect `type="xhtml"` at Start and buffer raw input until matching End, (c) switch to `html5ever` for those subtrees.
 
-## Phase 12: System Integration & Theming
+## Phase 12: OPML Import & Export
+
+User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path already exists (Phase 2); this phase exposes it via menu actions and makes sure the merge semantics match NNW's behavior. NNW counterparts: `.netnewswire/Shared/Exporters/OPMLExporter.swift`, `.netnewswire/Mac/MainWindow/OPML/ImportOPMLWindowController.swift`, `.netnewswire/Mac/MainWindow/OPML/ExportOPMLWindowController.swift`, `.netnewswire/Modules/Account/Sources/Account/OPMLNormalizer.swift`.
+
+- [ ] **Import menu action** wired into the primary menu (`menu_btn` in `window.ui`). Opens an `org.freedesktop.portal.FileChooser` dialog (GTK4 integrates the portal automatically via `gtk::FileDialog`).
+- [ ] **Export menu action**. Serialize the current `OpmlFile` via `serialize_opml` to a user-chosen path. Header should carry `<?xml version="1.0" encoding="UTF-8"?>` and a `<head><title>` naming the account — match NNW `OPMLExporter.OPMLString` structure.
+- [ ] **Import merge semantics**: union by `xmlUrl`. Never overwrite existing `edited_name` on a feed the user already has. New feeds land in the same folder path they came from; imported folders merge into existing folders by name.
+- [ ] Normalize deeply-nested imports via the existing `flatten_feeds` path (or port NNW's `OPMLNormalizer` more faithfully if fidelity diverges). NNW enforces folders-only-one-level-deep.
+- [ ] After import, kick off `LocalAccountRefresher` for just the newly-added feeds so the user sees articles without a manual refresh. Depends on Phase 9's refresh-action wiring (the same `gio::SimpleAction` that backs Ctrl+R).
+- [ ] Progress/completion feedback: `adw::Toast` via the root `AdwToastOverlay`, e.g. "Imported 47 feeds" or "Export complete: /home/.../feeds.opml".
+- [ ] Failure modes: malformed OPML → toast + `tracing::warn`. Non-OPML file picked → detect by probing for `<opml` (we already do this in `parse_opml`) and toast the user; don't wipe current state.
+
+## Phase 13: System Integration & Theming
 - [ ] `libadwaita` system color scheme follow (Dark / Light / Auto).
 - [ ] `libnotify` for new article counts per refresh cycle (opt-in per feed via `newArticleNotificationsEnabled`).
 - [ ] Background daemon via `xdg-desktop-portal` Background API for cron-based refresh while the UI is closed.
 - [ ] `GSettings` schema for user prefs (refresh interval, retention days, font overrides).
 
-## Phase 13: The Pruning Engine
+## Phase 14: The Pruning Engine
 - [ ] Port NNW's `RetentionStyle.feedBased` — local and Inoreader accounts prune against the feed's own content.
 - [ ] Age-based purge: articles older than the configured retention (default 30 days) and not starred are deleted.
 - [ ] Unread status does not protect from pruning (NNW semantics).
 - [ ] Periodic `VACUUM` on startup; coalesced with OPML load so it runs off the main thread.
 - [ ] Cascade: deleting an article row triggers FTS5 row deletion via the existing trigger.
 
-## Phase 14: Inoreader Sync Engine (NetNewsWire Port)
+## Phase 15: Inoreader Sync Engine (NetNewsWire Port)
 - [ ] Refactor `LocalAccount` into a generic `Account` structure backed by an `AccountDelegate` trait, strictly mirroring NetNewsWire's abstraction.
 - [ ] Port `SyncDatabase` from `.netnewswire/Modules/SyncDatabase/` to track remote sync state (article UUIDs, read/starred sync status).
 - [ ] Port `InoreaderAccountDelegate` and the API caller from `.netnewswire/Modules/Account/` into Rust. We will strictly port the Swift networking logic, token-bucket approach, and batch sync rules.
 - [ ] Secure credentials storage via `libsecret` (porting the concepts from `.netnewswire/Modules/Secrets/`).
 
-## Phase 15: QA, Test Suites, & Debug Mode
+## Phase 16: QA, Test Suites, & Debug Mode
 - [ ] Implement a `viaduct --debug` flag or environment variable that enables verbose `tracing` logs, disables database WAL truncation (for easier inspection), and adds a hidden Debug menu to the UI.
 - [ ] Build out integration test suites for the refresh pipeline (`LocalAccountRefresher` and Inoreader sync), mocking the network layer.
 - [ ] Implement UI test harnesses to ensure sidebar/timeline/article pane state transitions are rock solid.
 - [ ] Port any remaining applicable unit tests from `.netnewswire/Tests/` and module test directories.
 - [ ] **DB worker supervision**: `database::worker::spawn_db_worker` spawns a plain `std::thread::spawn` — if the worker panics every future op is orphaned. Add a supervisor loop that restarts the worker (with a small backoff) and logs the panic.
 
-## Phase 16: Flatpak Sandboxing & 1.0 Release
+## Phase 17: Flatpak Sandboxing & 1.0 Release
 - [ ] Flatpak manifest: `network` permission only; no `--filesystem=home`. OPML I/O entirely via `org.freedesktop.portal.FileChooser`.
 - [ ] AppStream metadata (`appdata.xml`), icons at all required sizes, desktop entry.
 - [ ] Reproducible build verified against the target Flathub runtime.
