@@ -2,21 +2,14 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-pub mod database;
-pub mod error;
-pub mod models;
-pub mod network;
-pub mod parser;
-pub mod paths;
-pub mod ui;
-
-use crate::database::accounts::LocalAccount;
 use adw::prelude::*;
 use gtk::glib;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt};
+use viaduct::database::accounts::LocalAccount;
+use viaduct::{database, paths, ui};
 
 // Store the Tokio runtime globally
 static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();

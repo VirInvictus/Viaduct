@@ -26,6 +26,11 @@ pub enum ArticlesDbOp {
     FetchStarred(oneshot::Sender<Result<Vec<Article>>>),
     FetchToday(oneshot::Sender<Result<Vec<Article>>>),
     Search(String, oneshot::Sender<Result<Vec<Article>>>),
+    SearchWithSnippets(
+        String,
+        Option<String>, // optional feed_id filter
+        oneshot::Sender<Result<Vec<(Article, String)>>>,
+    ),
     UpdateFeed {
         feed_id: String,
         items: Vec<ParsedItem>,
@@ -180,6 +185,10 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
         }
         ArticlesDbOp::Search(query, tx) => {
             let res = search(conn, &query);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::SearchWithSnippets(query, feed_filter, tx) => {
+            let res = search_with_snippets(conn, &query, feed_filter.as_deref());
             let _ = tx.send(res);
         }
         ArticlesDbOp::UpdateFeed {
@@ -391,6 +400,53 @@ fn search(conn: &mut Connection, query: &str) -> Result<Vec<Article>> {
         articles.push(row?);
     }
     Ok(articles)
+}
+
+/// Search + FTS5 `snippet()` fragment. Optional `feed_filter` restricts matches
+/// to a single feed (used by the "this feed" scope toggle in the UI).
+///
+/// Column index `-1` lets FTS5 pick the best-matching column (title or body);
+/// empty start/end markers mean the snippet is plain text suitable for a
+/// GtkLabel. The 10-token window is the NNW-ish default.
+fn search_with_snippets(
+    conn: &mut Connection,
+    query: &str,
+    feed_filter: Option<&str>,
+) -> Result<Vec<(Article, String)>> {
+    let sql = if feed_filter.is_some() {
+        "SELECT a.*, snippet(search, -1, '', '', '…', 10) AS snip
+         FROM search
+         INNER JOIN articles a ON a.article_id = search.article_id
+         WHERE search MATCH ?1 AND a.feed_id = ?2
+         ORDER BY rank"
+    } else {
+        "SELECT a.*, snippet(search, -1, '', '', '…', 10) AS snip
+         FROM search
+         INNER JOIN articles a ON a.article_id = search.article_id
+         WHERE search MATCH ?1
+         ORDER BY rank"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let mapper = |row: &rusqlite::Row| -> rusqlite::Result<(Article, String)> {
+        let article = row_to_article(row)?;
+        let snip: String = row.get("snip")?;
+        Ok((article, snip))
+    };
+
+    let mut out = Vec::new();
+    if let Some(feed_id) = feed_filter {
+        let rows = stmt.query_map(rusqlite::params![query, feed_id], mapper)?;
+        for row in rows {
+            out.push(row?);
+        }
+    } else {
+        let rows = stmt.query_map([query], mapper)?;
+        for row in rows {
+            out.push(row?);
+        }
+    }
+    Ok(out)
 }
 
 /// Port of NNW `ArticlesTable.update(parsedItems, feedID, deleteOlder, ...)`.
@@ -623,6 +679,42 @@ mod tests {
         // Feed now only contains `b` — `a` should be deleted.
         let changes = update_feed(&mut conn, feed_id, vec![item("b", "B", "2")], true).unwrap();
         assert!(changes.deleted_article_ids.contains(&a_id));
+    }
+
+    #[test]
+    fn search_with_snippets_returns_excerpt_and_respects_feed_filter() {
+        let mut conn = in_memory();
+        let feed_a = "https://a.example/feed";
+        let feed_b = "https://b.example/feed";
+
+        let mut item_a = item(
+            "1",
+            "Rust memory safety",
+            "Rust guarantees memory safety at compile time.",
+        );
+        item_a.content_text = item_a.content_html.clone();
+        let mut item_b = item(
+            "2",
+            "Garbage collection",
+            "Java uses a garbage collector for memory management.",
+        );
+        item_b.content_text = item_b.content_html.clone();
+
+        update_feed(&mut conn, feed_a, vec![item_a], false).unwrap();
+        update_feed(&mut conn, feed_b, vec![item_b], false).unwrap();
+
+        let results = search_with_snippets(&mut conn, "memory", None).unwrap();
+        assert_eq!(results.len(), 2);
+        for (_, snip) in &results {
+            assert!(
+                !snip.is_empty(),
+                "snippet should never be empty for a match"
+            );
+        }
+
+        let scoped = search_with_snippets(&mut conn, "memory", Some(feed_a)).unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].0.feed_id, feed_a);
     }
 
     #[test]

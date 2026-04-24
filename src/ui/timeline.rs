@@ -19,6 +19,9 @@ pub mod imp {
     #[derive(Default)]
     pub struct ArticleNode {
         pub article: RefCell<Option<Article>>,
+        /// Optional FTS5 snippet for search-result rows. When set, the timeline
+        /// row renders this in the preview area instead of the article summary.
+        pub snippet: RefCell<Option<String>>,
     }
 
     #[glib::object_subclass]
@@ -37,8 +40,19 @@ impl ArticleNode {
         node
     }
 
+    pub fn with_snippet(article: Article, snippet: String) -> Self {
+        let node: Self = glib::Object::builder().build();
+        node.imp().article.replace(Some(article));
+        node.imp().snippet.replace(Some(snippet));
+        node
+    }
+
     pub fn article(&self) -> Option<Article> {
         self.imp().article.borrow().clone()
+    }
+
+    pub fn snippet(&self) -> Option<String> {
+        self.imp().snippet.borrow().clone()
     }
 }
 
@@ -140,13 +154,18 @@ pub fn setup_timeline_list_view(
             // In a full implementation, we'd pass a resolver or include the feed name in the Article/Node
             feed_name_label.set_text(&article.feed_id);
 
-            let preview = article
-                .summary
-                .as_deref()
-                .or(article.content_text.as_deref())
-                .unwrap_or("");
-            // Clean up whitespace for preview
-            let clean_preview = preview.replace('\n', " ").replace('\r', "");
+            // Search results carry an FTS5 snippet; prefer that over the
+            // generic summary/content preview so the user sees why the row
+            // matched.
+            let preview_source = node.snippet().unwrap_or_else(|| {
+                article
+                    .summary
+                    .as_deref()
+                    .or(article.content_text.as_deref())
+                    .unwrap_or("")
+                    .to_string()
+            });
+            let clean_preview = preview_source.replace('\n', " ").replace('\r', "");
             preview_label.set_text(&clean_preview);
         }
     });

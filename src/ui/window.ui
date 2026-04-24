@@ -70,9 +70,22 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                           <object class="GtkSearchBar" id="search_bar">
                             <property name="key-capture-widget">timeline_list_view</property>
                             <property name="child">
-                              <object class="GtkSearchEntry" id="search_entry">
-                                <property name="placeholder-text">Search articles…</property>
+                              <object class="GtkBox">
+                                <property name="orientation">horizontal</property>
+                                <property name="spacing">6</property>
                                 <property name="hexpand">True</property>
+                                <child>
+                                  <object class="GtkSearchEntry" id="search_entry">
+                                    <property name="placeholder-text">Search articles…</property>
+                                    <property name="hexpand">True</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkToggleButton" id="scope_toggle">
+                                    <property name="label">This feed</property>
+                                    <property name="tooltip-text">Restrict search to the currently-selected feed</property>
+                                  </object>
+                                </child>
                               </object>
                             </property>
                           </object>

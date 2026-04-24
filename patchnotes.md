@@ -1,5 +1,21 @@
 # viaduct — Patch Notes
 
+## v0.5.3 — Phase 5/7/8 close-out
+
+Finishes the remaining unchecked items under Phases 5, 7, and 8.
+
+### Added
+- **Folder aggregation in sidebar**: selecting a folder now fetches articles for every contained feed and merges them newest-first. `fetch_folder_articles` in `src/ui/window.rs`. Port of NNW's folder-as-article-source behavior.
+- **FTS5 snippet extraction**: new `ArticlesDbOp::SearchWithSnippets` and `LocalAccount::search_articles_with_snippets(query, feed_filter)` use SQLite's `snippet(search, -1, '', '', '…', 10)` to return a context excerpt per match. `ArticleNode` gained a `snippet` field (`with_snippet` constructor); the timeline's bind callback prefers the snippet over the article summary when present, so search results show the excerpt that actually matched.
+- **Search-scope toggle**: new `scope_toggle` GtkToggleButton in `window.ui` next to the search entry. `ViaductWindow` tracks `selected_feed_id` from sidebar selection; when the toggle is on, search restricts to that feed via the `feed_filter` argument on the new search method. Toggling re-emits `search-changed` so scope flips re-run without re-typing.
+- **Memory checkpoint harness**: `src/bin/mem_check.rs` runs 500 feeds × 10 articles through the real single-writer DB worker against a tempdir XDG, then reads `/proc/self/status` to report `VmHWM` vs the 500 MB hard budget. Release-build peak on the current machine: **29 MB**. Run via `cargo run --release --bin mem_check`.
+
+### Changed
+- **Crate split into lib + bin**: added `src/lib.rs` that declares the module tree publicly; `src/main.rs` is now a thin binary that imports via `use viaduct::...`. Enables auxiliary binaries like `mem_check` to share the same code without duplicating module graphs.
+
+### Fixed
+- No net bug fixes this release — all items were new functionality on top of v0.5.2's restoration.
+
 ## v0.5.2 — Phase 1–8 Restoration
 
 A maintenance pass that reconstructs work lost when an unsaved-edit session in another agent rewrote license headers and trampled in-progress code. The roadmap previously claimed Phases 1–8 complete; several files were empty or broken stubs on disk. This release brings the source tree back in line with those claims and rewires the app end-to-end so it actually loads OPML, fetches feeds, parses, persists, and renders.

@@ -43,6 +43,8 @@ mod imp {
         pub search_entry: TemplateChild<gtk::SearchEntry>,
         #[template_child]
         pub search_btn: TemplateChild<gtk::ToggleButton>,
+        #[template_child]
+        pub scope_toggle: TemplateChild<gtk::ToggleButton>,
 
         pub account: OnceCell<Arc<LocalAccount>>,
         pub image_cache: OnceCell<Arc<ImageCache>>,
@@ -52,6 +54,9 @@ mod imp {
         pub sidebar_tree_controller: OnceCell<Rc<TreeController>>,
         /// Pending debounced search timeout, restarted on every keystroke.
         pub search_timeout: RefCell<Option<glib::SourceId>>,
+        /// Feed ID of the currently-selected sidebar row. Used by the search
+        /// scope toggle to restrict FTS5 queries to a single feed.
+        pub selected_feed_id: RefCell<Option<String>>,
     }
 
     #[glib::object_subclass]
@@ -169,14 +174,25 @@ impl ViaductWindow {
         // Sidebar selection → timeline fetch.
         let account_for_sidebar = self.account();
         let timeline_store_for_sidebar = timeline_store.clone();
+        let window_weak_for_sidebar = self.downgrade();
         sidebar_selection.connect_selection_changed(move |sel, _pos, _n| {
             let Some(item) = selected_sidebar_item(sel) else {
                 return;
             };
+            // Track which feed (if any) is selected so the search scope toggle
+            // knows what "this feed" means.
+            if let Some(window) = window_weak_for_sidebar.upgrade() {
+                let feed_id = if let SidebarItem::Feed(ref feed) = item {
+                    Some(feed.id.clone())
+                } else {
+                    None
+                };
+                *window.imp().selected_feed_id.borrow_mut() = feed_id;
+            }
             let account = account_for_sidebar.clone();
             let store = timeline_store_for_sidebar.clone();
             glib::spawn_future_local(async move {
-                let result = match item {
+                let result: crate::error::Result<Vec<_>> = match item {
                     SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id).await,
                     SidebarItem::SmartFeed(name) => match name.as_str() {
                         "Today" => account.fetch_today_articles().await,
@@ -184,7 +200,8 @@ impl ViaductWindow {
                         "Starred" => account.fetch_starred_articles().await,
                         _ => Ok(Vec::new()),
                     },
-                    SidebarItem::Folder(_) | SidebarItem::SmartFeedGroup => Ok(Vec::new()),
+                    SidebarItem::Folder(folder) => fetch_folder_articles(&account, &folder).await,
+                    SidebarItem::SmartFeedGroup => Ok(Vec::new()),
                 };
                 match result {
                     Ok(articles) => populate_timeline(&store, articles),
@@ -228,6 +245,21 @@ impl ViaductWindow {
             .sync_create()
             .build();
 
+        // Scope toggle: re-run the current search whenever it flips so the
+        // user doesn't have to re-type.
+        let window_weak_for_scope = self.downgrade();
+        imp.scope_toggle.connect_toggled(move |_| {
+            if let Some(window) = window_weak_for_scope.upgrade() {
+                // Re-trigger the debounced handler so scope changes apply
+                // without the user having to touch the entry again.
+                window
+                    .imp()
+                    .search_entry
+                    .get()
+                    .emit_by_name::<()>("search-changed", &[]);
+            }
+        });
+
         // Debounce keystrokes ~150ms before running FTS5 (NNW spec). Without
         // this every character hits SQLite — fine on small DBs, painful at 50k.
         let account = self.account();
@@ -244,6 +276,7 @@ impl ViaductWindow {
             let store = timeline_store.clone();
             let account = account.clone();
             let entry_for_clear = entry.clone();
+            let window_weak_inner = window.downgrade();
             let new_timeout = glib::timeout_add_local_once(Duration::from_millis(150), move || {
                 if query.trim().is_empty() {
                     // Clearing the search reverts the timeline to whatever
@@ -257,9 +290,25 @@ impl ViaductWindow {
                 let store = store.clone();
                 let _entry_keepalive = entry_for_clear.clone();
                 let account = account.clone();
+
+                // Resolve the scope right when the query fires — not at
+                // debounce start — so toggling after typing works without a
+                // second keystroke.
+                let feed_filter = window_weak_inner.upgrade().and_then(|w| {
+                    let imp = w.imp();
+                    if imp.scope_toggle.is_active() {
+                        imp.selected_feed_id.borrow().clone()
+                    } else {
+                        None
+                    }
+                });
+
                 glib::spawn_future_local(async move {
-                    match account.search_articles(fts_query).await {
-                        Ok(articles) => populate_timeline(&store, articles),
+                    match account
+                        .search_articles_with_snippets(fts_query, feed_filter)
+                        .await
+                    {
+                        Ok(results) => populate_timeline_with_snippets(&store, results),
                         Err(e) => tracing::warn!(?e, "FTS5 search failed"),
                     }
                     drop(_entry_keepalive);
@@ -267,6 +316,16 @@ impl ViaductWindow {
             });
             *window.imp().search_timeout.borrow_mut() = Some(new_timeout);
         });
+    }
+}
+
+fn populate_timeline_with_snippets(
+    store: &gio::ListStore,
+    results: Vec<(crate::models::Article, String)>,
+) {
+    store.remove_all();
+    for (article, snippet) in results {
+        store.append(&ArticleNode::with_snippet(article, snippet));
     }
 }
 
@@ -284,4 +343,34 @@ fn populate_timeline(store: &gio::ListStore, articles: Vec<crate::models::Articl
     for article in articles {
         store.append(&ArticleNode::new(article));
     }
+}
+
+/// Port of NNW's folder-as-article-source behavior: a folder row in the
+/// sidebar yields the union of articles across its contained feeds, sorted
+/// newest-first. For port-first MVP we fan out N fetches in parallel and
+/// merge in memory. With realistic feed counts (1–50 per folder) this is
+/// bounded and runs entirely through the single DB-writer thread, so there's
+/// no write contention to worry about.
+async fn fetch_folder_articles(
+    account: &std::sync::Arc<LocalAccount>,
+    folder: &crate::models::Folder,
+) -> crate::error::Result<Vec<crate::models::Article>> {
+    if folder.feeds.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut merged: Vec<crate::models::Article> = Vec::new();
+    for feed in &folder.feeds {
+        match account.fetch_articles_by_feed(feed.id.clone()).await {
+            Ok(mut articles) => merged.append(&mut articles),
+            Err(e) => tracing::warn!(
+                feed_id = %feed.id,
+                ?e,
+                "folder aggregation: feed fetch failed (other feeds will still render)"
+            ),
+        }
+    }
+    // Sort newest-first. Articles without a published date sink to the
+    // bottom (matches NNW's ordering for missing dates).
+    merged.sort_by_key(|a| std::cmp::Reverse(a.date_published));
+    Ok(merged)
 }

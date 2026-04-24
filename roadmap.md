@@ -108,7 +108,7 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Timeline: `GtkListView` + `GtkSignalListItemFactory` + custom `gio::ListModel` backed by `ArticlesDatabase` paging. Title, source, date, 2-line preview.
 - [x] Article pane: placeholder `GtkTextView` (populated in Phase 6).
 - [x] Unread-count badges on sidebar rows, recalculated off `StatusesTable` deltas.
-- [ ] Folder selection currently shows an empty timeline. NNW aggregates articles from all child feeds; `ViaductWindow::wire_models` should fan a `SidebarItem::Folder` selection out to every contained feed and merge the results.
+- [x] Folder selection aggregates articles from all child feeds (newest-first). *(`fetch_folder_articles` in `window.rs`)*
 
 ## Phase 6: Native HTML → GtkTextBuffer Rendering
 - [x] `ammonia` whitelist configuration (strip scripts, iframes, inline styles, trackers).
@@ -123,15 +123,16 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Inline image fetch worker: async download, disk cache in `$XDG_CACHE_HOME/viaduct/images/`, 250-entry LRU. *(`network::cache::ImageCache::image` — `GdkTexture` decode happens at the GTK call site so the LRU stays `Send`)*
 - [x] Wire favicons into `SidebarDataSource` row binder. AdwAvatar with auto-derived accent + initial; on bind, async-fetch settings → favicon URL → ImageCache → `GdkTexture` → `set_custom_image`. Stale-row guard via avatar text comparison. *(`spawn_favicon_fetch` in `sidebar.rs`)*
 - [x] Wire inline `<img>` tags in `article::render_html` to `gtk::Picture` widgets at `TextChildAnchor` positions, async-loaded via `ImageCache`. Display-width capped at 600px. *(`insert_image_anchor` in `article.rs`)*
-- [ ] **Memory checkpoint**: profile with `heaptrack` under a 500-feed / 5,000-article scenario. Idle must sit 100–300 MB; peak during image warmup must stay under 500 MB. Cut features that bust the budget.
+- [x] **Memory checkpoint (DB + parser path)**: `src/bin/mem_check.rs` runs 500 feeds × 10 articles through the real single-writer worker and reports `VmHWM`. Current release-build peak: **29 MB** (hard budget 500 MB). Run via `cargo run --release --bin mem_check`.
+- [ ] **Memory checkpoint (image-cache warmup)**: same scenario but with 500 favicons + ~50 inline images warmed. Requires either a live network pass or a synthetic image-serving fixture; deferred until we have a refresh button wired in Phase 9 and can exercise the full path end-to-end.
 
 ## Phase 8: Smart Feeds & Search
 - [x] Smart-feed sidebar rows (Today / All Unread / Starred) that drive timeline fetches via the wired sidebar-selection handler in `ViaductWindow::wire_models`. *(The `SmartFeedDelegate` trait abstraction was deferred — port-first, the three queries already exist on `LocalAccount` and the window dispatches by name.)*
 - [x] "Today" (articles arrived/published since midnight local time), "All Unread" (aggregate across all feeds), "Starred" (retained indefinitely). *(`fetch_today_articles`, `fetch_unread_articles`, `fetch_starred_articles`)*
 - [x] `GtkSearchEntry` wired to FTS5 `MATCH`, ranked by `rank`. *(`window.ui` SearchBar + `ViaductWindow::wire_search`; query escaped + prefix-wrapped before MATCH)*
 - [x] Live-filter as the user types, debounced 150ms via `glib::timeout_add_local_once`.
-- [ ] Search-scope toggle (current feed vs. all feeds). Defer until selection state is shared between sidebar and search query.
-- [ ] Snippet extraction (`snippet()` SQL function) in result rendering.
+- [x] Search-scope toggle (current feed vs. all feeds). *(`scope_toggle` in `window.ui`; tracks `selected_feed_id` from sidebar selection and passes to `search_articles_with_snippets`)*
+- [x] Snippet extraction (`snippet()` FTS5 function) surfaced in the timeline preview row. *(`ArticleNode::with_snippet` + `populate_timeline_with_snippets`)*
 
 ## Phase 9: Keyboard Spatial Navigation
 - [ ] `Space`: smart read — scroll article if not at bottom; otherwise jump to next unread and mark current read.

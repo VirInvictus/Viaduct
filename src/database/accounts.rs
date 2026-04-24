@@ -118,6 +118,27 @@ impl LocalAccount {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// Search that returns a FTS5 `snippet()` fragment alongside each match.
+    /// `feed_filter` is `Some(feed_id)` to scope to a single feed, `None` for
+    /// the global index.
+    pub async fn search_articles_with_snippets(
+        &self,
+        query: String,
+        feed_filter: Option<String>,
+    ) -> Result<Vec<(Article, String)>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::SearchWithSnippets(
+                query,
+                feed_filter,
+                tx,
+            )))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
     /// Update a feed with freshly parsed items. Diffs against DB state and returns
     /// new/updated/deleted deltas for UI coalescing (port of NNW `updateAsync`).
     pub async fn update_feed(
