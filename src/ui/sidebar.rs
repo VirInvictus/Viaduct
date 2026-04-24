@@ -2,13 +2,16 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
+use crate::database::accounts::LocalAccount;
 use crate::database::opml::OpmlFile;
 use crate::models::{Feed, Folder};
+use crate::network::ImageCache;
 use crate::ui::tree::{TreeController, TreeControllerDelegate, TreeNode};
-use gtk::prelude::*;
+use adw::prelude::*;
 use gtk::{gio, glib};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Enum representing the items that can appear in the sidebar.
 /// This acts as the `representedObject` in the `TreeNode`.
@@ -185,10 +188,25 @@ impl SidebarDataSource {
             self.root_store.append(&child);
         }
     }
+
+    /// Re-syncs the root from the controller's current state. Call after the
+    /// delegate's underlying data (OPML) has changed and the controller has
+    /// rebuilt.
+    pub fn refresh_root(&self) {
+        if let Some(controller) = self.tree_controller.borrow().clone() {
+            self.sync_root_nodes(&controller.root_node);
+        }
+    }
 }
 
 /// Sets up the Sidebar ListView with models and the row factory.
-pub fn setup_sidebar_list_view(list_view: &gtk::ListView, data_source: &SidebarDataSource) {
+/// Returns the `SingleSelection` so the caller can connect selection-changed.
+pub fn setup_sidebar_list_view(
+    list_view: &gtk::ListView,
+    data_source: &SidebarDataSource,
+    account: Arc<LocalAccount>,
+    image_cache: Arc<ImageCache>,
+) -> gtk::SingleSelection {
     let tree_model = gtk::TreeListModel::new(
         data_source.root_model(),
         false,
@@ -212,8 +230,18 @@ pub fn setup_sidebar_list_view(list_view: &gtk::ListView, data_source: &SidebarD
         box_widget.set_margin_start(4);
         box_widget.set_margin_end(4);
 
-        let icon = gtk::Image::new();
-        icon.set_pixel_size(16);
+        // Icon slot is a Stack with two pages — a symbolic GtkImage for groups
+        // and folders, an AdwAvatar for feeds and smart feeds. Same row factory
+        // reused across the whole sidebar, switched at bind time.
+        let icon_stack = gtk::Stack::new();
+        icon_stack.set_transition_type(gtk::StackTransitionType::None);
+
+        let icon_image = gtk::Image::new();
+        icon_image.set_pixel_size(16);
+        icon_stack.add_named(&icon_image, Some("icon"));
+
+        let avatar = adw::Avatar::new(20, None, true);
+        icon_stack.add_named(&avatar, Some("avatar"));
 
         let label = gtk::Label::new(None);
         label.set_hexpand(true);
@@ -223,7 +251,7 @@ pub fn setup_sidebar_list_view(list_view: &gtk::ListView, data_source: &SidebarD
         let badge = gtk::Label::new(None);
         badge.add_css_class("numeric"); // standard libadwaita styling
 
-        box_widget.append(&icon);
+        box_widget.append(&icon_stack);
         box_widget.append(&label);
         box_widget.append(&badge);
 
@@ -231,7 +259,12 @@ pub fn setup_sidebar_list_view(list_view: &gtk::ListView, data_source: &SidebarD
         item.set_child(Some(&expander));
     });
 
+    let account_for_bind = account;
+    let image_cache_for_bind = image_cache;
     factory.connect_bind(move |_factory, list_item| {
+        let account = account_for_bind.clone();
+        let image_cache = image_cache_for_bind.clone();
+
         let item = list_item
             .downcast_ref::<gtk::ListItem>()
             .expect("Needs to be ListItem");
@@ -243,12 +276,26 @@ pub fn setup_sidebar_list_view(list_view: &gtk::ListView, data_source: &SidebarD
         let node = row.item().and_downcast::<TreeNode>().unwrap();
         let box_widget = expander.child().and_downcast::<gtk::Box>().unwrap();
 
-        let icon = box_widget
+        let icon_stack = box_widget
             .first_child()
+            .and_downcast::<gtk::Stack>()
+            .unwrap();
+        let icon_image = icon_stack
+            .child_by_name("icon")
             .and_downcast::<gtk::Image>()
             .unwrap();
-        let label = icon.next_sibling().and_downcast::<gtk::Label>().unwrap();
+        let avatar = icon_stack
+            .child_by_name("avatar")
+            .and_downcast::<adw::Avatar>()
+            .unwrap();
+        let label = icon_stack
+            .next_sibling()
+            .and_downcast::<gtk::Label>()
+            .unwrap();
         let badge = label.next_sibling().and_downcast::<gtk::Label>().unwrap();
+
+        // Reset avatar state so reused rows don't bleed favicons across feeds.
+        avatar.set_custom_image(None::<&gtk::gdk::Paintable>);
 
         // Extract domain data to bind
         let rep_obj = node.represented_object();
@@ -258,15 +305,18 @@ pub fn setup_sidebar_list_view(list_view: &gtk::ListView, data_source: &SidebarD
                 match sidebar_item {
                     SidebarItem::SmartFeedGroup => {
                         label.set_text("Smart Feeds");
-                        icon.set_icon_name(Some("folder-symbolic"));
+                        icon_image.set_icon_name(Some("folder-symbolic"));
+                        icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::SmartFeed(name) => {
                         label.set_text(name);
-                        icon.set_icon_name(Some("emblem-favorite-symbolic")); // Placeholder
+                        icon_image.set_icon_name(Some(smart_feed_icon(name)));
+                        icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::Folder(folder) => {
                         label.set_text(&folder.name);
-                        icon.set_icon_name(Some("folder-symbolic"));
+                        icon_image.set_icon_name(Some("folder-symbolic"));
+                        icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::Feed(feed) => {
                         let name = feed
@@ -275,16 +325,30 @@ pub fn setup_sidebar_list_view(list_view: &gtk::ListView, data_source: &SidebarD
                             .or(feed.name.as_deref())
                             .unwrap_or("Unnamed Feed");
                         label.set_text(name);
-                        icon.set_icon_name(Some("text-html-symbolic")); // Placeholder for favicon
+                        // AdwAvatar auto-derives a stable accent color from the
+                        // displayed text — semantically equivalent to NNW's
+                        // ColorHash(feed.url) for our purposes.
+                        avatar.set_text(Some(name));
+                        avatar.set_show_initials(true);
+                        icon_stack.set_visible_child_name("avatar");
+                        spawn_favicon_fetch(
+                            account.clone(),
+                            image_cache.clone(),
+                            feed.id.clone(),
+                            name.to_string(),
+                            avatar.clone(),
+                        );
                     }
                 }
             } else {
                 label.set_text("Unknown");
-                icon.set_icon_name(Some("dialog-question-symbolic"));
+                icon_image.set_icon_name(Some("dialog-question-symbolic"));
+                icon_stack.set_visible_child_name("icon");
             }
         } else {
             label.set_text("Root");
-            icon.set_icon_name(Some("folder-symbolic"));
+            icon_image.set_icon_name(Some("folder-symbolic"));
+            icon_stack.set_visible_child_name("icon");
         }
 
         let count = node.unread_count();
@@ -298,4 +362,66 @@ pub fn setup_sidebar_list_view(list_view: &gtk::ListView, data_source: &SidebarD
     });
 
     list_view.set_factory(Some(&factory));
+    selection_model
+}
+
+/// Async-fetch the favicon for a feed and apply it to the row's avatar.
+///
+/// The flow is settings DB → favicon URL → ImageCache (in-memory → disk → net) →
+/// `gdk::Texture::from_bytes` → `adw::Avatar::set_custom_image`. Stale-row guard:
+/// the row factory recycles widgets as the user scrolls, so by the time the bytes
+/// arrive the row may have been re-bound to a different feed. We compare the
+/// avatar's currently-displayed text to the name we kicked off with and bail if
+/// it changed.
+fn spawn_favicon_fetch(
+    account: Arc<LocalAccount>,
+    image_cache: Arc<ImageCache>,
+    feed_id: String,
+    expected_name: String,
+    avatar: adw::Avatar,
+) {
+    glib::spawn_future_local(async move {
+        let settings = match account.fetch_feed_settings(feed_id).await {
+            Ok(Some(s)) => s,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::debug!(?e, "favicon: settings fetch failed");
+                return;
+            }
+        };
+        let Some(favicon_url) = settings.favicon_url.or(settings.icon_url) else {
+            return;
+        };
+        let Some(bytes) = image_cache.favicon(&favicon_url).await else {
+            return;
+        };
+        // Stale-row guard.
+        if avatar.text().as_deref() != Some(expected_name.as_str()) {
+            return;
+        }
+        let glib_bytes = glib::Bytes::from(&bytes);
+        match gtk::gdk::Texture::from_bytes(&glib_bytes) {
+            Ok(texture) => avatar.set_custom_image(Some(&texture)),
+            Err(e) => tracing::debug!(?e, "favicon: texture decode failed"),
+        }
+    });
+}
+
+fn smart_feed_icon(name: &str) -> &'static str {
+    match name {
+        "Today" => "x-office-calendar-symbolic",
+        "All Unread" => "mail-unread-symbolic",
+        "Starred" => "starred-symbolic",
+        _ => "view-pin-symbolic",
+    }
+}
+
+/// The currently-selected sidebar row, decoded from a `gtk::SingleSelection`.
+pub fn selected_sidebar_item(selection: &gtk::SingleSelection) -> Option<SidebarItem> {
+    let item = selection.selected_item()?;
+    let row = item.downcast_ref::<gtk::TreeListRow>()?;
+    let node = row.item().and_downcast::<TreeNode>()?;
+    let obj = node.represented_object()?;
+    let item = obj.downcast_ref::<SidebarItem>()?;
+    Some(item.clone())
 }

@@ -39,13 +39,13 @@ Key paths to consult:
 
 | viaduct target | NetNewsWire source |
 |---|---|
-| `src/parser/xml.rs`, `src/parser/json.rs`, `src/parser/html.rs` | `.netnewswire/Modules/RSParser/` |
-| `src/parser/date.rs` (`RSDateParser` port) | `.netnewswire/Modules/RSParser/RSParser/Dates/` |
-| `src/database/articles.rs` | `.netnewswire/Modules/ArticlesDatabase/` and `.netnewswire/Modules/Articles/` |
-| `src/database/settings.rs`, `src/database/opml.rs`, `src/database/accounts.rs` | `.netnewswire/Modules/Account/` (look for `LocalAccountDelegate`, `OPMLFile`, `FeedMetadataFile`) |
-| `src/network/fetcher.rs` | `.netnewswire/Modules/RSWeb/`, plus `LocalAccountRefresher` inside `Account` |
-| Coalescing / BatchUpdate primitives | `.netnewswire/Modules/RSCore/` (`CoalescingQueue`) and `DatabaseQueue` in `RSDatabase` |
-| Feed discovery from a website URL | `.netnewswire/Modules/FeedFinder/` |
+| `src/parser/xml.rs`, `src/parser/json.rs`, `src/parser/html.rs` | `.netnewswire/Modules/RSParser/Sources/RSParser/` (see `Feeds/XML/`, `Feeds/JSON/`, `HTML/`) |
+| `src/parser/date.rs` (`DateParser` port) | `.netnewswire/Modules/RSParser/Sources/RSParser/Utilities/DateParser.swift` |
+| `src/database/articles.rs` | `.netnewswire/Modules/ArticlesDatabase/Sources/ArticlesDatabase/` and `.netnewswire/Modules/Articles/Sources/Articles/` |
+| `src/database/settings.rs`, `src/database/opml.rs`, `src/database/accounts.rs` | `.netnewswire/Modules/Account/Sources/Account/` (`FeedSettingsDatabase.swift`, `OPMLFile.swift`, `OPMLNormalizer.swift`, `LocalAccount/LocalAccountDelegate.swift`) |
+| `src/network/fetcher.rs` | `.netnewswire/Modules/RSWeb/Sources/RSWeb/` plus `.netnewswire/Modules/Account/Sources/Account/LocalAccount/LocalAccountRefresher.swift` |
+| Coalescing / BatchUpdate primitives | `.netnewswire/Modules/RSCore/Sources/RSCore/` (`CoalescingQueue.swift`, `BatchUpdate.swift`) and `.netnewswire/Modules/RSDatabase/Sources/RSDatabase/` (`DatabaseQueue.swift`) |
+| Feed discovery from a website URL | `.netnewswire/Modules/FeedFinder/Sources/FeedFinder/` |
 
 `.gitignore` may or may not exclude `.netnewswire/` depending on the branch; in either case, never commit changes inside it.
 
@@ -65,42 +65,42 @@ Key paths to consult:
 * `paths.rs` — XDG resolution. Data → `$XDG_DATA_HOME/viaduct/` (fallback `~/.local/share/viaduct/`). Cache → `$XDG_CACHE_HOME/viaduct/` (fallback `~/.cache/viaduct/`). Resolves `local.opml`, `articles.sqlite`, `feed-settings.sqlite`, `favicons/`, `images/`.
 * `models.rs` — domain types: `Feed`, `Folder`, `Article`, `ArticleStatus`, `Author`, `FeedSettings`, `ParsedItem`, `ParsedFeed`, `ArticleChanges { new, updated, deleted }`.
 * `error.rs` — `ViaductError` (top-level) → `DatabaseError`, `NetworkError`, `ParseError`. All via `thiserror`. Each variant preserves its source error (`rusqlite`, `reqwest`, `quick_xml`, `serde_json`, `url::ParseError`).
-* `bin/`, `test_glib.rs` — scratch/experimental binaries. Safe to ignore unless you're specifically asked about them.
 
 ### `src/database/`
 
 Three stores, strict separation, single writer. Port of NNW's three-way split.
 
-* `articles.rs` — `ArticlesDatabase`. Tables: `articles`, `statuses`, `authors`, `authorsLookup`, FTS5 virtual table `search`, delete-cascade trigger on article removal. WAL mode; pragmas `synchronous=NORMAL`, `temp_store=MEMORY`, `mmap_size`.
-* `settings.rs` — `FeedSettingsDatabase`. Per-feed cache and overrides: `feedURL`, `feedID`, `homePageURL`, `iconURL`, `faviconURL`, `editedName`, `contentHash`, conditional-GET (`etag`, `lastModified`), `cacheControl` (`maxAge`, `dateCreated`), `authors` JSON, `folderRelationship` JSON, `lastCheckDate`, `readerViewAlwaysEnabled`.
-* `opml.rs` — OPML on disk is the source of truth for the feed/folder hierarchy. Coalesced save (~500ms debounce), atomic temp-file + rename.
-* `accounts.rs` — `LocalAccount` orchestrator owning the OPML file + both DBs.
-* `worker.rs` — **single writer**: one dedicated tokio task owns both `rusqlite::Connection` handles. All writes arrive via `mpsc`. The GTK thread holds only a `Sender`; it never blocks on SQLite.
+* `articles.rs` — `ArticlesDatabase`. Tables: `articles`, `statuses`, `authors`, `authorsLookup`, FTS5 virtual `search`. Triggers: FTS index maintenance on insert/update/delete, and `articles_ad_lookup` to cascade-clean `authorsLookup` when an article is removed (status rows are deliberately NOT cascaded — NNW keeps them for reappearing articles). WAL + `synchronous=NORMAL`, `temp_store=MEMORY`, `mmap_size=30GB` (sparse mapping, not actual allocation). Public helpers: `article_id_for(feed_id, unique_id)` — MD5 of `"{feed_id} {unique_id}"` per NNW `Article.calculatedArticleID`; `parsed_to_article` which truncates `DateTime` to second precision so DB round-trips don't flag every article as "updated". Main op is `ArticlesDbOp::UpdateFeed { feed_id, items, delete_older, reply }` which produces a real `ArticleChanges` diff (new / updated / deleted + status rows for new articles; stale items >6 months default to `read=1`; orphans non-starred >30d get deleted when `delete_older=true`).
+* `settings.rs` — `FeedSettingsDatabase`. Per-feed cache: `feed_id` (PK, string — note NNW uses `feedURL` as PK, we diverge), `feed_url`, `home_page_url`, `icon_url`, `favicon_url`, `edited_name`, `content_hash`, conditional-GET (`etag`, `last_modified`, `date_created` = when those were received), cache-control (`max_age`), `authors_json`, `folder_relationship_json`, `last_check_date`, `reader_view_always_enabled`. `delete_settings_for_feeds_not_in` early-returns on empty input (regression-tested) — do NOT "simplify" that branch back to a bare DELETE or you'll wipe every row.
+* `opml.rs` — OPML on disk is the source of truth for the feed/folder hierarchy. Coalesced save (~500ms debounce), atomic temp-file + rename. `OpmlWriter::spawn` owns its own tokio task; `save(OpmlFile)` queues and awaits the next flush.
+* `accounts.rs` — `LocalAccount` orchestrator owning the OPML file + both DBs. Public async API: `load_opml`, `save_opml`, `batch_insert_articles`, `upsert_statuses`, `fetch_articles_by_feed`, `fetch_unread_articles`, `fetch_starred_articles`, `fetch_today_articles`, `search_articles`, `fetch_feed_settings`, `upsert_feed_settings`, `update_feed` (the new diff path), `cleanup_orphaned_settings`.
+* `worker.rs` — **single writer**: `std::thread::spawn` pulls `DbOp`s off a tokio `mpsc::Receiver` via `blocking_recv` and dispatches to `articles::handle_op` or `settings::handle_op`. The GTK thread holds only a `Sender`; it never blocks on SQLite. *No panic supervisor today — tracked in Phase 15.*
 
 ### `src/network/`
 
-* `fetcher.rs` — `reqwest` client (rustls-tls, HTTP/2, per-host concurrency cap, UA string) + `DownloadSession` analog (coalesces duplicate in-flight URLs, maintains an errored-feed cooldown list) + `LocalAccountRefresher` port. Conditional-GET path reads ETag/Last-Modified from `FeedSettingsDatabase`; short-circuits on 304. 429 handling with exponential backoff honoring `Retry-After`. 25-hour `specialCaseCutoffDate` for high-frequency feeds.
-* `cache.rs` — async favicon/image downloads, disk-cached under `$XDG_CACHE_HOME/viaduct/`.
+* `fetcher.rs` — `Fetcher` (reqwest, rustls-tls, HTTP/2 auto-negotiated, UA `Viaduct/1.0 (Linux; GTK4)`) + `DownloadSession` analog that coalesces duplicate in-flight URLs via `broadcast::channel` and tracks per-host cooldowns after 429. `LocalAccountRefresher::new(account: Arc<LocalAccount>, changes_sender)` — the refresher pipeline actually does parse + diff + persist: conditional-GET headers from `FeedSettingsDatabase`, short-circuits on 304 (updates `last_check_date` only), content-hash short-circuits on byte-identical bodies, calls `parser::parse` → `account.update_feed` → emits real `ArticleChanges`, persists ETag/Last-Modified/`content_hash`/`last_check_date`/`max_age` back to settings. Implements NNW's **8-day conditional-GET expiry** (catches servers that always 304; openrss.org + rachelbythebay.com are exempt), **5-hour cap** on `Cache-Control: max-age` (openrss.org exempt), and **25-hour special-case cutoff** for high-frequency feeds. Skip rules: twitter.com/x.com, cache-control freshness window, 29-min minimum between checks.
+* `cache.rs` — `ImageCache` with two-tier storage: in-memory `LruCache<String, Vec<u8>>` capped at 250 entries per kind (favicons + images counted separately), disk at `$XDG_CACHE_HOME/viaduct/{favicons,images}/<md5-of-url>`. Deliberately stores `Vec<u8>` (not `GdkTexture`) so the LRU stays `Send`; decode to texture happens on the GTK main thread at the call site. Public API: `favicon(url)`, `image(url)`, `color_for(s)` (port of NNW `ColorHash`, returns `#rrggbb` from MD5 of input).
 
 ### `src/parser/`
 
-* `xml.rs` — RSS 2.0, Atom, OPML via `quick-xml` (zero-allocation). RSS covers the `media:*` namespace for enclosures.
-* `json.rs` — JSON Feed + RSS-in-JSON via `serde_json`.
-* `html.rs` — `HTMLMetadataExtractor` (finds `<link rel="alternate" type="application/rss+xml|atom+xml">` when a user pastes a bare website URL); HTML sanitization via `ammonia` (strip scripts, iframes, inline styles, trackers).
-* `date.rs` — `RSDateParser` port. Permissive: W3C / ISO 8601, RFC 822 / `pubDate`, and the long tail of malformed real-world dates. Byte-level inspection for zero-alloc parsing; `chrono` for the final conversion.
+* `xml.rs` — RSS 2.0, Atom, OPML via `quick-xml`. RSS handles: RDF (`rdf:RDF`), `<content:encoded>`, `<dc:creator>`/`<dc:date>` via unprefixed local-name match, `<guid isPermaLink="false">` attribute, relative-URL resolution against home-page URL, `</rss>`/`</RDF>` stop-sentinel, MD5 synthetic IDs. Atom handles: `in_author`/`in_source` state tracking (a `<source>` block inside an entry does NOT overwrite the entry's fields), `<author><name>`/`<email>`/`<uri>` capture into `MutableAuthor`, feed-level root author propagated to authorless entries at end of parse, `<link href>` resolution against home-page URL with `AtomLinkRel` (alternate/related/enclosure/other), `</feed>` stop-sentinel. **Does NOT yet parse**: RSS `<enclosure>`/`<media:*>`, channel `<image>`, feed `<language>`, Atom `type="xhtml"` raw inner HTML — these require `ParsedFeed`/`ParsedItem` model changes and are tracked under Phase 11 "Parser fidelity follow-ups".
+* `json.rs` — JSON Feed + RSS-in-JSON via `serde_json`. MD5 synthetic IDs (not `DefaultHasher` — must stay stable across builds).
+* `html.rs` — `HTMLMetadataExtractor` (finds `<link rel="alternate" type="application/rss+xml|atom+xml">` when a user pastes a bare website URL); returns an `HtmlMetadata { url_string, tags }` bag. HTML sanitization for the reading pane lives in `src/ui/article.rs` via `ammonia::clean`.
+* `date.rs` — `DateParser` port (NNW `RSDateParser`). Permissive: W3C / ISO 8601, RFC 822 / `pubDate`, and the long tail of malformed real-world dates. Byte-level inspection for zero-alloc parsing; `chrono` for the final conversion.
 
 ### `src/ui/`
 
-The GTK4 + libadwaita native view layer. Phase 5+ work lives here.
+The GTK4 + libadwaita native view layer. Phase 5+ work lives here. GTK types are `!Send` — see §6 gotchas.
 
-* `window.rs` — root `AdwApplicationWindow` and nested `AdwNavigationSplitView` scaffolding (three-pane: sidebar → timeline → article body).
-* `sidebar.rs` — feeds/folders list bound to a `gio::ListModel` backed by the OPML tree. Smart Feeds pinned (Today / All Unread / Starred). Unread badges.
-* `tree.rs` — `TreeController` and `TreeNode` primitives, porting the `RSTree` module from NetNewsWire. Maps domain models into `glib::Object` items for `gio::ListModel`.
+* `window.rs` — `ViaductWindow` subclass of `AdwApplicationWindow`. Built via `window.ui` GTK Builder XML. Owns `Arc<LocalAccount>` and `Arc<ImageCache>` (both in `OnceCell` inside the `imp` struct) plus the `SidebarDataSource`, `SidebarTreeControllerDelegate`, `TreeController`, and `timeline_store`. `wire_models()` loads OPML on startup, wires sidebar-selection → `account.fetch_articles_by_feed` / smart-feed fetches → timeline store, timeline-selection → `article::render_html`. `wire_search()` binds the sidebar `search_btn` toggle to the timeline's `GtkSearchBar`, debounces keystrokes 150ms, runs `account.search_articles(prefix*-MATCH escaped)` against FTS5.
+* `window.ui` — three-pane `AdwNavigationSplitView` scaffolding (sidebar → timeline → article body). Sidebar header bar holds `mark_all_read_btn`, `search_btn` (toggle), `menu_btn`. Timeline pane has a `GtkSearchBar` with embedded `GtkSearchEntry`. Article pane is a `GtkScrolledWindow` → `GtkTextView` (word-wrap, non-editable, cursor-invisible).
+* `sidebar.rs` — `SidebarDataSource`, `SidebarTreeControllerDelegate`, `setup_sidebar_list_view`. Row factory uses a `gtk::Stack` with two pages ("icon" = `gtk::Image`, "avatar" = `adw::Avatar`); folders/smart-groups show a symbolic icon, feeds show the avatar. Smart Feeds pinned at the top (Today / All Unread / Starred). `spawn_favicon_fetch` async-loads favicons via `FeedSettings.favicon_url`/`icon_url` → `ImageCache` → `GdkTexture` → `set_custom_image`, with a stale-row guard comparing avatar text to the expected feed name. Unread badges.
+* `tree.rs` — `TreeController` and `TreeNode` primitives, port of NNW `RSTree`. `TreeNode` is a `glib::Object` subclass so it can live in `gio::ListModel`.
 * `batch.rs` — `BatchUpdate` analog to suppress UI notification storms.
 * `coalescing_queue.rs` — `CoalescingQueue` analog for throttled, deduplicated UI operations on the main thread.
 * `fetch_queue.rs` — `FetchRequestQueue` analog for cancelling stale timeline fetches on rapid sidebar clicks.
-* `timeline.rs` — article list via `GtkListView` + `GtkSignalListItemFactory`. **Strict widget recycling.** Rendering 10,000 articles must cost the same RAM as rendering 10. Custom `gio::ListModel` backed by `ArticlesDatabase` paging.
-* `article.rs` — reading pane. Sanitized HTML → native `GtkTextTag` ranges inside a `GtkTextView`. **WebKit is forbidden.**
+* `timeline.rs` — `ArticleNode` (glib wrapper around `Article`) + `setup_timeline_list_view`. `GtkListView` + `GtkSignalListItemFactory` with **strict widget recycling**. Rendering 10,000 articles must cost the same RAM as rendering 10. Title, feed id, date, 2-line preview. Returns `SingleSelection` so the window can drive article rendering from it.
+* `article.rs` — reading pane. `render_html(text_view, html, Option<Arc<ImageCache>>)` runs `ammonia::clean` → `quick-xml` walk → `GtkTextTag` ranges in the `GtkTextBuffer`. Block tags: h1–h6, p, blockquote, pre/code-block, hr. Inline tags: strong/b, em/i, code (monospace), a (per-link unique `link:<href>` tag, click routed to `gio::AppInfo::launch_default_for_uri`). Lists: ul bullets, ol numbering. `<img>` with absolute `http(s)` src inserts a `TextChildAnchor` + anchored `gtk::Picture`, async-loaded via `ImageCache`, capped at 600px display width. **WebKit is forbidden.**
 
 ---
 
@@ -198,6 +198,10 @@ Target stack: **GNOME 50+**, **GTK4 ≥ 4.16**, **libadwaita ≥ 1.7**, Rust 202
 * **WAL mode** on both SQLite DBs, always. FTS5 on `articles`.
 * **Single writer task.** All SQLite writes funnel through `src/database/worker.rs`. The GTK thread only ever sends commands or reads from in-memory models.
 * **UI delivery:** background tasks emit `ArticleChanges { new, updated, deleted }` batches; these cross into the GTK main loop via `glib::MainContext::channel`. Bulk operations coalesce through a `BatchUpdate` primitive to avoid notification storms.
+* **Article DB ID = `md5("{feed_id} {unique_id}")`.** Ported from NNW `Article.calculatedArticleID(feedID:uniqueID:)`. The `unique_id` is whatever the feed's `<guid>` / Atom `<id>` / JSON Feed `id` gave us, and the parser falls back to MD5 of a deterministic concatenation when that's missing. Under no circumstances use `DefaultHasher` for synthetic IDs — it's not stable across builds and will orphan status rows on every restart.
+* **`parsed_to_article` truncates dates to whole seconds** before inserting, matching the integer column type. Don't remove this — without it, every refresh will flag every article as "updated" because the in-memory `DateTime<Utc>` has nanosecond precision that disagrees with the round-tripped seconds value.
+* **`delete_settings_for_feeds_not_in(Vec::new())` must be a no-op.** NNW `guard !feedURLs.isEmpty else { return }`. We used to `DELETE FROM feed_settings` on empty input, which nuked the entire settings DB whenever startup OPML was empty. Regression-tested; don't "simplify" the early return away.
+* **Status rows outlive articles.** The `articles_ad_lookup` trigger cascades `authorsLookup` deletes but `statuses` deletes are intentionally left out — if a feed re-adds an article after a retention sweep, NNW expects the old read/starred state to come back with it.
 
 ### gtk-rs Gotchas (Swift→Rust Pitfalls)
 

@@ -5,6 +5,7 @@
 use crate::error::{ParseError, Result};
 use crate::models::{Author, ParsedFeed, ParsedItem};
 use crate::parser::date::parse_date;
+use md5::{Digest, Md5};
 use serde_json::Value;
 
 pub fn parse(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
@@ -275,11 +276,10 @@ fn parse_rss_in_json(root: &Value, feed_url: &str) -> Result<ParsedFeed> {
                 }
             }
 
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            s.hash(&mut hasher);
-            unique_id = Some(format!("{:x}", hasher.finish()));
+            // MD5 to keep the synthetic ID stable across builds (matches NNW).
+            let mut hasher = Md5::new();
+            hasher.update(s.as_bytes());
+            unique_id = Some(format!("{:x}", hasher.finalize()));
         }
 
         if let Some(id) = unique_id {

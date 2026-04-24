@@ -66,6 +66,17 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                             <!-- Show sidebar toggle only on narrow screens? -->
                           </object>
                         </child>
+                        <child type="top">
+                          <object class="GtkSearchBar" id="search_bar">
+                            <property name="key-capture-widget">timeline_list_view</property>
+                            <property name="child">
+                              <object class="GtkSearchEntry" id="search_entry">
+                                <property name="placeholder-text">Search articles…</property>
+                                <property name="hexpand">True</property>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
                         <property name="content">
                           <object class="GtkScrolledWindow">
                             <property name="child">

@@ -10,12 +10,13 @@ pub mod parser;
 pub mod paths;
 pub mod ui;
 
+use crate::database::accounts::LocalAccount;
 use adw::prelude::*;
 use gtk::glib;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt};
-use crate::database::accounts::LocalAccount;
 
 // Store the Tokio runtime globally
 static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
@@ -41,14 +42,17 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::FAILURE;
     }
 
-    // Prepare LocalAccount
-    let _account = block_on(LocalAccount::new(db_tx)).expect("Failed to initialize LocalAccount");
+    // Prepare LocalAccount. Wrapped in Arc so the window and any future
+    // background tasks (refresher, search) can share it.
+    let account =
+        Arc::new(block_on(LocalAccount::new(db_tx)).expect("Failed to initialize LocalAccount"));
 
     let app = adw::Application::builder()
         .application_id("org.virinvictus.Viaduct")
         .build();
 
-    app.connect_activate(build_ui);
+    let account_for_activate = account.clone();
+    app.connect_activate(move |app| build_ui(app, account_for_activate.clone()));
 
     app.run()
 }
@@ -58,8 +62,8 @@ fn init_tracing() {
     fmt().with_env_filter(filter).init();
 }
 
-fn build_ui(app: &adw::Application) {
-    let window = ui::window::ViaductWindow::new(app);
+fn build_ui(app: &adw::Application, account: Arc<LocalAccount>) {
+    let window = ui::window::ViaductWindow::new(app, account);
     window.present();
 }
 

@@ -2,12 +2,20 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-use chrono::{TimeZone, Utc};
+use chrono::{Duration, TimeZone, Utc};
+use md5::{Digest, Md5};
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::{HashMap, HashSet};
 use tokio::sync::oneshot;
 
 use crate::error::{DatabaseError, Result};
-use crate::models::{Article, ArticleStatus, Author};
+use crate::models::{Article, ArticleChanges, ArticleStatus, Author, ParsedItem};
+
+/// NNW's `ArticleStatus.staleIntervalInSeconds` — articles older than ~6 months default to read.
+const STALE_INTERVAL_DAYS: i64 = 180;
+
+/// NNW's `feedBased` retention cutoff — non-starred articles older than 30 days get pruned.
+const RETENTION_CUTOFF_DAYS: i64 = 30;
 
 pub enum ArticlesDbOp {
     BatchInsert(Vec<Article>, oneshot::Sender<Result<()>>),
@@ -18,6 +26,44 @@ pub enum ArticlesDbOp {
     FetchStarred(oneshot::Sender<Result<Vec<Article>>>),
     FetchToday(oneshot::Sender<Result<Vec<Article>>>),
     Search(String, oneshot::Sender<Result<Vec<Article>>>),
+    UpdateFeed {
+        feed_id: String,
+        items: Vec<ParsedItem>,
+        delete_older: bool,
+        reply: oneshot::Sender<Result<ArticleChanges>>,
+    },
+}
+
+/// Matches NNW's `Article.calculatedArticleID(feedID:uniqueID:)`:
+/// `md5("{feed_id} {unique_id}")`. Stable across builds, unlike `DefaultHasher`.
+pub fn article_id_for(feed_id: &str, unique_id: &str) -> String {
+    let mut h = Md5::new();
+    h.update(feed_id.as_bytes());
+    h.update(b" ");
+    h.update(unique_id.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+fn parsed_to_article(p: &ParsedItem, feed_id: &str) -> Article {
+    // Truncate dates to second precision to match the DB's integer storage —
+    // otherwise every refresh flags every article as "updated" on the round-trip.
+    let trunc = |d: Option<chrono::DateTime<Utc>>| {
+        d.and_then(|d| Utc.timestamp_opt(d.timestamp(), 0).single())
+    };
+    Article {
+        article_id: article_id_for(feed_id, &p.id),
+        feed_id: feed_id.to_string(),
+        title: p.title.clone(),
+        content_html: p.content_html.clone(),
+        content_text: p.content_text.clone(),
+        url: p.url.clone(),
+        external_url: p.external_url.clone(),
+        summary: p.summary.clone(),
+        image_url: p.image_url.clone(),
+        date_published: trunc(p.date_published),
+        date_modified: trunc(p.date_modified),
+        authors: p.authors.clone(),
+    }
 }
 
 pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
@@ -89,6 +135,14 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
             INSERT INTO search(rowid, article_id, title, content_text)
             VALUES (new.rowid, new.article_id, new.title, new.content_text);
         END;
+
+        -- NNW cleans authorsLookup explicitly inside removeArticles. We get the
+        -- same effect via a delete-cascade trigger so callers don't have to
+        -- remember it. Status rows are deliberately NOT cascaded — NNW keeps
+        -- them around in case the article reappears (idempotent feeds).
+        CREATE TRIGGER IF NOT EXISTS articles_ad_lookup AFTER DELETE ON articles BEGIN
+            DELETE FROM authorsLookup WHERE article_id = old.article_id;
+        END;
         ",
     )?;
     Ok(())
@@ -127,6 +181,15 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
         ArticlesDbOp::Search(query, tx) => {
             let res = search(conn, &query);
             let _ = tx.send(res);
+        }
+        ArticlesDbOp::UpdateFeed {
+            feed_id,
+            items,
+            delete_older,
+            reply,
+        } => {
+            let res = update_feed(conn, &feed_id, items, delete_older);
+            let _ = reply.send(res);
         }
     }
 }
@@ -317,9 +380,9 @@ fn fetch_today(conn: &mut Connection) -> Result<Vec<Article>> {
 
 fn search(conn: &mut Connection, query: &str) -> Result<Vec<Article>> {
     let mut stmt = conn.prepare(
-        "SELECT a.* FROM articles a 
-         INNER JOIN search s ON a.article_id = s.article_id 
-         WHERE search MATCH ? 
+        "SELECT a.* FROM articles a
+         INNER JOIN search s ON a.article_id = s.article_id
+         WHERE search MATCH ?
          ORDER BY rank",
     )?;
     let rows = stmt.query_map([query], row_to_article)?;
@@ -328,4 +391,258 @@ fn search(conn: &mut Connection, query: &str) -> Result<Vec<Article>> {
         articles.push(row?);
     }
     Ok(articles)
+}
+
+/// Port of NNW `ArticlesTable.update(parsedItems, feedID, deleteOlder, ...)`.
+///
+/// Pipeline:
+/// 1. Map parsed items to `Article`s (computes MD5 article_id from feed_id + unique_id).
+/// 2. Fetch existing articles for the feed.
+/// 3. New = incoming not in DB. Updated = incoming present but content differs.
+/// 4. If `delete_older`: delete existing articles that are (!starred, date_arrived < 30d, no longer in feed).
+/// 5. Ensure a `statuses` row for every new article. Stale items (>6 months old) default to `read=1`.
+/// 6. Emit `ArticleChanges` for the UI.
+fn update_feed(
+    conn: &mut Connection,
+    feed_id: &str,
+    items: Vec<ParsedItem>,
+    delete_older: bool,
+) -> Result<ArticleChanges> {
+    if items.is_empty() {
+        return Ok(ArticleChanges::default());
+    }
+
+    // 1. Map to Articles keyed by article_id.
+    let mut incoming: HashMap<String, Article> = HashMap::with_capacity(items.len());
+    for p in &items {
+        let a = parsed_to_article(p, feed_id);
+        incoming.insert(a.article_id.clone(), a);
+    }
+
+    // 2. Fetch existing for this feed.
+    let existing: HashMap<String, Article> = {
+        let mut stmt = conn.prepare("SELECT * FROM articles WHERE feed_id = ?")?;
+        let mut map = HashMap::new();
+        let rows = stmt.query_map([feed_id], row_to_article)?;
+        for row in rows {
+            let a = row?;
+            map.insert(a.article_id.clone(), a);
+        }
+        map
+    };
+
+    // 3. Diff.
+    let mut new_articles: Vec<Article> = Vec::new();
+    let mut updated_articles: Vec<Article> = Vec::new();
+    for (id, inc) in &incoming {
+        match existing.get(id) {
+            None => new_articles.push(inc.clone()),
+            Some(cur) if cur != inc => updated_articles.push(inc.clone()),
+            _ => {}
+        }
+    }
+
+    // 4. Determine deletes (only if delete_older=true, NNW's feedBased retention).
+    let mut deleted_ids: HashSet<String> = HashSet::new();
+    if delete_older {
+        let retention_cutoff = Utc::now() - Duration::days(RETENTION_CUTOFF_DAYS);
+        let orphans: Vec<&String> = existing
+            .keys()
+            .filter(|id| !incoming.contains_key(*id))
+            .collect();
+        if !orphans.is_empty() {
+            let mut status_stmt =
+                conn.prepare("SELECT starred, date_arrived FROM statuses WHERE article_id = ?")?;
+            for id in orphans {
+                let status: Option<(bool, i64)> = status_stmt
+                    .query_row([id], |row| Ok((row.get::<_, i64>(0)? != 0, row.get(1)?)))
+                    .optional()?;
+                if let Some((starred, date_arrived)) = status
+                    && !starred
+                    && Utc.timestamp_opt(date_arrived, 0).unwrap() < retention_cutoff
+                {
+                    deleted_ids.insert(id.clone());
+                }
+            }
+        }
+    }
+
+    // 5. Write everything in a single transaction.
+    let tx = conn.transaction()?;
+    {
+        let stale_cutoff = Utc::now() - Duration::days(STALE_INTERVAL_DAYS);
+        let now = Utc::now();
+
+        let mut article_stmt = tx.prepare_cached(
+            "INSERT OR REPLACE INTO articles (
+                article_id, feed_id, title, content_html, content_text,
+                url, external_url, summary, image_url, date_published, date_modified, authors
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )?;
+        let mut status_stmt = tx.prepare_cached(
+            "INSERT INTO statuses (article_id, read, starred, date_arrived)
+             VALUES (?, ?, 0, ?)
+             ON CONFLICT(article_id) DO NOTHING",
+        )?;
+        let mut delete_stmt = tx.prepare_cached("DELETE FROM articles WHERE article_id = ?")?;
+
+        for a in new_articles.iter().chain(updated_articles.iter()) {
+            let authors_json = serde_json::to_string(&a.authors)
+                .map_err(|e| DatabaseError::Migration(e.to_string()))?;
+            article_stmt.execute(params![
+                a.article_id,
+                a.feed_id,
+                a.title,
+                a.content_html,
+                a.content_text,
+                a.url,
+                a.external_url,
+                a.summary,
+                a.image_url,
+                a.date_published.map(|d| d.timestamp()),
+                a.date_modified.map(|d| d.timestamp()),
+                authors_json,
+            ])?;
+        }
+
+        for a in &new_articles {
+            let is_stale = a.date_published.map(|d| d < stale_cutoff).unwrap_or(false);
+            status_stmt.execute(params![
+                a.article_id,
+                if is_stale { 1 } else { 0 },
+                now.timestamp(),
+            ])?;
+        }
+
+        for id in &deleted_ids {
+            delete_stmt.execute([id])?;
+        }
+    }
+    tx.commit()?;
+
+    Ok(ArticleChanges {
+        new_articles,
+        updated_articles,
+        deleted_article_ids: deleted_ids,
+        statuses: Vec::new(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_memory() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        setup_schema(&conn).expect("schema");
+        conn
+    }
+
+    fn item(id: &str, title: &str, body: &str) -> ParsedItem {
+        ParsedItem {
+            id: id.to_string(),
+            title: Some(title.to_string()),
+            content_html: Some(body.to_string()),
+            content_text: None,
+            url: None,
+            external_url: None,
+            summary: None,
+            image_url: None,
+            date_published: Some(Utc::now()),
+            date_modified: None,
+            authors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn article_id_is_md5_of_feed_and_unique() {
+        // Regression test: the synthetic ID must be stable across builds.
+        let a = article_id_for("https://example.com/feed", "guid-1");
+        let b = article_id_for("https://example.com/feed", "guid-1");
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 32);
+    }
+
+    #[test]
+    fn update_feed_inserts_new_and_diffs_updated() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+
+        let changes = update_feed(
+            &mut conn,
+            feed_id,
+            vec![item("a", "First", "body1"), item("b", "Second", "body2")],
+            false,
+        )
+        .unwrap();
+        assert_eq!(changes.new_articles.len(), 2);
+        assert_eq!(changes.updated_articles.len(), 0);
+        assert_eq!(changes.deleted_article_ids.len(), 0);
+
+        // Re-run with one unchanged, one updated, one new.
+        let changes = update_feed(
+            &mut conn,
+            feed_id,
+            vec![
+                item("a", "First", "body1"),            // unchanged
+                item("b", "Second v2", "body2 edited"), // updated
+                item("c", "Third", "body3"),            // new
+            ],
+            false,
+        )
+        .unwrap();
+        assert_eq!(changes.new_articles.len(), 1);
+        assert_eq!(changes.updated_articles.len(), 1);
+        assert_eq!(changes.deleted_article_ids.len(), 0);
+    }
+
+    #[test]
+    fn update_feed_deletes_orphans_when_flag_set() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![item("a", "A", "1"), item("b", "B", "2")],
+            false,
+        )
+        .unwrap();
+
+        // Backdate the status of `a` so retention can sweep it.
+        let a_id = article_id_for(feed_id, "a");
+        conn.execute(
+            "UPDATE statuses SET date_arrived = ? WHERE article_id = ?",
+            params![
+                (Utc::now() - Duration::days(RETENTION_CUTOFF_DAYS + 5)).timestamp(),
+                a_id,
+            ],
+        )
+        .unwrap();
+
+        // Feed now only contains `b` — `a` should be deleted.
+        let changes = update_feed(&mut conn, feed_id, vec![item("b", "B", "2")], true).unwrap();
+        assert!(changes.deleted_article_ids.contains(&a_id));
+    }
+
+    #[test]
+    fn stale_articles_default_to_read() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+
+        let mut old = item("old", "Old", "body");
+        old.date_published = Some(Utc::now() - Duration::days(STALE_INTERVAL_DAYS + 1));
+
+        update_feed(&mut conn, feed_id, vec![old], false).unwrap();
+
+        let old_id = article_id_for(feed_id, "old");
+        let read: i64 = conn
+            .query_row(
+                "SELECT read FROM statuses WHERE article_id = ?",
+                [&old_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(read, 1);
+    }
 }

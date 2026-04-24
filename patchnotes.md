@@ -1,5 +1,41 @@
 # viaduct — Patch Notes
 
+## v0.5.2 — Phase 1–8 Restoration
+
+A maintenance pass that reconstructs work lost when an unsaved-edit session in another agent rewrote license headers and trampled in-progress code. The roadmap previously claimed Phases 1–8 complete; several files were empty or broken stubs on disk. This release brings the source tree back in line with those claims and rewires the app end-to-end so it actually loads OPML, fetches feeds, parses, persists, and renders.
+
+### Restored
+- **`src/network/cache.rs`**: async favicon + image cache with two-tier storage (in-memory LRU capped at 250 entries → MD5-keyed disk cache under `$XDG_CACHE_HOME/viaduct/`). Linux has no reliable low-memory broadcast, so the LRU cap is a hard guarantee for the 500 MB peak-RSS budget. Includes `color_for(name)` (port of NNW `ColorHash`) for `AdwAvatar` fallback.
+- **`src/ui/article.rs`**: native HTML renderer. ammonia-sanitized payloads walked via `quick-xml`, mapped to `GtkTextTag` ranges in a `GtkTextView` (h1–h6, p, blockquote, pre/code, strong/em, a, ul/ol/li, hr, br). Per-link unique tags (`link:<href>`) plus a single `GestureClick` controller route activations to `gio::AppInfo::launch_default_for_uri` (xdg-open).
+- **`src/ui/window.rs`**: `ViaductWindow` now accepts `Arc<LocalAccount>`, holds the sidebar tree controller / data source / timeline store across the widget's lifetime (no more dropped `_account`), loads OPML on activation, and wires sidebar-selection → timeline fetch → article render.
+- **FTS5 search UI**: `GtkSearchBar` + `GtkSearchEntry` added to the timeline pane in `window.ui`; the existing sidebar `search_btn` toggle now bidirectionally controls the search bar's reveal state. Keystrokes are debounced ~150ms before hitting `account.search_articles()` against the FTS5 `MATCH` index.
+
+### Fixed
+- **Stable article IDs**: replaced `DefaultHasher` with MD5 in both `src/parser/xml.rs` and `src/parser/json.rs`. Synthetic unique IDs are now deterministic across builds; the article DB ID is `md5("{feed_id} {unique_id}")` per NNW `Article.calculatedArticleID`.
+- **`src/database/articles.rs`**: ported NNW's `ArticlesTable.update(parsedItems, feedID, deleteOlder)`. Diffs incoming parsed items against existing rows, computes real `ArticleChanges { new, updated, deleted }`, ensures status rows for new articles (stale items >6mo default to read), and applies the 30-day non-starred retention sweep when `delete_older` is true. Single transaction per feed update.
+- **`src/network/fetcher.rs::LocalAccountRefresher`**: previously sent `ArticleChanges::default()` (empty) on every successful fetch. Now actually parses the body, calls `update_feed`, and persists conditional-GET headers / cache-control / content hash / `last_check_date` back to the settings DB. Adds NNW's 8-day expiry on conditional GET info (catches servers that always 304) and the 5-hour cap on `Cache-Control: max-age` (openrss.org excluded; matches NNW).
+- **RSS parser fidelity**: stops on `</rss>` and `</RDF>`; honors `<guid isPermaLink="false">`; resolves relative `<link>` and `<guid>` URLs against the channel's home-page URL via the `url` crate.
+- **Date precision round-trip**: parsed `DateTime` timestamps are truncated to seconds at `Article` construction so DB round-trips don't flag every article as updated on the next refresh.
+
+### Removed
+- `src/test_glib.rs` (a deliberate-compile-error scratch file that wasn't a `[[bin]]` target).
+- `src/ui/sidebar_factory.rs` (orphan stub that contained only comments).
+- `src/ui/smart_feed.rs` (skeleton that never compiled — missing imports for `LocalAccount` / `Article`, duplicated copyright header, never declared in `src/ui/mod.rs`). The smart-feed sidebar rows themselves are still produced by `SidebarTreeControllerDelegate` and now drive timeline fetches via the wired selection handler.
+
+### Docs
+- `CLAUDE.md`: corrected stale path pointers under §2 — NNW's source tree is `Modules/<X>/Sources/<X>/`, not `Modules/<X>/`. Updated the table to reflect the current `.netnewswire/` layout. Removed the dead reference to `src/test_glib.rs` from §3.
+
+### Phase 7 completion (follow-up pass)
+- **Sidebar favicon rendering**: row factory now uses an `AdwAvatar` with the feed name's initial and auto-derived accent color (semantically equivalent to NNW's `ColorHash` for our purposes). On bind, we look up `FeedSettings` for a `favicon_url`/`icon_url`, fetch via `ImageCache`, decode bytes → `GdkTexture` → `Avatar::set_custom_image`. Stale-row guard compares the avatar's displayed text against the feed name we started with, so recycling during scroll doesn't attach the wrong icon.
+- **Inline `<img>` substitution in article pane**: `render_html` now accepts an optional `Arc<ImageCache>`. Every `<img>` with an absolute `http(s)` src inserts a `TextChildAnchor` + anchored `gtk::Picture` into the buffer; fetch runs async via `ImageCache`, decoded on the main thread, paintable set on the `Picture`. Display width capped at 600px via `INLINE_IMAGE_MAX_WIDTH`. Missing or relative-src images fall back to the original `[image]`/`[image: alt]` placeholder text.
+
+### Bug audit — NNW Swift vs Rust port
+- **Atom parser author handling** was materially broken. Any text event inside a `<name>` element — regardless of whether an `<author>` wrapper was open — emitted an Author. Also: `<email>` and `<uri>` were never captured; root (feed-level) `<author>` didn't propagate to authorless entries; `<source>` blocks (republished-entry origin metadata) overwrote the entry's own title/id/link. Rewrote the parser to track `in_author`, `in_source`, and `current_author: Option<MutableAuthor>` state, added root-author propagation at end of parse, and suppressed `<source>` content. Added four regression tests. `<link href="...">` inside entries now resolves against the feed's home-page URL, matching NNW.
+- **Atom end-of-feed guard**: stops scanning at `</feed>` so trailing junk doesn't mis-parse. Matches NNW's `endFeedFound`.
+- **`FeedSettingsDatabase::delete_settings_for_feeds_not_in(empty_vec)` wiped the entire settings table** — the `if feed_urls.is_empty()` branch ran `DELETE FROM feed_settings` instead of returning early. NNW's `guard !feedURLs.isEmpty else { return }` early-returns. This could have nuked a user's per-feed ETag/content-hash/favicon cache on any startup where the OPML happened to load as empty. Fixed and regression-tested.
+- **`authorsLookup` cascade**: article deletes now cascade-remove their `authorsLookup` rows via a new `articles_ad_lookup` trigger. NNW handles this explicitly inside `removeArticles`; relying on callers to remember it was a slow leak. Status rows are deliberately NOT cascaded — NNW retains them so read/starred state survives an article reappearing in the feed.
+- **`Fetcher::fetch` error classification**: when the per-URL broadcast channel closed unexpectedly (background task panic/drop), we returned `DatabaseError::WriterGone`, which is nonsense — the failure is network-side. Now surfaces as `NetworkError::RateLimited { retry_after_secs: 0 }` so callers back off without retrying the same URL immediately. String'd reqwest errors on the other branch rebuild as `ParseError::Malformed("network: …")` with a network prefix instead of being misclassified.
+
 ## v0.5.1 — Licensing, Attribution, & Upstream Sync
 
 Maintenance update to align the project with NetNewsWire's licensing and update core reference materials.

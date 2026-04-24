@@ -43,8 +43,14 @@ impl ArticleNode {
 }
 
 /// Sets up the Timeline ListView with models and the row factory.
-pub fn setup_timeline_list_view(list_view: &gtk::ListView, list_store: &gtk::gio::ListStore) {
+/// Returns the `SingleSelection` so the caller can drive article rendering.
+pub fn setup_timeline_list_view(
+    list_view: &gtk::ListView,
+    list_store: &gtk::gio::ListStore,
+) -> gtk::SingleSelection {
     let selection_model = gtk::SingleSelection::new(Some(list_store.clone()));
+    selection_model.set_autoselect(false);
+    selection_model.set_can_unselect(true);
     list_view.set_model(Some(&selection_model));
 
     let factory = gtk::SignalListItemFactory::new();
@@ -146,4 +152,5 @@ pub fn setup_timeline_list_view(list_view: &gtk::ListView, list_store: &gtk::gio
     });
 
     list_view.set_factory(Some(&factory));
+    selection_model
 }

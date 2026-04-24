@@ -139,8 +139,12 @@ fn delete_settings_for_feeds_not_in(
     conn: &mut Connection,
     feed_urls: Vec<String>,
 ) -> Result<usize> {
+    // Early return matches NNW's `guard !feedURLs.isEmpty else { return }`.
+    // The previous implementation deleted *every* row when the input was empty,
+    // which would wipe the user's settings DB during startup cleanup if the
+    // OPML failed to load or wasn't there yet.
     if feed_urls.is_empty() {
-        return Ok(conn.execute("DELETE FROM feed_settings", [])?);
+        return Ok(0);
     }
 
     let placeholders = vec!["?"; feed_urls.len()].join(", ");
@@ -151,4 +155,52 @@ fn delete_settings_for_feeds_not_in(
     let mut stmt = conn.prepare(&query)?;
     let count = stmt.execute(rusqlite::params_from_iter(feed_urls))?;
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_memory() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        setup_schema(&conn).expect("schema");
+        conn
+    }
+
+    #[test]
+    fn empty_feed_list_does_not_wipe_settings() {
+        // Regression: previously this nuked every row when the OPML happened
+        // to be empty at startup.
+        let mut conn = in_memory();
+        conn.execute(
+            "INSERT INTO feed_settings (feed_id, feed_url) VALUES (?, ?)",
+            params!["fid", "https://example.com/feed"],
+        )
+        .unwrap();
+        let removed = delete_settings_for_feeds_not_in(&mut conn, Vec::new()).unwrap();
+        assert_eq!(removed, 0);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM feed_settings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn non_empty_feed_list_prunes_only_orphans() {
+        let mut conn = in_memory();
+        conn.execute(
+            "INSERT INTO feed_settings (feed_id, feed_url) VALUES (?, ?)",
+            params!["a", "https://a.example/feed"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feed_settings (feed_id, feed_url) VALUES (?, ?)",
+            params!["b", "https://b.example/feed"],
+        )
+        .unwrap();
+        let removed =
+            delete_settings_for_feeds_not_in(&mut conn, vec!["https://a.example/feed".to_string()])
+                .unwrap();
+        assert_eq!(removed, 1);
+    }
 }

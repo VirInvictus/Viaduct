@@ -1,6 +1,6 @@
 # viaduct — Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.5.0.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.5.2.
 
 ---
 
@@ -108,6 +108,7 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Timeline: `GtkListView` + `GtkSignalListItemFactory` + custom `gio::ListModel` backed by `ArticlesDatabase` paging. Title, source, date, 2-line preview.
 - [x] Article pane: placeholder `GtkTextView` (populated in Phase 6).
 - [x] Unread-count badges on sidebar rows, recalculated off `StatusesTable` deltas.
+- [ ] Folder selection currently shows an empty timeline. NNW aggregates articles from all child feeds; `ViaductWindow::wire_models` should fan a `SidebarItem::Folder` selection out to every contained feed and merge the results.
 
 ## Phase 6: Native HTML → GtkTextBuffer Rendering
 - [x] `ammonia` whitelist configuration (strip scripts, iframes, inline styles, trackers).
@@ -117,25 +118,27 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Image `<img>` tags register an anchor; actual image fetch lives in Phase 7.
 
 ## Phase 7: Asset & Memory Management
-- [x] `IconImageCache` analog: favicon fetch → scale → disk cache in `$XDG_CACHE_HOME/viaduct/favicons/`.
-- [x] Favicon generator fallback (NNW `ColorHash` + `FaviconGenerator`): hashed color + first letter for feeds with no icon.
-- [x] Inline image fetch worker: async download, decode to `GdkTexture`, disk cache in `$XDG_CACHE_HOME/viaduct/images/`, LRU eviction.
-- [x] Image placeholder widget until the texture is ready; no main-thread blocking.
-- [x] **Memory checkpoint**: profile with `heaptrack` under a 500-feed / 5,000-article scenario. Idle must sit 100–300 MB; peak during image warmup must stay under 500 MB. Cut features that bust the budget.
+- [x] `IconImageCache` analog: favicon fetch → disk cache in `$XDG_CACHE_HOME/viaduct/favicons/`. *(`network::cache::ImageCache::favicon`)*
+- [x] `ColorHash` port for the AdwAvatar fallback color. *(`network::cache::color_for`)*
+- [x] Inline image fetch worker: async download, disk cache in `$XDG_CACHE_HOME/viaduct/images/`, 250-entry LRU. *(`network::cache::ImageCache::image` — `GdkTexture` decode happens at the GTK call site so the LRU stays `Send`)*
+- [x] Wire favicons into `SidebarDataSource` row binder. AdwAvatar with auto-derived accent + initial; on bind, async-fetch settings → favicon URL → ImageCache → `GdkTexture` → `set_custom_image`. Stale-row guard via avatar text comparison. *(`spawn_favicon_fetch` in `sidebar.rs`)*
+- [x] Wire inline `<img>` tags in `article::render_html` to `gtk::Picture` widgets at `TextChildAnchor` positions, async-loaded via `ImageCache`. Display-width capped at 600px. *(`insert_image_anchor` in `article.rs`)*
+- [ ] **Memory checkpoint**: profile with `heaptrack` under a 500-feed / 5,000-article scenario. Idle must sit 100–300 MB; peak during image warmup must stay under 500 MB. Cut features that bust the budget.
 
 ## Phase 8: Smart Feeds & Search
-- [x] `SmartFeedDelegate` analog: virtual feeds with pluggable fetch strategy.
-- [x] "Today" (articles since midnight local time), "All Unread" (aggregate across all feeds), "Starred" (retained indefinitely).
-- [x] `GtkSearchEntry` wired to FTS5 `MATCH` queries with ranking and snippet extraction.
-- [x] Search-scope toggle: current feed vs. all feeds.
-- [x] Live-filter as the user types, debounced to ~150ms.
+- [x] Smart-feed sidebar rows (Today / All Unread / Starred) that drive timeline fetches via the wired sidebar-selection handler in `ViaductWindow::wire_models`. *(The `SmartFeedDelegate` trait abstraction was deferred — port-first, the three queries already exist on `LocalAccount` and the window dispatches by name.)*
+- [x] "Today" (articles arrived/published since midnight local time), "All Unread" (aggregate across all feeds), "Starred" (retained indefinitely). *(`fetch_today_articles`, `fetch_unread_articles`, `fetch_starred_articles`)*
+- [x] `GtkSearchEntry` wired to FTS5 `MATCH`, ranked by `rank`. *(`window.ui` SearchBar + `ViaductWindow::wire_search`; query escaped + prefix-wrapped before MATCH)*
+- [x] Live-filter as the user types, debounced 150ms via `glib::timeout_add_local_once`.
+- [ ] Search-scope toggle (current feed vs. all feeds). Defer until selection state is shared between sidebar and search query.
+- [ ] Snippet extraction (`snippet()` SQL function) in result rendering.
 
 ## Phase 9: Keyboard Spatial Navigation
 - [ ] `Space`: smart read — scroll article if not at bottom; otherwise jump to next unread and mark current read.
 - [ ] `j` / `Down`: next article. `k` / `Up`: previous article.
 - [ ] `m`: toggle read/unread. `s`: toggle star.
 - [ ] `Enter`: open in default browser via `xdg-open`.
-- [ ] `Ctrl+R`: fetch now. `Ctrl+F`: focus search. `F9`: toggle sidebar.
+- [ ] `Ctrl+R`: fetch now. `Ctrl+F`: focus search. `F9`: toggle sidebar. *(`LocalAccountRefresher` is wired end-to-end — this accelerator just needs to call `account.refresh_feeds(...)` via the tokio runtime from a `gio::SimpleAction`.)*
 - [ ] Accelerator cheat-sheet via `Ctrl+?` (GNOME HIG standard).
 
 ## Phase 10: Reader View (RAM-gated)
@@ -150,6 +153,11 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [ ] UI indicator (audio/video icon) on articles with media attachments.
 - [ ] Hotkey: pipe enclosure URL to `mpv` (or `yt-dlp` for services mpv can't handle directly).
 - [ ] No in-app playback — system media players do the work.
+
+### Parser fidelity follow-ups (bundled here because they all require extending `ParsedFeed`/`ParsedItem`)
+- [ ] Capture RSS channel `<image>` as the feed-level icon URL.
+- [ ] Capture RSS/Atom `<language>` so the reading pane can tag text direction / hyphenation.
+- [ ] Atom `type="xhtml"` `<content>` and `<summary>` currently parse as plain text. NNW uses `XMLSAXParser.captureRawInnerContent` to hand back the raw inner bytes; `quick-xml` has no direct analog. Options: (a) accept degraded fidelity, (b) detect `type="xhtml"` at Start and buffer raw input until matching End, (c) switch to `html5ever` for those subtrees.
 
 ## Phase 12: System Integration & Theming
 - [ ] `libadwaita` system color scheme follow (Dark / Light / Auto).
@@ -175,6 +183,7 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [ ] Build out integration test suites for the refresh pipeline (`LocalAccountRefresher` and Inoreader sync), mocking the network layer.
 - [ ] Implement UI test harnesses to ensure sidebar/timeline/article pane state transitions are rock solid.
 - [ ] Port any remaining applicable unit tests from `.netnewswire/Tests/` and module test directories.
+- [ ] **DB worker supervision**: `database::worker::spawn_db_worker` spawns a plain `std::thread::spawn` — if the worker panics every future op is orphaned. Add a supervisor loop that restarts the worker (with a small backoff) and logs the panic.
 
 ## Phase 16: Flatpak Sandboxing & 1.0 Release
 - [ ] Flatpak manifest: `network` permission only; no `--filesystem=home`. OPML I/O entirely via `org.freedesktop.portal.FileChooser`.

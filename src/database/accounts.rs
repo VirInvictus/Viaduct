@@ -9,7 +9,7 @@ use crate::database::opml::{OpmlFile, OpmlWriter};
 use crate::database::settings::SettingsDbOp;
 use crate::database::worker::DbOp;
 use crate::error::{DatabaseError, Result, ViaductError};
-use crate::models::{Article, ArticleStatus, FeedSettings};
+use crate::models::{Article, ArticleChanges, ArticleStatus, FeedSettings, ParsedItem};
 use crate::paths::opml_path;
 
 pub struct LocalAccount {
@@ -112,6 +112,28 @@ impl LocalAccount {
         let (tx, rx) = oneshot::channel();
         self.db_tx
             .send(DbOp::Articles(ArticlesDbOp::Search(query, tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// Update a feed with freshly parsed items. Diffs against DB state and returns
+    /// new/updated/deleted deltas for UI coalescing (port of NNW `updateAsync`).
+    pub async fn update_feed(
+        &self,
+        feed_id: String,
+        items: Vec<ParsedItem>,
+        delete_older: bool,
+    ) -> Result<ArticleChanges> {
+        let (reply, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::UpdateFeed {
+                feed_id,
+                items,
+                delete_older,
+                reply,
+            }))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

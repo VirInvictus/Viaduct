@@ -5,10 +5,9 @@
 use crate::error::{ParseError, Result};
 use crate::models::{Author, ParsedFeed, ParsedItem};
 use crate::parser::date::parse_date_bytes;
+use md5::{Digest, Md5};
 use quick_xml::Reader;
 use quick_xml::events::Event;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::str;
 
 #[derive(Debug, Clone)]
@@ -122,9 +121,43 @@ fn calculate_id(
         s.push_str(b);
     }
 
-    let mut hasher = DefaultHasher::new();
-    s.hash(&mut hasher);
-    format!("{:x}", hasher.finish())
+    // MD5 matches NNW's `s.md5String`. Must be deterministic across builds —
+    // a non-stable hash here would orphan article statuses on every restart.
+    let mut hasher = Md5::new();
+    hasher.update(s.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Resolve a possibly-relative URL against the feed's home page URL.
+/// Mirrors NNW `RSSDelegate.resolveURL`. Returns the original string on failure.
+fn resolve_url(s: &str, base: Option<&str>) -> String {
+    if s.to_ascii_lowercase().starts_with("http") {
+        return s.to_string();
+    }
+    let Some(base_str) = base else {
+        return s.to_string();
+    };
+    let Ok(base_url) = url::Url::parse(base_str) else {
+        return s.to_string();
+    };
+    match base_url.join(s) {
+        Ok(joined) => joined.to_string(),
+        Err(_) => s.to_string(),
+    }
+}
+
+/// NNW's heuristic for whether a `<guid>` value can double as a permalink.
+fn guid_looks_like_url(s: &str) -> bool {
+    if s.contains(' ') {
+        return false;
+    }
+    if !s.contains('/') {
+        return false;
+    }
+    if s.to_ascii_lowercase().starts_with("tag:") {
+        return false;
+    }
+    true
 }
 
 fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
@@ -145,6 +178,8 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
     let mut current_item_permalink = None;
     let mut current_item_date = None;
     let mut current_item_authors = Vec::new();
+    // Tracks `<guid isPermaLink="false">` — mirrors NNW's handleGuid attribute check.
+    let mut current_guid_is_permalink = true;
 
     let mut current_tag = Vec::new();
 
@@ -164,6 +199,7 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                     current_item_permalink = None;
                     current_item_date = None;
                     current_item_authors.clear();
+                    current_guid_is_permalink = true;
 
                     if is_rdf {
                         for attr in e.attributes().filter_map(|a| a.ok()) {
@@ -174,6 +210,17 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                                 current_item_guid = Some(val_str.clone());
                                 current_item_permalink = Some(val_str);
                             }
+                        }
+                    }
+                } else if in_item && name_ref == b"guid" {
+                    // RSS 2.0: <guid isPermaLink="false">...</guid> — caller is telling us
+                    // this guid is NOT a usable URL. NNW honors it explicitly.
+                    for attr in e.attributes().filter_map(|a| a.ok()) {
+                        if attr.key.as_ref().eq_ignore_ascii_case(b"ispermalink")
+                            && let Ok(val) = str::from_utf8(attr.value.as_ref())
+                            && val.eq_ignore_ascii_case("false")
+                        {
+                            current_guid_is_permalink = false;
                         }
                     }
                 }
@@ -187,7 +234,8 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                                 current_item_title = Some(text_str);
                             }
                             b"link" if current_item_link.is_none() => {
-                                current_item_link = Some(text_str);
+                                current_item_link =
+                                    Some(resolve_url(&text_str, home_page_url.as_deref()));
                             }
                             b"description" if current_item_body.is_none() => {
                                 current_item_body = Some(text_str);
@@ -198,10 +246,12 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                             }
                             b"guid" => {
                                 current_item_guid = Some(text_str.clone());
-                                // simplistic check for url
-                                if current_item_permalink.is_none() && text_str.starts_with("http")
+                                if current_guid_is_permalink
+                                    && current_item_permalink.is_none()
+                                    && guid_looks_like_url(&text_str)
                                 {
-                                    current_item_permalink = Some(text_str);
+                                    current_item_permalink =
+                                        Some(resolve_url(&text_str, home_page_url.as_deref()));
                                 }
                             }
                             b"pubDate" | b"date" if current_item_date.is_none() => {
@@ -226,18 +276,16 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                             _ => {}
                         }
                     }
-                } else {
-                    if let Ok(text) = e.unescape() {
-                        let text_str = text.to_string();
-                        match current_tag.as_slice() {
-                            b"title" if title.is_none() => {
-                                title = Some(text_str);
-                            }
-                            b"link" if home_page_url.is_none() => {
-                                home_page_url = Some(text_str);
-                            }
-                            _ => {}
+                } else if let Ok(text) = e.unescape() {
+                    let text_str = text.to_string();
+                    match current_tag.as_slice() {
+                        b"title" if title.is_none() => {
+                            title = Some(text_str);
                         }
+                        b"link" if home_page_url.is_none() => {
+                            home_page_url = Some(text_str);
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -245,6 +293,12 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 let name = e.local_name();
                 let name_ref = name.as_ref();
                 current_tag.clear();
+
+                // Stop at the document close tag — NNW's endRSSFound. Defensive
+                // against trailing junk in malformed feeds.
+                if (name_ref == b"rss") || (is_rdf && name_ref == b"RDF") {
+                    break;
+                }
 
                 if name_ref == b"item" {
                     in_item = false;
@@ -287,6 +341,114 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
     })
 }
 
+/// Atom `<link>` `rel` attribute. NNW handles `alternate`, `related`, and
+/// `enclosure`. Enclosures need a model addition and are deferred to Phase 11.
+#[derive(Debug, Clone, Copy)]
+enum AtomLinkRel {
+    Alternate,
+    Related,
+    Enclosure,
+    Other,
+}
+
+impl AtomLinkRel {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "alternate" => Self::Alternate,
+            "related" => Self::Related,
+            "enclosure" => Self::Enclosure,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// Per-event state threaded through Atom parse callbacks. Bundled so
+/// `handle_atom_link_attributes` doesn't carry an argument-list long enough
+/// to trip clippy's `too_many_arguments`.
+struct AtomLinkCtx<'a> {
+    in_item: bool,
+    in_author: bool,
+    in_source: bool,
+    home_page_url: &'a mut Option<String>,
+    current_item_permalink: &'a mut Option<String>,
+    current_item_link: &'a mut Option<String>,
+    current_author: &'a mut Option<MutableAuthor>,
+}
+
+fn handle_atom_link_attributes(e: &quick_xml::events::BytesStart, ctx: &mut AtomLinkCtx<'_>) {
+    // Inside <source> (a republished entry's origin feed) we suppress link
+    // handling — those links describe the original source, not this entry.
+    if ctx.in_source {
+        return;
+    }
+    let mut href = None;
+    let mut rel = AtomLinkRel::Alternate;
+    for attr in e.attributes().filter_map(|a| a.ok()) {
+        match attr.key.as_ref() {
+            b"href" => {
+                href = str::from_utf8(attr.value.as_ref())
+                    .ok()
+                    .map(|s| s.to_string());
+            }
+            b"rel" => {
+                if let Ok(val) = str::from_utf8(attr.value.as_ref()) {
+                    rel = AtomLinkRel::from_str(val);
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(h) = href else { return };
+
+    if ctx.in_author {
+        // <link> inside <author> is non-standard, but if encountered, treat
+        // href as the author's URL (matches NNW's generous parsing).
+        if let Some(author) = ctx.current_author.as_mut()
+            && author.url.is_none()
+        {
+            author.url = Some(resolve_url(&h, ctx.home_page_url.as_deref()));
+        }
+        return;
+    }
+
+    let resolved = resolve_url(&h, ctx.home_page_url.as_deref());
+    if ctx.in_item {
+        match rel {
+            AtomLinkRel::Alternate if ctx.current_item_permalink.is_none() => {
+                *ctx.current_item_permalink = Some(resolved);
+            }
+            AtomLinkRel::Related if ctx.current_item_link.is_none() => {
+                *ctx.current_item_link = Some(resolved);
+            }
+            // Enclosure → would land in attachments; deferred to Phase 11.
+            _ => {}
+        }
+    } else if matches!(rel, AtomLinkRel::Alternate) && ctx.home_page_url.is_none() {
+        *ctx.home_page_url = Some(resolved);
+    }
+}
+
+#[derive(Default)]
+struct MutableAuthor {
+    name: Option<String>,
+    email: Option<String>,
+    url: Option<String>,
+}
+
+impl MutableAuthor {
+    fn build(self) -> Option<Author> {
+        if self.name.is_none() && self.email.is_none() && self.url.is_none() {
+            return None;
+        }
+        Some(Author {
+            name: self.name,
+            url: self.url,
+            avatar_url: None,
+            email: self.email,
+        })
+    }
+}
+
 fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
     let mut reader = Reader::from_reader(data);
     reader.config_mut().trim_text(true);
@@ -295,8 +457,11 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
     let mut title = None;
     let mut home_page_url = None;
     let mut items = Vec::new();
+    let mut root_author: Option<Author> = None;
 
     let mut in_item = false;
+    let mut in_author = false;
+    let mut in_source = false;
 
     let mut current_item_guid = None;
     let mut current_item_title = None;
@@ -305,10 +470,10 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
     let mut current_item_permalink = None;
     let mut current_item_date = None;
     let mut current_item_date_modified = None;
-    let mut current_item_authors = Vec::new();
+    let mut current_item_authors: Vec<Author> = Vec::new();
+    let mut current_author: Option<MutableAuthor> = None;
 
-    let mut current_tag = Vec::new();
-    let mut _is_xhtml = false;
+    let mut current_tag: Vec<u8> = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -319,6 +484,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
 
                 if name_ref == b"entry" {
                     in_item = true;
+                    in_source = false;
                     current_item_guid = None;
                     current_item_title = None;
                     current_item_body = None;
@@ -327,118 +493,84 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                     current_item_date = None;
                     current_item_date_modified = None;
                     current_item_authors.clear();
-                } else if in_item && (name_ref == b"content" || name_ref == b"summary") {
-                    _is_xhtml = false;
-                    for attr in e.attributes().filter_map(|a| a.ok()) {
-                        if attr.key.as_ref() == b"type" && attr.value.as_ref() == b"xhtml" {
-                            _is_xhtml = true;
-                        }
-                    }
+                } else if name_ref == b"source" && in_item {
+                    in_source = true;
+                } else if name_ref == b"author" {
+                    in_author = true;
+                    current_author = Some(MutableAuthor::default());
                 } else if name_ref == b"link" {
-                    let mut href = None;
-                    let mut rel = None;
-                    for attr in e.attributes().filter_map(|a| a.ok()) {
-                        if attr.key.as_ref() == b"href" {
-                            href = str::from_utf8(attr.value.as_ref())
-                                .ok()
-                                .map(|s| s.to_string());
-                        } else if attr.key.as_ref() == b"rel" {
-                            rel = str::from_utf8(attr.value.as_ref())
-                                .ok()
-                                .map(|s| s.to_string());
-                        }
-                    }
-                    if let Some(h) = href {
-                        let rel_str = rel.as_deref().unwrap_or("alternate");
-                        if in_item {
-                            if rel_str == "alternate" && current_item_permalink.is_none() {
-                                current_item_permalink = Some(h.clone());
-                            } else if rel_str == "related" && current_item_link.is_none() {
-                                current_item_link = Some(h.clone());
-                            }
-                        } else {
-                            if rel_str == "alternate" && home_page_url.is_none() {
-                                home_page_url = Some(h.clone());
-                            }
-                        }
-                    }
+                    let mut ctx = AtomLinkCtx {
+                        in_item,
+                        in_author,
+                        in_source,
+                        home_page_url: &mut home_page_url,
+                        current_item_permalink: &mut current_item_permalink,
+                        current_item_link: &mut current_item_link,
+                        current_author: &mut current_author,
+                    };
+                    handle_atom_link_attributes(e, &mut ctx);
                 }
             }
             Ok(Event::Empty(ref e)) => {
                 let name = e.local_name();
                 if name.as_ref() == b"link" {
-                    let mut href = None;
-                    let mut rel = None;
-                    for attr in e.attributes().filter_map(|a| a.ok()) {
-                        if attr.key.as_ref() == b"href" {
-                            href = str::from_utf8(attr.value.as_ref())
-                                .ok()
-                                .map(|s| s.to_string());
-                        } else if attr.key.as_ref() == b"rel" {
-                            rel = str::from_utf8(attr.value.as_ref())
-                                .ok()
-                                .map(|s| s.to_string());
-                        }
-                    }
-                    if let Some(h) = href {
-                        let rel_str = rel.as_deref().unwrap_or("alternate");
-                        if in_item {
-                            if rel_str == "alternate" && current_item_permalink.is_none() {
-                                current_item_permalink = Some(h.clone());
-                            } else if rel_str == "related" && current_item_link.is_none() {
-                                current_item_link = Some(h.clone());
-                            }
-                        } else {
-                            if rel_str == "alternate" && home_page_url.is_none() {
-                                home_page_url = Some(h.clone());
-                            }
-                        }
-                    }
+                    let mut ctx = AtomLinkCtx {
+                        in_item,
+                        in_author,
+                        in_source,
+                        home_page_url: &mut home_page_url,
+                        current_item_permalink: &mut current_item_permalink,
+                        current_item_link: &mut current_item_link,
+                        current_author: &mut current_author,
+                    };
+                    handle_atom_link_attributes(e, &mut ctx);
                 }
             }
             Ok(Event::Text(ref e)) => {
+                let Ok(text) = e.unescape() else { continue };
+                let text_str = text.to_string();
+
+                // Author body: collect into the open MutableAuthor.
+                if in_author && let Some(author) = current_author.as_mut() {
+                    match current_tag.as_slice() {
+                        b"name" => author.name = Some(text_str),
+                        b"email" => author.email = Some(text_str),
+                        b"uri" => author.url = Some(text_str),
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // <source> wraps a republished entry's original feed metadata —
+                // ignore everything inside it so it doesn't pollute our entry.
+                if in_source {
+                    continue;
+                }
+
                 if in_item {
-                    if let Ok(text) = e.unescape() {
-                        let text_str = text.to_string();
-                        match current_tag.as_slice() {
-                            b"title" if current_item_title.is_none() => {
-                                current_item_title = Some(text_str);
-                            }
-                            b"content" if current_item_body.is_none() => {
-                                current_item_body = Some(text_str);
-                            }
-                            b"summary" if current_item_body.is_none() => {
-                                current_item_body = Some(text_str);
-                            }
-                            b"id" if current_item_guid.is_none() => {
-                                current_item_guid = Some(text_str);
-                            }
-                            b"published" | b"issued" if current_item_date.is_none() => {
-                                current_item_date = parse_date_bytes(text.as_bytes());
-                            }
-                            b"updated" | b"modified" if current_item_date_modified.is_none() => {
-                                current_item_date_modified = parse_date_bytes(text.as_bytes());
-                            }
-                            b"name" => {
-                                // Inside author
-                                let author = Author {
-                                    name: Some(text_str),
-                                    url: None,
-                                    avatar_url: None,
-                                    email: None,
-                                };
-                                current_item_authors.push(author);
-                            }
-                            _ => {}
+                    match current_tag.as_slice() {
+                        b"title" if current_item_title.is_none() => {
+                            current_item_title = Some(text_str);
                         }
-                    }
-                } else {
-                    if let Ok(text) = e.unescape() {
-                        let text_str = text.to_string();
-                        if current_tag.as_slice() == b"title" && title.is_none() {
-                            title = Some(text_str);
+                        b"content" if current_item_body.is_none() => {
+                            current_item_body = Some(text_str);
                         }
+                        b"summary" if current_item_body.is_none() => {
+                            current_item_body = Some(text_str);
+                        }
+                        b"id" if current_item_guid.is_none() => {
+                            current_item_guid = Some(text_str);
+                        }
+                        b"published" | b"issued" if current_item_date.is_none() => {
+                            current_item_date = parse_date_bytes(text.as_bytes());
+                        }
+                        b"updated" | b"modified" if current_item_date_modified.is_none() => {
+                            current_item_date_modified = parse_date_bytes(text.as_bytes());
+                        }
+                        _ => {}
                     }
+                } else if current_tag.as_slice() == b"title" && title.is_none() {
+                    title = Some(text_str);
                 }
             }
             Ok(Event::End(ref e)) => {
@@ -446,8 +578,31 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 let name_ref = name.as_ref();
                 current_tag.clear();
 
+                // NNW endFeedFound — stop scanning at </feed>.
+                if name_ref == b"feed" {
+                    break;
+                }
+
+                if name_ref == b"author" {
+                    in_author = false;
+                    if let Some(built) = current_author.take().and_then(MutableAuthor::build) {
+                        if in_item {
+                            current_item_authors.push(built);
+                        } else if root_author.is_none() {
+                            root_author = Some(built);
+                        }
+                    }
+                    continue;
+                }
+
+                if name_ref == b"source" {
+                    in_source = false;
+                    continue;
+                }
+
                 if name_ref == b"entry" {
                     in_item = false;
+                    in_source = false;
                     let unique_id = calculate_id(
                         current_item_guid.as_deref(),
                         current_item_permalink.as_deref(),
@@ -477,6 +632,16 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
             _ => (),
         }
         buf.clear();
+    }
+
+    // NNW's rootAuthor propagation: feed-level <author> applies to any entry
+    // that didn't declare its own.
+    if let Some(author) = root_author {
+        for item in items.iter_mut() {
+            if item.authors.is_empty() {
+                item.authors.push(author.clone());
+            }
+        }
     }
 
     Ok(ParsedFeed {
@@ -599,4 +764,103 @@ pub fn parse_opml(data: &[u8]) -> Result<OpmlDocument> {
         title,
         items: root_items,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atom_author_name_email_uri_captured() {
+        // Regression: the previous parse_atom fired on any <name> text and
+        // produced a bogus Author. Verify we only emit an Author when an
+        // <author> wrapper is present, and that email + uri propagate.
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Site</title>
+  <entry>
+    <id>1</id>
+    <title>Post</title>
+    <author><name>Jane</name><email>jane@example.com</email><uri>https://jane.example</uri></author>
+    <content>hi</content>
+    <updated>2020-01-01T00:00:00Z</updated>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        assert_eq!(feed.items.len(), 1);
+        let authors = &feed.items[0].authors;
+        assert_eq!(authors.len(), 1);
+        assert_eq!(authors[0].name.as_deref(), Some("Jane"));
+        assert_eq!(authors[0].email.as_deref(), Some("jane@example.com"));
+        assert_eq!(authors[0].url.as_deref(), Some("https://jane.example"));
+    }
+
+    #[test]
+    fn atom_root_author_propagates_to_authorless_items() {
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Site</title>
+  <author><name>Feed Author</name></author>
+  <entry>
+    <id>1</id>
+    <title>Post 1</title>
+  </entry>
+  <entry>
+    <id>2</id>
+    <title>Post 2</title>
+    <author><name>Per-Entry</name></author>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        assert_eq!(feed.items.len(), 2);
+        assert_eq!(
+            feed.items[0].authors[0].name.as_deref(),
+            Some("Feed Author")
+        );
+        assert_eq!(feed.items[1].authors[0].name.as_deref(), Some("Per-Entry"));
+    }
+
+    #[test]
+    fn atom_source_block_does_not_pollute_entry() {
+        // <source> carries the ORIGINAL feed's metadata when an entry has been
+        // republished. Its <title>/<id>/<link> must not overwrite ours.
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Planet</title>
+  <entry>
+    <id>entry-42</id>
+    <title>Real Title</title>
+    <updated>2024-01-01T00:00:00Z</updated>
+    <source>
+      <id>original-source-id</id>
+      <title>Wrong Title</title>
+      <link href="https://wrong.example/" rel="alternate"/>
+    </source>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        assert_eq!(feed.items.len(), 1);
+        assert_eq!(feed.items[0].title.as_deref(), Some("Real Title"));
+    }
+
+    #[test]
+    fn atom_link_href_is_resolved_against_home_page() {
+        // <link href="/posts/1"> inside an entry should resolve against the
+        // feed's own home page URL when that URL is available.
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Site</title>
+  <link href="https://example.com/" rel="alternate"/>
+  <entry>
+    <id>1</id>
+    <title>Post</title>
+    <link href="/posts/1" rel="alternate"/>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        assert_eq!(
+            feed.items[0].url.as_deref(),
+            Some("https://example.com/posts/1")
+        );
+    }
 }

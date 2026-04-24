@@ -10,8 +10,18 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, error, warn};
 
-use crate::error::{DatabaseError, NetworkError, ParseError, Result};
+use crate::database::accounts::LocalAccount;
+use crate::error::{NetworkError, ParseError, Result};
 use crate::models::{ArticleChanges, Feed, FeedSettings};
+
+/// Port of NNW's `cacheControlMaxMaxAge` — cap `max-age` at 5 hours except for
+/// well-behaved hosts like openrss.org.
+const CACHE_CONTROL_MAX_MAX_AGE_SECS: i64 = 5 * 60 * 60;
+
+/// Port of NNW's 8-day expiry on conditional GET info. Some servers always respond
+/// 304 regardless of real state; dropping etag/last-modified periodically forces a
+/// full re-sync. openrss.org and rachelbythebay.com are excluded.
+const CONDITIONAL_GET_EXPIRY_DAYS: i64 = 8;
 
 #[derive(Clone, Debug)]
 pub struct FetchResult {
@@ -183,22 +193,36 @@ impl Fetcher {
 
         match rx.recv().await {
             Ok(Ok(res)) => Ok(res),
-            Ok(Err(e)) => Err(ParseError::Malformed(e).into()),
-            Err(_) => Err(DatabaseError::WriterGone.into()), // Channel closed unexpectedly means task panicked or sender dropped
+            // The downloader task stringifies any reqwest failure before
+            // sending — rebuild as a parse-style error so the type at least
+            // names the network failure rather than misclassifying as DB.
+            Ok(Err(e)) => Err(ParseError::Malformed(format!("network: {}", e)).into()),
+            // Sender dropped (task panicked). Surface as a generic rate-limit
+            // with no retry hint so the caller backs off without retrying
+            // immediately; misclassifying as a DB error was wrong.
+            Err(_) => Err(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            }
+            .into()),
         }
     }
 }
 
 pub struct LocalAccountRefresher {
     fetcher: Fetcher,
-    sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
+    account: Arc<LocalAccount>,
+    changes_sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
 }
 
 impl LocalAccountRefresher {
-    pub fn new(sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>) -> Self {
+    pub fn new(
+        account: Arc<LocalAccount>,
+        changes_sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
+    ) -> Self {
         Self {
             fetcher: Fetcher::new(),
-            sender,
+            account,
+            changes_sender,
         }
     }
 
@@ -213,41 +237,11 @@ impl LocalAccountRefresher {
             }
 
             let fetcher = self.fetcher.clone();
-            let sender = self.sender.clone();
+            let account = self.account.clone();
+            let sender = self.changes_sender.clone();
 
             futures.push(tokio::spawn(async move {
-                let etag = settings.etag.as_deref();
-                let last_modified = settings.last_modified.as_deref();
-
-                match fetcher.fetch(&feed.url, etag, last_modified).await {
-                    Ok(result) => {
-                        if result.status == 304 {
-                            debug!("Feed not modified (304): {}", feed.url);
-                            return;
-                        }
-                        if result.status != 200 {
-                            warn!("Feed HTTP {}: {}", result.status, feed.url);
-                            return;
-                        }
-
-                        let mut hasher = Md5::new();
-                        hasher.update(&result.body);
-                        let hash = format!("{:x}", hasher.finalize());
-                        if Some(&hash) == settings.content_hash.as_ref() {
-                            debug!("Feed content hash unchanged: {}", feed.url);
-                            return;
-                        }
-
-                        debug!("Feed downloaded successfully: {}", feed.url);
-
-                        // Emit dummy article changes to the UI layer
-                        let changes = ArticleChanges::default();
-                        let _ = sender.send(changes);
-                    }
-                    Err(e) => {
-                        error!("Failed to fetch feed {}: {:?}", feed.url, e);
-                    }
-                }
+                refresh_one_feed(fetcher, account, sender, feed, settings).await;
             }));
         }
 
@@ -275,7 +269,7 @@ impl LocalAccountRefresher {
             }
         }
 
-        // Cache-control max age
+        // Cache-control max age (already capped at 5h on persistence)
         if let (Some(last_check), Some(max_age)) = (settings.last_check_date, settings.max_age) {
             let elapsed = (Utc::now() - last_check).num_seconds();
             if elapsed < max_age {
@@ -285,8 +279,7 @@ impl LocalAccountRefresher {
 
         // Timing logic
         if let Some(last_check) = settings.last_check_date {
-            let is_special =
-                feed.url.contains("rachelbythebay.com") || feed.url.contains("openrss.org");
+            let is_special = is_special_case_host(&feed.url);
             if is_special {
                 if last_check > special_case_cutoff_date {
                     return true;
@@ -300,5 +293,133 @@ impl LocalAccountRefresher {
         }
 
         false
+    }
+}
+
+fn is_special_case_host(url: &str) -> bool {
+    url.contains("rachelbythebay.com") || url.contains("openrss.org")
+}
+
+fn is_openrss(url: &str) -> bool {
+    url.contains("openrss.org")
+}
+
+/// Drop conditional-GET info if it's older than 8 days (NNW behavior). Some
+/// servers respond 304 to any conditional GET regardless of real state, which
+/// would starve the feed. Special-case hosts are exempt.
+fn maybe_expire_conditional_get_info(
+    feed: &Feed,
+    settings: &FeedSettings,
+) -> (Option<String>, Option<String>) {
+    if is_special_case_host(&feed.url) {
+        return (settings.etag.clone(), settings.last_modified.clone());
+    }
+    if let Some(created) = settings.date_created
+        && (Utc::now() - created) > Duration::days(CONDITIONAL_GET_EXPIRY_DAYS)
+    {
+        debug!(
+            "Dropping conditional-GET info for {} — older than {} days",
+            feed.url, CONDITIONAL_GET_EXPIRY_DAYS
+        );
+        return (None, None);
+    }
+    (settings.etag.clone(), settings.last_modified.clone())
+}
+
+async fn refresh_one_feed(
+    fetcher: Fetcher,
+    account: Arc<LocalAccount>,
+    sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
+    feed: Feed,
+    settings: FeedSettings,
+) {
+    let (etag, last_modified) = maybe_expire_conditional_get_info(&feed, &settings);
+    let mut new_settings = settings.clone();
+    new_settings.last_check_date = Some(Utc::now());
+
+    match fetcher
+        .fetch(&feed.url, etag.as_deref(), last_modified.as_deref())
+        .await
+    {
+        Ok(result) => {
+            if result.status == 304 {
+                debug!("Feed not modified (304): {}", feed.url);
+                let _ = account.upsert_feed_settings(new_settings).await;
+                return;
+            }
+            if result.status != 200 {
+                warn!("Feed HTTP {}: {}", result.status, feed.url);
+                let _ = account.upsert_feed_settings(new_settings).await;
+                return;
+            }
+
+            // Refresh conditional-GET headers if the response provided new ones.
+            let mut got_conditional = false;
+            if result.etag.is_some() {
+                new_settings.etag = result.etag.clone();
+                got_conditional = true;
+            }
+            if result.last_modified.is_some() {
+                new_settings.last_modified = result.last_modified.clone();
+                got_conditional = true;
+            }
+            if got_conditional {
+                new_settings.date_created = Some(Utc::now());
+            }
+
+            // Cap Cache-Control max-age (NNW's cacheControlMaxMaxAge) — many sites
+            // misconfigure this and ship max-age values measured in months.
+            if let Some(max_age) = result.cache_control_max_age {
+                let capped = if is_openrss(&feed.url) {
+                    max_age
+                } else {
+                    max_age.min(CACHE_CONTROL_MAX_MAX_AGE_SECS)
+                };
+                new_settings.max_age = Some(capped);
+            }
+
+            // Content-hash short-circuit: skip parsing if the body is byte-identical.
+            let mut hasher = Md5::new();
+            hasher.update(&result.body);
+            let hash = format!("{:x}", hasher.finalize());
+            if Some(&hash) == settings.content_hash.as_ref() {
+                debug!("Feed content hash unchanged: {}", feed.url);
+                let _ = account.upsert_feed_settings(new_settings).await;
+                return;
+            }
+            new_settings.content_hash = Some(hash);
+
+            // Parse → diff → emit changes.
+            match crate::parser::parse(&result.body, &feed.url) {
+                Ok(parsed) => {
+                    match account
+                        .update_feed(feed.id.clone(), parsed.items, true)
+                        .await
+                    {
+                        Ok(changes) => {
+                            debug!(
+                                "Feed {}: {} new, {} updated, {} deleted",
+                                feed.url,
+                                changes.new_articles.len(),
+                                changes.updated_articles.len(),
+                                changes.deleted_article_ids.len(),
+                            );
+                            let _ = sender.send(changes);
+                        }
+                        Err(e) => {
+                            error!("DB update failed for {}: {:?}", feed.url, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Parse failed for {}: {:?}", feed.url, e);
+                }
+            }
+
+            let _ = account.upsert_feed_settings(new_settings).await;
+        }
+        Err(e) => {
+            error!("Failed to fetch feed {}: {:?}", feed.url, e);
+        }
     }
 }

@@ -6,8 +6,5 @@
 pub mod cache;
 pub mod fetcher;
 
+pub use cache::{ImageCache, color_for};
 pub use fetcher::{Fetcher, LocalAccountRefresher};
-
-pub fn init_network() {
-    // Phase 2: Setup reqwest and Tokio async reactor
-}
