@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
+use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::database::articles::ArticlesDbOp;
@@ -112,6 +113,19 @@ impl LocalAccount {
         let (tx, rx) = oneshot::channel();
         self.db_tx
             .send(DbOp::Articles(ArticlesDbOp::Search(query, tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    pub async fn fetch_statuses_by_ids(
+        &self,
+        ids: Vec<String>,
+    ) -> Result<HashMap<String, (bool, bool)>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::FetchStatusesByIds(ids, tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

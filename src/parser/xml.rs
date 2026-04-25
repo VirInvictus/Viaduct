@@ -3,12 +3,93 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 use crate::error::{ParseError, Result};
-use crate::models::{Author, ParsedFeed, ParsedItem};
+use crate::models::{Attachment, Author, ParsedFeed, ParsedItem};
 use crate::parser::date::parse_date_bytes;
 use md5::{Digest, Md5};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use std::str;
+
+/// Build an `Attachment` from an RSS `<enclosure>` element's attributes.
+/// NNW's `RSSDelegate.handleEnclosure`: requires non-empty `url`, parses
+/// optional `length` and `type`. Returns `None` when there's no usable URL.
+fn enclosure_from_attrs(e: &quick_xml::events::BytesStart) -> Option<Attachment> {
+    let mut url: Option<String> = None;
+    let mut mime_type: Option<String> = None;
+    let mut size: Option<i64> = None;
+    for attr in e.attributes().filter_map(|a| a.ok()) {
+        match attr.key.as_ref() {
+            b"url" => {
+                url = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
+            }
+            b"type" => {
+                mime_type = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
+            }
+            b"length" => {
+                size = str::from_utf8(attr.value.as_ref())
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .filter(|n| *n > 0);
+            }
+            _ => {}
+        }
+    }
+    let url = url?;
+    if url.is_empty() {
+        return None;
+    }
+    Some(Attachment {
+        url,
+        mime_type,
+        title: None,
+        size_in_bytes: size,
+        duration_in_seconds: None,
+    })
+}
+
+/// MRSS `<media:content>` / `<media:thumbnail>`. Reads `url`, optional
+/// `type`, `fileSize`, `duration`. quick-xml strips the `media:` prefix on
+/// `local_name`, so callers must already have confirmed the element name.
+fn media_attachment_from_attrs(e: &quick_xml::events::BytesStart) -> Option<Attachment> {
+    let mut url: Option<String> = None;
+    let mut mime_type: Option<String> = None;
+    let mut size: Option<i64> = None;
+    let mut duration: Option<i64> = None;
+    for attr in e.attributes().filter_map(|a| a.ok()) {
+        match attr.key.as_ref() {
+            b"url" => {
+                url = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
+            }
+            b"type" => {
+                mime_type = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
+            }
+            b"fileSize" => {
+                size = str::from_utf8(attr.value.as_ref())
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .filter(|n| *n > 0);
+            }
+            b"duration" => {
+                duration = str::from_utf8(attr.value.as_ref())
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .filter(|n| *n > 0);
+            }
+            _ => {}
+        }
+    }
+    let url = url?;
+    if url.is_empty() {
+        return None;
+    }
+    Some(Attachment {
+        url,
+        mime_type,
+        title: None,
+        size_in_bytes: size,
+        duration_in_seconds: duration,
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct OpmlDocument {
@@ -167,9 +248,14 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
 
     let mut title = None;
     let mut home_page_url = None;
+    let mut language: Option<String> = None;
+    let mut icon_url: Option<String> = None;
     let mut items = Vec::new();
 
     let mut in_item = false;
+    // Inside `<channel><image>...</image></channel>` — capture child `<url>`
+    // as the channel icon. Set on `<image>` Start, cleared on `</image>`.
+    let mut in_channel_image = false;
 
     let mut current_item_guid = None;
     let mut current_item_title = None;
@@ -178,6 +264,7 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
     let mut current_item_permalink = None;
     let mut current_item_date = None;
     let mut current_item_authors = Vec::new();
+    let mut current_item_attachments: Vec<Attachment> = Vec::new();
     // Tracks `<guid isPermaLink="false">` — mirrors NNW's handleGuid attribute check.
     let mut current_guid_is_permalink = true;
 
@@ -199,6 +286,7 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                     current_item_permalink = None;
                     current_item_date = None;
                     current_item_authors.clear();
+                    current_item_attachments.clear();
                     current_guid_is_permalink = true;
 
                     if is_rdf {
@@ -212,6 +300,24 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                             }
                         }
                     }
+                } else if !in_item && name_ref == b"image" {
+                    in_channel_image = true;
+                } else if in_item && name_ref == b"enclosure" {
+                    if let Some(att) = enclosure_from_attrs(e) {
+                        current_item_attachments.push(att);
+                    }
+                } else if in_item && (name_ref == b"content" || name_ref == b"thumbnail") {
+                    // Heuristic: MRSS `<media:content>` / `<media:thumbnail>`
+                    // always carry a `url` attribute. `<content:encoded>` does
+                    // not, so this distinguishes them despite quick-xml
+                    // stripping the namespace prefix from local_name.
+                    if e.attributes()
+                        .filter_map(|a| a.ok())
+                        .any(|a| a.key.as_ref() == b"url")
+                        && let Some(att) = media_attachment_from_attrs(e)
+                    {
+                        current_item_attachments.push(att);
+                    }
                 } else if in_item && name_ref == b"guid" {
                     // RSS 2.0: <guid isPermaLink="false">...</guid> — caller is telling us
                     // this guid is NOT a usable URL. NNW honors it explicitly.
@@ -223,6 +329,23 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                             current_guid_is_permalink = false;
                         }
                     }
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let name = e.local_name();
+                let name_ref = name.as_ref();
+                if in_item && name_ref == b"enclosure" {
+                    if let Some(att) = enclosure_from_attrs(e) {
+                        current_item_attachments.push(att);
+                    }
+                } else if in_item
+                    && (name_ref == b"content" || name_ref == b"thumbnail")
+                    && e.attributes()
+                        .filter_map(|a| a.ok())
+                        .any(|a| a.key.as_ref() == b"url")
+                    && let Some(att) = media_attachment_from_attrs(e)
+                {
+                    current_item_attachments.push(att);
                 }
             }
             Ok(Event::Text(ref e)) => {
@@ -276,6 +399,13 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                             _ => {}
                         }
                     }
+                } else if in_channel_image {
+                    if let Ok(text) = e.unescape()
+                        && current_tag.as_slice() == b"url"
+                        && icon_url.is_none()
+                    {
+                        icon_url = Some(text.to_string());
+                    }
                 } else if let Ok(text) = e.unescape() {
                     let text_str = text.to_string();
                     match current_tag.as_slice() {
@@ -285,6 +415,9 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                         b"link" if home_page_url.is_none() => {
                             home_page_url = Some(text_str);
                         }
+                        b"language" if language.is_none() => {
+                            language = Some(text_str);
+                        }
                         _ => {}
                     }
                 }
@@ -293,6 +426,10 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 let name = e.local_name();
                 let name_ref = name.as_ref();
                 current_tag.clear();
+
+                if name_ref == b"image" && in_channel_image {
+                    in_channel_image = false;
+                }
 
                 // Stop at the document close tag — NNW's endRSSFound. Defensive
                 // against trailing junk in malformed feeds.
@@ -323,6 +460,7 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                         date_published: current_item_date.take(),
                         date_modified: None,
                         authors: std::mem::take(&mut current_item_authors),
+                        attachments: std::mem::take(&mut current_item_attachments),
                     });
                 }
             }
@@ -337,6 +475,8 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
         title,
         home_page_url,
         feed_url: Some(feed_url.to_string()),
+        icon_url,
+        language,
         items,
     })
 }
@@ -372,6 +512,7 @@ struct AtomLinkCtx<'a> {
     home_page_url: &'a mut Option<String>,
     current_item_permalink: &'a mut Option<String>,
     current_item_link: &'a mut Option<String>,
+    current_item_attachments: &'a mut Vec<Attachment>,
     current_author: &'a mut Option<MutableAuthor>,
 }
 
@@ -383,6 +524,9 @@ fn handle_atom_link_attributes(e: &quick_xml::events::BytesStart, ctx: &mut Atom
     }
     let mut href = None;
     let mut rel = AtomLinkRel::Alternate;
+    let mut mime_type: Option<String> = None;
+    let mut size_in_bytes: Option<i64> = None;
+    let mut title: Option<String> = None;
     for attr in e.attributes().filter_map(|a| a.ok()) {
         match attr.key.as_ref() {
             b"href" => {
@@ -394,6 +538,18 @@ fn handle_atom_link_attributes(e: &quick_xml::events::BytesStart, ctx: &mut Atom
                 if let Ok(val) = str::from_utf8(attr.value.as_ref()) {
                     rel = AtomLinkRel::from_str(val);
                 }
+            }
+            b"type" => {
+                mime_type = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
+            }
+            b"length" => {
+                size_in_bytes = str::from_utf8(attr.value.as_ref())
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .filter(|n| *n > 0);
+            }
+            b"title" => {
+                title = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
             }
             _ => {}
         }
@@ -420,7 +576,15 @@ fn handle_atom_link_attributes(e: &quick_xml::events::BytesStart, ctx: &mut Atom
             AtomLinkRel::Related if ctx.current_item_link.is_none() => {
                 *ctx.current_item_link = Some(resolved);
             }
-            // Enclosure → would land in attachments; deferred to Phase 11.
+            AtomLinkRel::Enclosure if !resolved.is_empty() => {
+                ctx.current_item_attachments.push(Attachment {
+                    url: resolved,
+                    mime_type,
+                    title,
+                    size_in_bytes,
+                    duration_in_seconds: None,
+                });
+            }
             _ => {}
         }
     } else if matches!(rel, AtomLinkRel::Alternate) && ctx.home_page_url.is_none() {
@@ -456,6 +620,9 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
 
     let mut title = None;
     let mut home_page_url = None;
+    let mut language: Option<String> = None;
+    let mut icon_url: Option<String> = None;
+    let mut logo_url: Option<String> = None;
     let mut items = Vec::new();
     let mut root_author: Option<Author> = None;
 
@@ -471,6 +638,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
     let mut current_item_date = None;
     let mut current_item_date_modified = None;
     let mut current_item_authors: Vec<Author> = Vec::new();
+    let mut current_item_attachments: Vec<Attachment> = Vec::new();
     let mut current_author: Option<MutableAuthor> = None;
 
     let mut current_tag: Vec<u8> = Vec::new();
@@ -482,6 +650,18 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 let name_ref = name.as_ref();
                 current_tag = name_ref.to_vec();
 
+                if name_ref == b"feed" && language.is_none() {
+                    // Atom feed-root xml:lang. quick-xml's `local_name`
+                    // already strips namespace prefixes; the attribute is
+                    // raw `xml:lang`.
+                    for attr in e.attributes().filter_map(|a| a.ok()) {
+                        if attr.key.as_ref() == b"xml:lang"
+                            && let Ok(val) = str::from_utf8(attr.value.as_ref())
+                        {
+                            language = Some(val.to_string());
+                        }
+                    }
+                }
                 if name_ref == b"entry" {
                     in_item = true;
                     in_source = false;
@@ -493,6 +673,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                     current_item_date = None;
                     current_item_date_modified = None;
                     current_item_authors.clear();
+                    current_item_attachments.clear();
                 } else if name_ref == b"source" && in_item {
                     in_source = true;
                 } else if name_ref == b"author" {
@@ -506,6 +687,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                         home_page_url: &mut home_page_url,
                         current_item_permalink: &mut current_item_permalink,
                         current_item_link: &mut current_item_link,
+                        current_item_attachments: &mut current_item_attachments,
                         current_author: &mut current_author,
                     };
                     handle_atom_link_attributes(e, &mut ctx);
@@ -521,6 +703,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                         home_page_url: &mut home_page_url,
                         current_item_permalink: &mut current_item_permalink,
                         current_item_link: &mut current_item_link,
+                        current_item_attachments: &mut current_item_attachments,
                         current_author: &mut current_author,
                     };
                     handle_atom_link_attributes(e, &mut ctx);
@@ -569,8 +752,13 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                         }
                         _ => {}
                     }
-                } else if current_tag.as_slice() == b"title" && title.is_none() {
-                    title = Some(text_str);
+                } else {
+                    match current_tag.as_slice() {
+                        b"title" if title.is_none() => title = Some(text_str),
+                        b"icon" if icon_url.is_none() => icon_url = Some(text_str),
+                        b"logo" if logo_url.is_none() => logo_url = Some(text_str),
+                        _ => {}
+                    }
                 }
             }
             Ok(Event::End(ref e)) => {
@@ -624,6 +812,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                         date_published: current_item_date.take(),
                         date_modified: current_item_date_modified.take(),
                         authors: std::mem::take(&mut current_item_authors),
+                        attachments: std::mem::take(&mut current_item_attachments),
                     });
                 }
             }
@@ -648,6 +837,9 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
         title,
         home_page_url,
         feed_url: Some(feed_url.to_string()),
+        // NNW prefers <icon> over <logo> for the channel icon.
+        icon_url: icon_url.or(logo_url),
+        language,
         items,
     })
 }
@@ -841,6 +1033,107 @@ mod tests {
         let feed = parse_atom(xml, "https://example.com/feed").unwrap();
         assert_eq!(feed.items.len(), 1);
         assert_eq!(feed.items[0].title.as_deref(), Some("Real Title"));
+    }
+
+    #[test]
+    fn rss_enclosure_and_media_content_become_attachments() {
+        let xml = br#"<?xml version="1.0"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>Pod</title>
+    <item>
+      <title>Episode 1</title>
+      <enclosure url="https://example.com/ep1.mp3" length="12345" type="audio/mpeg"/>
+      <media:content url="https://example.com/ep1.mp4" type="video/mp4" fileSize="98765" duration="600"/>
+      <media:thumbnail url="https://example.com/thumb.jpg"/>
+    </item>
+  </channel>
+</rss>"#;
+        let feed = parse_rss(xml, "https://example.com/feed", false).unwrap();
+        assert_eq!(feed.items.len(), 1);
+        let atts = &feed.items[0].attachments;
+        assert_eq!(atts.len(), 3);
+        assert_eq!(atts[0].url, "https://example.com/ep1.mp3");
+        assert_eq!(atts[0].mime_type.as_deref(), Some("audio/mpeg"));
+        assert_eq!(atts[0].size_in_bytes, Some(12345));
+        assert_eq!(atts[1].url, "https://example.com/ep1.mp4");
+        assert_eq!(atts[1].duration_in_seconds, Some(600));
+        assert_eq!(atts[2].url, "https://example.com/thumb.jpg");
+    }
+
+    #[test]
+    fn atom_enclosure_link_becomes_attachment() {
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Pod</title>
+  <entry>
+    <id>1</id>
+    <title>Episode</title>
+    <link rel="enclosure" type="audio/mpeg" length="555" href="https://example.com/ep.mp3"/>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        let atts = &feed.items[0].attachments;
+        assert_eq!(atts.len(), 1);
+        assert_eq!(atts[0].url, "https://example.com/ep.mp3");
+        assert_eq!(atts[0].mime_type.as_deref(), Some("audio/mpeg"));
+        assert_eq!(atts[0].size_in_bytes, Some(555));
+    }
+
+    #[test]
+    fn rss_channel_image_and_language_captured() {
+        let xml = br#"<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>Site</title>
+    <language>en-us</language>
+    <image>
+      <url>https://example.com/logo.png</url>
+      <title>Site Logo</title>
+    </image>
+    <item><title>Hi</title></item>
+  </channel>
+</rss>"#;
+        let feed = parse_rss(xml, "https://example.com/feed", false).unwrap();
+        assert_eq!(
+            feed.icon_url.as_deref(),
+            Some("https://example.com/logo.png")
+        );
+        assert_eq!(feed.language.as_deref(), Some("en-us"));
+    }
+
+    #[test]
+    fn atom_icon_logo_and_xml_lang_captured() {
+        let xml = r#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="ja">
+  <title>サイト</title>
+  <icon>https://example.com/icon.png</icon>
+  <logo>https://example.com/logo.png</logo>
+  <entry><id>1</id><title>Post</title></entry>
+</feed>"#
+            .as_bytes();
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        // <icon> wins over <logo>.
+        assert_eq!(
+            feed.icon_url.as_deref(),
+            Some("https://example.com/icon.png")
+        );
+        assert_eq!(feed.language.as_deref(), Some("ja"));
+    }
+
+    #[test]
+    fn atom_logo_used_when_icon_missing() {
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Site</title>
+  <logo>https://example.com/logo-only.png</logo>
+  <entry><id>1</id><title>Post</title></entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        assert_eq!(
+            feed.icon_url.as_deref(),
+            Some("https://example.com/logo-only.png")
+        );
     }
 
     #[test]

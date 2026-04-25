@@ -153,6 +153,7 @@ fn synth_item(feed_ix: usize, art_ix: usize) -> ParsedItem {
             avatar_url: None,
             email: None,
         }],
+        attachments: Vec::new(),
     }
 }
 

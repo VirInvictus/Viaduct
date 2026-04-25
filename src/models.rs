@@ -33,6 +33,18 @@ pub struct Author {
     pub email: Option<String>,
 }
 
+/// Port of NNW `ParsedAttachment`. Covers RSS `<enclosure>`, RSS
+/// `<media:content>` / `<media:thumbnail>`, Atom `<link rel="enclosure">`,
+/// and JSON Feed `attachments[]` entries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct Attachment {
+    pub url: String,
+    pub mime_type: Option<String>,
+    pub title: Option<String>,
+    pub size_in_bytes: Option<i64>,
+    pub duration_in_seconds: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Feed {
     pub id: String,
@@ -62,6 +74,7 @@ pub struct Article {
     pub date_published: Option<DateTime<Utc>>,
     pub date_modified: Option<DateTime<Utc>>,
     pub authors: Vec<Author>,
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,7 +85,7 @@ pub struct ArticleStatus {
     pub date_arrived: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ParsedItem {
     pub id: String,
     pub title: Option<String>,
@@ -85,13 +98,20 @@ pub struct ParsedItem {
     pub date_published: Option<DateTime<Utc>>,
     pub date_modified: Option<DateTime<Utc>>,
     pub authors: Vec<Author>,
+    pub attachments: Vec<Attachment>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ParsedFeed {
     pub title: Option<String>,
     pub home_page_url: Option<String>,
     pub feed_url: Option<String>,
+    /// RSS channel `<image><url>` or Atom `<icon>`/`<logo>`. Refresher
+    /// persists into `FeedSettings.icon_url` for sidebar favicons.
+    pub icon_url: Option<String>,
+    /// RSS channel `<language>` or Atom `xml:lang` on the `<feed>` root.
+    /// Not yet used for rendering direction; Phase 11 reserves for later.
+    pub language: Option<String>,
     pub items: Vec<ParsedItem>,
 }
 

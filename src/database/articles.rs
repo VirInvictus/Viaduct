@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use tokio::sync::oneshot;
 
 use crate::error::{DatabaseError, Result};
-use crate::models::{Article, ArticleChanges, ArticleStatus, Author, ParsedItem};
+use crate::models::{Article, ArticleChanges, ArticleStatus, Attachment, Author, ParsedItem};
 
 /// NNW's `ArticleStatus.staleIntervalInSeconds` — articles older than ~6 months default to read.
 const STALE_INTERVAL_DAYS: i64 = 180;
@@ -30,6 +30,13 @@ pub enum ArticlesDbOp {
         String,
         Option<String>, // optional feed_id filter
         oneshot::Sender<Result<Vec<(Article, String)>>>,
+    ),
+    /// Bulk-fetch `(read, starred)` for the given article IDs. Missing rows
+    /// are simply absent from the result map — callers treat absence as
+    /// "not-yet-recorded, default false".
+    FetchStatusesByIds(
+        Vec<String>,
+        oneshot::Sender<Result<HashMap<String, (bool, bool)>>>,
     ),
     UpdateFeed {
         feed_id: String,
@@ -68,6 +75,7 @@ fn parsed_to_article(p: &ParsedItem, feed_id: &str) -> Article {
         date_published: trunc(p.date_published),
         date_modified: trunc(p.date_modified),
         authors: p.authors.clone(),
+        attachments: p.attachments.clone(),
     }
 }
 
@@ -91,7 +99,8 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
             image_url TEXT,
             date_published INTEGER,
             date_modified INTEGER,
-            authors JSON
+            authors JSON,
+            attachments JSON
         );
 
         CREATE TABLE IF NOT EXISTS statuses (
@@ -150,6 +159,16 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
         END;
         ",
     )?;
+
+    // Idempotent column-add for existing DBs. New DBs get the column via the
+    // CREATE TABLE above; pre-existing ones need an ALTER. SQLite raises
+    // "duplicate column" when the column is already present — swallow that
+    // specific error and propagate anything else.
+    if let Err(e) = conn.execute("ALTER TABLE articles ADD COLUMN attachments JSON", [])
+        && !e.to_string().contains("duplicate column")
+    {
+        return Err(e.into());
+    }
     Ok(())
 }
 
@@ -191,6 +210,10 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
             let res = search_with_snippets(conn, &query, feed_filter.as_deref());
             let _ = tx.send(res);
         }
+        ArticlesDbOp::FetchStatusesByIds(ids, tx) => {
+            let res = fetch_statuses_by_ids(conn, &ids);
+            let _ = tx.send(res);
+        }
         ArticlesDbOp::UpdateFeed {
             feed_id,
             items,
@@ -209,8 +232,9 @@ fn batch_insert(conn: &mut Connection, articles: Vec<Article>) -> Result<()> {
         let mut article_stmt = tx.prepare_cached(
             "INSERT OR REPLACE INTO articles (
                 article_id, feed_id, title, content_html, content_text,
-                url, external_url, summary, image_url, date_published, date_modified, authors
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                url, external_url, summary, image_url, date_published, date_modified,
+                authors, attachments
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
 
         let mut author_stmt = tx.prepare_cached(
@@ -230,6 +254,8 @@ fn batch_insert(conn: &mut Connection, articles: Vec<Article>) -> Result<()> {
         for article in articles {
             let authors_json = serde_json::to_string(&article.authors)
                 .map_err(|e| DatabaseError::Migration(e.to_string()))?;
+            let attachments_json = serde_json::to_string(&article.attachments)
+                .map_err(|e| DatabaseError::Migration(e.to_string()))?;
 
             article_stmt.execute(params![
                 article.article_id,
@@ -244,6 +270,7 @@ fn batch_insert(conn: &mut Connection, articles: Vec<Article>) -> Result<()> {
                 article.date_published.map(|d| d.timestamp()),
                 article.date_modified.map(|d| d.timestamp()),
                 authors_json,
+                attachments_json,
             ])?;
 
             for author in &article.authors {
@@ -297,6 +324,13 @@ fn row_to_article(row: &rusqlite::Row) -> rusqlite::Result<Article> {
     } else {
         Vec::new()
     };
+    // `attachments` was added after the initial schema so rows predating
+    // the migration have it NULL. Treat that as an empty vec.
+    let attachments_json: Option<String> = row.get("attachments").ok().flatten();
+    let attachments: Vec<Attachment> = attachments_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
 
     Ok(Article {
         article_id: row.get("article_id")?,
@@ -315,6 +349,7 @@ fn row_to_article(row: &rusqlite::Row) -> rusqlite::Result<Article> {
             .get::<_, Option<i64>>("date_modified")?
             .map(|t| Utc.timestamp_opt(t, 0).unwrap()),
         authors,
+        attachments,
     })
 }
 
@@ -449,6 +484,37 @@ fn search_with_snippets(
     Ok(out)
 }
 
+fn fetch_statuses_by_ids(
+    conn: &mut Connection,
+    ids: &[String],
+) -> Result<HashMap<String, (bool, bool)>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // Chunk the IN-list to stay well under SQLite's 999-parameter default.
+    const CHUNK: usize = 500;
+    let mut out = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT article_id, read, starred FROM statuses WHERE article_id IN ({})",
+            placeholders
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
+            let id: String = row.get(0)?;
+            let read: i64 = row.get(1)?;
+            let starred: i64 = row.get(2)?;
+            Ok((id, (read != 0, starred != 0)))
+        })?;
+        for row in rows {
+            let (id, v) = row?;
+            out.insert(id, v);
+        }
+    }
+    Ok(out)
+}
+
 /// Port of NNW `ArticlesTable.update(parsedItems, feedID, deleteOlder, ...)`.
 ///
 /// Pipeline:
@@ -532,8 +598,9 @@ fn update_feed(
         let mut article_stmt = tx.prepare_cached(
             "INSERT OR REPLACE INTO articles (
                 article_id, feed_id, title, content_html, content_text,
-                url, external_url, summary, image_url, date_published, date_modified, authors
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                url, external_url, summary, image_url, date_published, date_modified,
+                authors, attachments
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
         let mut status_stmt = tx.prepare_cached(
             "INSERT INTO statuses (article_id, read, starred, date_arrived)
@@ -544,6 +611,8 @@ fn update_feed(
 
         for a in new_articles.iter().chain(updated_articles.iter()) {
             let authors_json = serde_json::to_string(&a.authors)
+                .map_err(|e| DatabaseError::Migration(e.to_string()))?;
+            let attachments_json = serde_json::to_string(&a.attachments)
                 .map_err(|e| DatabaseError::Migration(e.to_string()))?;
             article_stmt.execute(params![
                 a.article_id,
@@ -558,6 +627,7 @@ fn update_feed(
                 a.date_published.map(|d| d.timestamp()),
                 a.date_modified.map(|d| d.timestamp()),
                 authors_json,
+                attachments_json,
             ])?;
         }
 
@@ -607,6 +677,7 @@ mod tests {
             date_published: Some(Utc::now()),
             date_modified: None,
             authors: Vec::new(),
+            attachments: Vec::new(),
         }
     }
 

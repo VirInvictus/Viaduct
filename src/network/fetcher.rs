@@ -392,6 +392,12 @@ async fn refresh_one_feed(
             // Parse → diff → emit changes.
             match crate::parser::parse(&result.body, &feed.url) {
                 Ok(parsed) => {
+                    // Pick up channel-level metadata from the parsed feed
+                    // (Phase 11). NNW persists these on the feed; sidebar
+                    // favicon fetch uses `icon_url` first.
+                    if parsed.icon_url.is_some() {
+                        new_settings.icon_url = parsed.icon_url.clone();
+                    }
                     match account
                         .update_feed(feed.id.clone(), parsed.items, true)
                         .await

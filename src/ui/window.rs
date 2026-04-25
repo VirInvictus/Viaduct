@@ -45,10 +45,13 @@ mod imp {
         pub search_btn: TemplateChild<gtk::ToggleButton>,
         #[template_child]
         pub scope_toggle: TemplateChild<gtk::ToggleButton>,
+        #[template_child]
+        pub reader_btn: TemplateChild<gtk::ToggleButton>,
 
         pub account: OnceCell<Arc<LocalAccount>>,
         pub image_cache: OnceCell<Arc<ImageCache>>,
         pub timeline_store: OnceCell<gio::ListStore>,
+        pub timeline_selection: OnceCell<gtk::SingleSelection>,
         pub sidebar_delegate: OnceCell<Rc<RefCell<SidebarTreeControllerDelegate>>>,
         pub sidebar_data_source: OnceCell<Rc<SidebarDataSource>>,
         pub sidebar_tree_controller: OnceCell<Rc<TreeController>>,
@@ -57,6 +60,23 @@ mod imp {
         /// Feed ID of the currently-selected sidebar row. Used by the search
         /// scope toggle to restrict FTS5 queries to a single feed.
         pub selected_feed_id: RefCell<Option<String>>,
+        /// Article-pane display state. Centralizes the four inputs to
+        /// `render_article_body` so toggle flips and async extractor
+        /// completions don't need to re-derive everything.
+        pub article_display: RefCell<ArticleDisplayState>,
+    }
+
+    /// Captured state for whatever article is currently on-screen.
+    /// `raw_html` is the feed-provided body, `extracted_html` caches a
+    /// Reader-View extraction result. `auto_reader` is the feed's
+    /// `reader_view_always_enabled` setting; when true the reader button
+    /// is pre-toggled on article selection.
+    #[derive(Default)]
+    pub struct ArticleDisplayState {
+        pub raw_html: Option<String>,
+        pub extracted_html: Option<String>,
+        pub article_url: Option<String>,
+        pub auto_reader: bool,
     }
 
     #[glib::object_subclass]
@@ -103,6 +123,7 @@ impl ViaductWindow {
             .set(Arc::new(ImageCache::new(favicons, images)))
             .ok();
         window.wire_models();
+        crate::ui::actions::install(&window, app);
         window
     }
 
@@ -152,6 +173,7 @@ impl ViaductWindow {
         imp.sidebar_tree_controller.set(controller.clone()).ok();
         imp.sidebar_data_source.set(data_source.clone()).ok();
         imp.timeline_store.set(timeline_store.clone()).ok();
+        imp.timeline_selection.set(timeline_selection.clone()).ok();
 
         // Initial OPML load — populate the sidebar.
         let account = self.account();
@@ -204,16 +226,22 @@ impl ViaductWindow {
                     SidebarItem::SmartFeedGroup => Ok(Vec::new()),
                 };
                 match result {
-                    Ok(articles) => populate_timeline(&store, articles),
+                    Ok(articles) => {
+                        populate_timeline(&store, articles);
+                        refresh_timeline_statuses(account.clone(), store.clone());
+                    }
                     Err(e) => tracing::warn!(?e, "failed to fetch articles for sidebar selection"),
                 }
             });
         });
 
         // Timeline selection → article render.
-        let text_view = imp.article_text_view.get();
-        let image_cache_for_article = self.image_cache();
+        let window_weak_for_article = self.downgrade();
+        let account_for_article = self.account();
         timeline_selection.connect_selection_changed(move |sel, _pos, _n| {
+            let Some(window) = window_weak_for_article.upgrade() else {
+                return;
+            };
             let Some(item) = sel.selected_item() else {
                 return;
             };
@@ -225,12 +253,126 @@ impl ViaductWindow {
             };
             let body = article
                 .content_html
-                .or(article.content_text)
+                .clone()
+                .or(article.content_text.clone())
                 .unwrap_or_default();
-            article::render_html(&text_view, &body, Some(image_cache_for_article.clone()));
+            let external = article.external_url.clone().or(article.url.clone());
+            let feed_id = article.feed_id.clone();
+
+            // Seed the display state for the new article. `auto_reader` is
+            // loaded async from FeedSettings below; until it resolves we
+            // render the raw body.
+            {
+                let mut state = window.imp().article_display.borrow_mut();
+                state.raw_html = Some(body);
+                state.extracted_html = None;
+                state.article_url = external;
+                state.auto_reader = false;
+            }
+            // Untoggle the reader button without re-firing its handler (we
+            // want it to reflect `auto_reader` after the settings fetch).
+            window.imp().reader_btn.set_active(false);
+            window.render_article_body();
+
+            // Async-resolve the feed's readerViewAlwaysEnabled preference.
+            let account = account_for_article.clone();
+            let window_weak = window_weak_for_article.clone();
+            glib::spawn_future_local(async move {
+                let auto = account
+                    .fetch_feed_settings(feed_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|s| s.reader_view_always_enabled)
+                    .unwrap_or(false);
+                if let Some(window) = window_weak.upgrade() {
+                    window.imp().article_display.borrow_mut().auto_reader = auto;
+                    if auto {
+                        window.imp().reader_btn.set_active(true);
+                    }
+                }
+            });
+        });
+
+        // Reader-button toggle → re-render with extracted or raw body.
+        let window_weak_for_reader = self.downgrade();
+        imp.reader_btn.connect_toggled(move |_| {
+            if let Some(window) = window_weak_for_reader.upgrade() {
+                window.render_article_body();
+            }
         });
 
         self.wire_search(timeline_store);
+    }
+
+    /// Re-render the article pane based on the current display state +
+    /// reader button. Handles kicking off a Reader-View extraction on
+    /// demand when the button goes active and no extracted HTML is cached.
+    pub(crate) fn render_article_body(&self) {
+        let imp = self.imp();
+        let tv = imp.article_text_view.get();
+        let cache = self.image_cache();
+
+        let (reader_mode, raw, extracted, url) = {
+            let state = imp.article_display.borrow();
+            (
+                imp.reader_btn.is_active(),
+                state.raw_html.clone(),
+                state.extracted_html.clone(),
+                state.article_url.clone(),
+            )
+        };
+
+        if !reader_mode {
+            if let Some(raw) = raw {
+                article::render_html(&tv, &raw, Some(cache));
+            }
+            return;
+        }
+
+        // Reader mode from here on.
+        if let Some(extracted) = extracted {
+            article::render_html(&tv, &extracted, Some(cache));
+            return;
+        }
+
+        // No cached extraction — run one. Show the raw body as a fallback
+        // until extraction completes so the pane isn't blank.
+        if let Some(ref raw_body) = raw {
+            article::render_html(&tv, raw_body, Some(cache.clone()));
+        }
+
+        let Some(url) = url else { return };
+        let window_weak = self.downgrade();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let result = crate::ui::reader_view::extract(&url, raw.as_deref()).await;
+            let _ = tx.send(result);
+        });
+        glib::spawn_future_local(async move {
+            match rx.await {
+                Ok(Ok(extracted)) => {
+                    if let Some(window) = window_weak.upgrade() {
+                        window.imp().article_display.borrow_mut().extracted_html = Some(extracted);
+                        // Only re-render if the user hasn't since toggled
+                        // off or advanced to a different article.
+                        if window.imp().reader_btn.is_active() {
+                            window.render_article_body();
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(?e, "reader view extraction failed");
+                    if let Some(window) = window_weak.upgrade() {
+                        window.imp().reader_btn.set_active(false);
+                    }
+                }
+                Err(_) => {
+                    // Oneshot sender dropped — extraction task panicked.
+                    tracing::warn!("reader view extraction task aborted");
+                }
+            }
+        });
     }
 
     fn wire_search(&self, timeline_store: gio::ListStore) {
@@ -308,7 +450,10 @@ impl ViaductWindow {
                         .search_articles_with_snippets(fts_query, feed_filter)
                         .await
                     {
-                        Ok(results) => populate_timeline_with_snippets(&store, results),
+                        Ok(results) => {
+                            populate_timeline_with_snippets(&store, results);
+                            refresh_timeline_statuses(account.clone(), store.clone());
+                        }
                         Err(e) => tracing::warn!(?e, "FTS5 search failed"),
                     }
                     drop(_entry_keepalive);
@@ -317,6 +462,379 @@ impl ViaductWindow {
             *window.imp().search_timeout.borrow_mut() = Some(new_timeout);
         });
     }
+
+    // -----------------------------------------------------------------
+    // Action handlers — invoked via win.<name> gio::SimpleActions. See
+    // src/ui/actions.rs for accelerator bindings. Bodies are filled in by
+    // subsequent Phase 9 tasks; stubs emit a trace so unbound keys are
+    // visible during development.
+    // -----------------------------------------------------------------
+
+    /// Port of NNW `scrollOrGoToNextUnread`: if the article pane can scroll
+    /// down, page down; otherwise mark current read and advance to next
+    /// unread.
+    pub(crate) fn act_smart_read(&self) {
+        let tv = self.imp().article_text_view.get();
+        if let Some(vadj) = tv.vadjustment() {
+            // `upper` may equal the content extent plus a small epsilon; the
+            // -1.0 guard avoids a redundant set_value(upper-page) at the
+            // floating-point boundary.
+            let at_bottom = vadj.value() + vadj.page_size() >= vadj.upper() - 1.0;
+            if !at_bottom {
+                let target = (vadj.value() + vadj.page_size()).min(vadj.upper() - vadj.page_size());
+                vadj.set_value(target);
+                return;
+            }
+        }
+        self.mark_current_read_then_advance();
+    }
+
+    /// Port of NNW `scrollUp:` (Shift+Space). Page up inside the article pane.
+    /// At the top, does nothing — NNW doesn't go to previous article here.
+    pub(crate) fn act_scroll_up(&self) {
+        let tv = self.imp().article_text_view.get();
+        if let Some(vadj) = tv.vadjustment() {
+            let target = (vadj.value() - vadj.page_size()).max(vadj.lower());
+            vadj.set_value(target);
+        }
+    }
+
+    fn mark_current_read_then_advance(&self) {
+        let imp = self.imp();
+        let Some(selection) = imp.timeline_selection.get() else {
+            self.advance_unread(Direction::Next);
+            return;
+        };
+        if let Some(item) = selection.selected_item()
+            && let Some(node) = item.downcast_ref::<ArticleNode>()
+            && !node.is_read()
+            && let Some(article) = node.article()
+        {
+            // Optimistic local update so next-unread sees the flip
+            // immediately, without waiting for the DB round-trip.
+            node.set_status(true, node.is_starred());
+            let status = crate::models::ArticleStatus {
+                article_id: article.article_id,
+                read: true,
+                starred: node.is_starred(),
+                date_arrived: chrono::Utc::now(),
+            };
+            let account = self.account();
+            glib::spawn_future_local(async move {
+                if let Err(e) = account.upsert_statuses(vec![status]).await {
+                    tracing::warn!(?e, "smart-read: upsert_statuses failed");
+                }
+            });
+        }
+        self.advance_unread(Direction::Next);
+    }
+    pub(crate) fn act_next_unread(&self) {
+        self.advance_unread(Direction::Next);
+    }
+    pub(crate) fn act_prev_unread(&self) {
+        self.advance_unread(Direction::Prev);
+    }
+
+    /// Move the timeline selection to the next (or previous) unread row.
+    /// If no unread article exists in the requested direction, the selection
+    /// doesn't move — matching NNW's behavior of no-op at the boundary.
+    fn advance_unread(&self, dir: Direction) {
+        let imp = self.imp();
+        let Some(store) = imp.timeline_store.get() else {
+            return;
+        };
+        let Some(selection) = imp.timeline_selection.get() else {
+            return;
+        };
+        let n = store.n_items();
+        if n == 0 {
+            return;
+        }
+        let current = selection.selected();
+        let start_ix: i64 = match (dir, current) {
+            // GTK_INVALID_LIST_POSITION is u32::MAX; treat as "nothing
+            // selected" and start from the ends.
+            (Direction::Next, pos) if pos == gtk::INVALID_LIST_POSITION => 0,
+            (Direction::Prev, pos) if pos == gtk::INVALID_LIST_POSITION => n as i64 - 1,
+            (Direction::Next, pos) => pos as i64 + 1,
+            (Direction::Prev, pos) => pos as i64 - 1,
+        };
+        let step: i64 = match dir {
+            Direction::Next => 1,
+            Direction::Prev => -1,
+        };
+        let mut i = start_ix;
+        while i >= 0 && i < n as i64 {
+            if let Some(item) = store.item(i as u32)
+                && let Some(node) = item.downcast_ref::<ArticleNode>()
+                && !node.is_read()
+            {
+                selection.set_selected(i as u32);
+                // Keep the newly-selected row on screen.
+                self.imp().timeline_list_view.scroll_to(
+                    i as u32,
+                    gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT,
+                    None,
+                );
+                return;
+            }
+            i += step;
+        }
+    }
+    pub(crate) fn act_toggle_read(&self) {
+        self.apply_status_to_current(|node| {
+            let new_read = !node.is_read();
+            (new_read, node.is_starred())
+        });
+    }
+
+    /// Port of NNW `markUnreadAndGoToNextUnread:` (Shift+M in our binding).
+    pub(crate) fn act_mark_unread_advance(&self) {
+        self.apply_status_to_current(|node| (false, node.is_starred()));
+        self.advance_unread(Direction::Next);
+    }
+
+    pub(crate) fn act_toggle_star(&self) {
+        self.apply_status_to_current(|node| (node.is_read(), !node.is_starred()));
+    }
+
+    pub(crate) fn act_mark_all_read(&self) {
+        self.mark_read_in_range(0, None);
+    }
+
+    pub(crate) fn act_mark_all_read_advance(&self) {
+        self.mark_read_in_range(0, None);
+        self.advance_unread(Direction::Next);
+    }
+
+    /// "Older" = rows below the current selection in the date-desc timeline.
+    /// Matches NNW `markOlderArticlesAsRead:`.
+    pub(crate) fn act_mark_older_read(&self) {
+        let imp = self.imp();
+        let Some(selection) = imp.timeline_selection.get() else {
+            return;
+        };
+        let cur = selection.selected();
+        if cur == gtk::INVALID_LIST_POSITION {
+            return;
+        }
+        self.mark_read_in_range(cur + 1, None);
+    }
+
+    /// Applies a per-status change to the currently-selected article, both
+    /// locally (on the ArticleNode for immediate UI response) and in the DB.
+    fn apply_status_to_current<F>(&self, change: F)
+    where
+        F: FnOnce(&ArticleNode) -> (bool, bool),
+    {
+        let Some(selection) = self.imp().timeline_selection.get() else {
+            return;
+        };
+        let Some(item) = selection.selected_item() else {
+            return;
+        };
+        let Some(node) = item.downcast_ref::<ArticleNode>() else {
+            return;
+        };
+        let Some(article) = node.article() else {
+            return;
+        };
+        let (read, starred) = change(node);
+        node.set_status(read, starred);
+        let status = crate::models::ArticleStatus {
+            article_id: article.article_id,
+            read,
+            starred,
+            date_arrived: chrono::Utc::now(),
+        };
+        let account = self.account();
+        glib::spawn_future_local(async move {
+            if let Err(e) = account.upsert_statuses(vec![status]).await {
+                tracing::warn!(?e, "status upsert failed");
+            }
+        });
+    }
+
+    /// Mark every not-yet-read article in `[start, end)` of the timeline store
+    /// as read, in one DB batch. `end=None` means through the end of the list.
+    fn mark_read_in_range(&self, start: u32, end: Option<u32>) {
+        let imp = self.imp();
+        let Some(store) = imp.timeline_store.get() else {
+            return;
+        };
+        let n = store.n_items();
+        let end = end.unwrap_or(n).min(n);
+        let now = chrono::Utc::now();
+        let mut statuses: Vec<crate::models::ArticleStatus> = Vec::new();
+        for i in start..end {
+            let Some(item) = store.item(i) else { continue };
+            let Some(node) = item.downcast_ref::<ArticleNode>() else {
+                continue;
+            };
+            if node.is_read() {
+                continue;
+            }
+            let Some(article) = node.article() else {
+                continue;
+            };
+            node.set_status(true, node.is_starred());
+            statuses.push(crate::models::ArticleStatus {
+                article_id: article.article_id,
+                read: true,
+                starred: node.is_starred(),
+                date_arrived: now,
+            });
+        }
+        if statuses.is_empty() {
+            return;
+        }
+        let account = self.account();
+        glib::spawn_future_local(async move {
+            if let Err(e) = account.upsert_statuses(statuses).await {
+                tracing::warn!(?e, "bulk read upsert failed");
+            }
+        });
+    }
+    pub(crate) fn act_open_in_browser(&self) {
+        let Some(selection) = self.imp().timeline_selection.get() else {
+            return;
+        };
+        let Some(item) = selection.selected_item() else {
+            return;
+        };
+        let Some(node) = item.downcast_ref::<ArticleNode>() else {
+            return;
+        };
+        let Some(article) = node.article() else {
+            return;
+        };
+        // NNW's preferredLink prefers externalURL (original author's URL)
+        // over url (the item URL). Mirror that.
+        let Some(url) = article.external_url.or(article.url) else {
+            return;
+        };
+        if let Err(e) = gio::AppInfo::launch_default_for_uri(&url, None::<&gio::AppLaunchContext>) {
+            tracing::warn!(%url, ?e, "failed to launch default browser");
+        }
+    }
+
+    pub(crate) fn act_open_enclosure(&self) {
+        let Some(selection) = self.imp().timeline_selection.get() else {
+            return;
+        };
+        let Some(item) = selection.selected_item() else {
+            return;
+        };
+        let Some(node) = item.downcast_ref::<ArticleNode>() else {
+            return;
+        };
+        let Some(article) = node.article() else {
+            return;
+        };
+        // First-attachment-only by design (see Phase 11 plan). Multi-
+        // enclosure podcasts with chapter splits aren't common enough to
+        // warrant a picker UI for v1.0.
+        let Some(att) = article.attachments.first() else {
+            return;
+        };
+        if let Err(e) =
+            gio::AppInfo::launch_default_for_uri(&att.url, None::<&gio::AppLaunchContext>)
+        {
+            tracing::warn!(url = %att.url, ?e, "failed to launch enclosure handler");
+        }
+    }
+
+    /// Drive `LocalAccountRefresher::refresh_feeds` for every feed in the
+    /// current OPML. Refresher needs a tokio runtime context, so we dispatch
+    /// on the global runtime (not the GLib main loop).
+    pub(crate) fn act_refresh(&self) {
+        let account = self.account();
+        crate::spawn_on_runtime(async move {
+            let opml = match account.load_opml().await {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::warn!(?e, "refresh: OPML load failed");
+                    return;
+                }
+            };
+            let mut feeds: Vec<crate::models::Feed> = Vec::new();
+            feeds.extend(opml.standalone_feeds.iter().cloned());
+            for folder in &opml.folders {
+                feeds.extend(folder.feeds.iter().cloned());
+            }
+            if feeds.is_empty() {
+                return;
+            }
+            // Pair each feed with its persisted FeedSettings (or a blank one
+            // if the feed hasn't been seen before). Refresher uses settings
+            // for conditional-GET info, content hash, last_check_date etc.
+            let mut paired: Vec<(crate::models::Feed, crate::models::FeedSettings)> =
+                Vec::with_capacity(feeds.len());
+            for feed in feeds {
+                let settings = account
+                    .fetch_feed_settings(feed.id.clone())
+                    .await
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| crate::models::FeedSettings {
+                        feed_id: feed.id.clone(),
+                        feed_url: feed.url.clone(),
+                        home_page_url: feed.home_page_url.clone(),
+                        icon_url: None,
+                        favicon_url: None,
+                        edited_name: feed.edited_name.clone(),
+                        content_hash: None,
+                        last_modified: None,
+                        etag: None,
+                        date_created: None,
+                        max_age: None,
+                        authors_json: None,
+                        folder_relationship_json: None,
+                        last_check_date: None,
+                        reader_view_always_enabled: false,
+                    });
+                paired.push((feed, settings));
+            }
+            // ArticleChanges sender: for now drain and drop on the receiver
+            // side — timeline repopulation already happens on sidebar
+            // selection; we'll wire change-driven UI updates in a later pass.
+            let (changes_tx, mut changes_rx) = tokio::sync::mpsc::unbounded_channel();
+            let refresher = crate::network::LocalAccountRefresher::new(account, changes_tx);
+            tokio::spawn(async move { while changes_rx.recv().await.is_some() {} });
+            refresher.refresh_feeds(paired).await;
+        });
+    }
+
+    pub(crate) fn act_focus_search(&self) {
+        let imp = self.imp();
+        imp.search_btn.set_active(true);
+        imp.search_entry.get().grab_focus();
+    }
+
+    /// Toggles the outer split view between uncollapsed (both panes visible)
+    /// and collapsed (only the content pane, content-mode-shown). Not a true
+    /// "hide sidebar" on wide screens because AdwNavigationSplitView doesn't
+    /// expose that — `AdwOverlaySplitView` would be the upgrade path if
+    /// full-hide is required.
+    pub(crate) fn act_toggle_sidebar(&self) {
+        let sv = self.imp().outer_split_view.get();
+        sv.set_collapsed(!sv.is_collapsed());
+    }
+    pub(crate) fn act_shortcuts(&self) {
+        let builder = gtk::Builder::from_string(include_str!("shortcuts.ui"));
+        let Some(shortcuts_window) = builder.object::<gtk::ShortcutsWindow>("shortcuts_window")
+        else {
+            tracing::warn!("shortcuts.ui missing 'shortcuts_window' object");
+            return;
+        };
+        shortcuts_window.set_transient_for(Some(self));
+        shortcuts_window.present();
+    }
+}
+
+#[derive(Copy, Clone)]
+enum Direction {
+    Next,
+    Prev,
 }
 
 fn populate_timeline_with_snippets(
@@ -343,6 +861,43 @@ fn populate_timeline(store: &gio::ListStore, articles: Vec<crate::models::Articl
     for article in articles {
         store.append(&ArticleNode::new(article));
     }
+}
+
+/// Bulk-fetch statuses for every `ArticleNode` currently in the timeline
+/// store and copy them onto the nodes. Runs after every timeline repopulate.
+fn refresh_timeline_statuses(account: Arc<LocalAccount>, store: gio::ListStore) {
+    let mut ids: Vec<String> = Vec::with_capacity(store.n_items() as usize);
+    let mut nodes: Vec<ArticleNode> = Vec::with_capacity(ids.capacity());
+    for i in 0..store.n_items() {
+        let Some(obj) = store.item(i) else { continue };
+        let Some(node) = obj.downcast_ref::<ArticleNode>() else {
+            continue;
+        };
+        let Some(article) = node.article() else {
+            continue;
+        };
+        ids.push(article.article_id);
+        nodes.push(node.clone());
+    }
+    if ids.is_empty() {
+        return;
+    }
+    glib::spawn_future_local(async move {
+        match account.fetch_statuses_by_ids(ids).await {
+            Ok(map) => {
+                for node in nodes {
+                    if let Some(article) = node.article() {
+                        let (read, starred) = map
+                            .get(&article.article_id)
+                            .copied()
+                            .unwrap_or((false, false));
+                        node.set_status(read, starred);
+                    }
+                }
+            }
+            Err(e) => tracing::debug!(?e, "bulk status fetch failed"),
+        }
+    });
 }
 
 /// Port of NNW's folder-as-article-source behavior: a folder row in the

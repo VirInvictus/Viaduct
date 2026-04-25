@@ -1,5 +1,47 @@
 # viaduct — Patch Notes
 
+## v0.6.0 — Phases 9, 10, 11
+
+Three major phases land together: full keyboard navigation, native Reader View, and enclosure / media-attachment support across the parser stack. With this release every Phase 0–11 roadmap item is checked except a single deferred fidelity follow-up (Atom `type="xhtml"` raw inner HTML capture).
+
+### Phase 9 — Keyboard Spatial Navigation
+- New `src/ui/actions.rs` registers a `gio::SimpleActionGroup` named `win` with every keyboard action; `adw::Application::set_accels_for_action` installs accelerators. NNW's `GlobalKeyboardShortcuts.plist` keys are primary; the roadmap's friendlier aliases (Down/Up/j/k for navigation, m/Enter for status/open) layer on top so both muscle memories work.
+- Smart-read on Space: ports NNW `scrollOrGoToNextUnread` — pages the article down if the `GtkTextView`'s `vadjustment` can scroll, otherwise marks the current article read (optimistic local update + async DB upsert) and jumps to the next unread row. Includes Shift+Space scroll-up.
+- Status actions: `r`/`m` toggle read, `Shift+m` mark unread + advance, `s` toggle star, `Ctrl+k` mark all read, `l` mark all read + advance to next unread, `o` mark older read (rows below selection in the date-desc timeline).
+- Open actions: `b`/`Enter` open in browser via `gio::AppInfo::launch_default_for_uri`. `Ctrl+Enter` opens the first attachment.
+- App chrome: `Ctrl+r` refreshes feeds (drives `LocalAccountRefresher` against the loaded OPML, runs on the library-wide tokio runtime), `Ctrl+f` focuses search, `F9` collapses the outer `AdwNavigationSplitView`, `Ctrl+?` shows a `gtk::ShortcutsWindow` built from a declarative `src/ui/shortcuts.ui`.
+- Bulk status fetch: new `ArticlesDbOp::FetchStatusesByIds` and `LocalAccount::fetch_statuses_by_ids` populate `ArticleNode.read`/`starred` after each timeline load so navigation actions can read state without a per-keystroke DB hit.
+- Timeline list view auto-scrolls to the newly-selected row when navigation moves the selection.
+
+### Phase 10 — Reader View
+- New `src/ui/reader_view.rs` module ports NNW's `ArticleExtractor` to a local Mozilla Readability port via the `readability` crate. The CPU-bound `extract` runs in `tokio::task::spawn_blocking`. NNW's hosted Mercury endpoint is the one approved deviation — we cannot depend on an external service.
+- Article-pane header bar grew a `reader_btn` toggle. On article selection the per-feed `reader_view_always_enabled` setting is fetched and pre-toggles the button; explicit toggles re-render the pane via the unified `render_article_body` state machine (raw HTML / cached extracted HTML / kick-off-extraction).
+- Memory gate: input HTML capped at 5 MB before extraction (`INPUT_SIZE_CAP`). Extracted HTML rides the existing `ammonia → quick-xml → GtkTextTag` pipeline in `article::render_html` so reader-view bodies get the same sanitization treatment as feed-supplied bodies.
+- Centralized `ArticleDisplayState` on the window: `raw_html`, `extracted_html`, `article_url`, `auto_reader`. Single source of truth for what the article pane is showing; toggle and async extraction completion both call `render_article_body` to re-derive.
+
+### Phase 11 — Enclosures, Media & Parser Fidelity
+- New `models::Attachment` (NNW `ParsedAttachment` port) on both `ParsedItem` and `Article`. `articles` table grew an `attachments JSON` column; idempotent `ALTER TABLE … ADD COLUMN` migration runs at schema setup so pre-existing DBs pick up the column without losing data.
+- RSS parser: `<enclosure url=… length=… type=…>` parsed to `Attachment`. `<media:content>` and `<media:thumbnail>` (MRSS namespace) parsed when they carry a `url` attribute — the heuristic distinguishes them from `<content:encoded>` which doesn't.
+- Atom parser: `<link rel="enclosure">` previously a no-op, now emits an `Attachment` carrying `type` and `length`. `AtomLinkCtx` extended with `current_item_attachments`.
+- JSON Feed: `attachments[]` arrays parsed per the v1.1 spec — `url`, `mime_type`, `title`, `size_in_bytes`, `duration_in_seconds`.
+- `ParsedFeed.icon_url`: RSS `<channel><image><url>`, Atom `<icon>`/`<logo>` (icon wins). Refresher persists into `FeedSettings.icon_url` so the existing sidebar `spawn_favicon_fetch` path picks it up automatically.
+- `ParsedFeed.language`: RSS `<channel><language>` and Atom `<feed xml:lang>`. Captured but not yet used for rendering direction.
+- Timeline media indicator: `gtk::Image` (audio/video/image symbolic, MIME-driven) + count badge in the row's top hbox. Visible only when `article.attachments` is non-empty.
+- `Ctrl+Enter` opens the first attachment via the system MIME handler. xdg-open route — users with mpv configured handle audio/video naturally; no hard-coded player.
+
+### Structure
+- `src/lib.rs` gains `init_runtime` and `block_on_runtime` helpers in addition to the existing `spawn_on_runtime`. `main.rs` slimmed accordingly.
+
+### Tests
+- 24 passing (was 19). Five new regression tests for RSS + Atom enclosures, MRSS media, RSS channel image + language, Atom icon/logo + xml:lang.
+
+### Memory checkpoint
+- `mem_check` still reports 29 MB peak / 29 MB current after Phase 11's added attachments column and parsed attributes. Within budget.
+
+### Deferred
+- Atom `type="xhtml"` raw-inner-HTML capture stays text-only. quick-xml has no `captureRawInnerContent` analog; in practice almost no Atom feeds use `type="xhtml"`. Tracked under Phase 11 fidelity follow-ups.
+- Reader-View memory checkpoint: `mem_check` doesn't yet exercise an extraction. Listed in Phase 10 as the one remaining unchecked bullet.
+
 ## v0.5.3 — Phase 5/7/8 close-out
 
 Finishes the remaining unchecked items under Phases 5, 7, and 8.

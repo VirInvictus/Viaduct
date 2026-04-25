@@ -3,10 +3,12 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 // UI layer for GTK4/Libadwaita
+pub mod actions;
 pub mod article;
 pub mod batch;
 pub mod coalescing_queue;
 pub mod fetch_queue;
+pub mod reader_view;
 pub mod sidebar;
 pub mod timeline;
 pub mod tree;

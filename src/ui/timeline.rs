@@ -15,6 +15,7 @@ glib::wrapper! {
 
 pub mod imp {
     use super::*;
+    use std::cell::Cell;
 
     #[derive(Default)]
     pub struct ArticleNode {
@@ -22,6 +23,10 @@ pub mod imp {
         /// Optional FTS5 snippet for search-result rows. When set, the timeline
         /// row renders this in the preview area instead of the article summary.
         pub snippet: RefCell<Option<String>>,
+        /// Cached status from the `statuses` table. Populated in bulk after
+        /// the timeline is loaded; navigation actions read these.
+        pub read: Cell<bool>,
+        pub starred: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -53,6 +58,19 @@ impl ArticleNode {
 
     pub fn snippet(&self) -> Option<String> {
         self.imp().snippet.borrow().clone()
+    }
+
+    pub fn is_read(&self) -> bool {
+        self.imp().read.get()
+    }
+
+    pub fn is_starred(&self) -> bool {
+        self.imp().starred.get()
+    }
+
+    pub fn set_status(&self, read: bool, starred: bool) {
+        self.imp().read.set(read);
+        self.imp().starred.set(starred);
     }
 }
 
@@ -90,11 +108,25 @@ pub fn setup_timeline_list_view(
         // Use bold text for title
         title_label.add_css_class("heading");
 
+        // Media indicator: small icon when the article has attachments
+        // (podcast/video enclosures, MRSS media). Count badge appears when
+        // the article carries more than one — bind logic decides the digits.
+        let media_icon = gtk::Image::from_icon_name("audio-x-generic-symbolic");
+        media_icon.set_pixel_size(12);
+        media_icon.add_css_class("dim-label");
+        media_icon.set_visible(false);
+        let media_count = gtk::Label::new(None);
+        media_count.add_css_class("numeric");
+        media_count.add_css_class("dim-label");
+        media_count.set_visible(false);
+
         let date_label = gtk::Label::new(None);
         date_label.set_halign(gtk::Align::End);
         date_label.add_css_class("dim-label");
 
         top_hbox.append(&title_label);
+        top_hbox.append(&media_icon);
+        top_hbox.append(&media_count);
         top_hbox.append(&date_label);
 
         let feed_name_label = gtk::Label::new(None);
@@ -126,7 +158,15 @@ pub fn setup_timeline_list_view(
 
         let top_hbox = vbox.first_child().and_downcast::<gtk::Box>().unwrap();
         let title_label = top_hbox.first_child().and_downcast::<gtk::Label>().unwrap();
-        let date_label = title_label
+        let media_icon = title_label
+            .next_sibling()
+            .and_downcast::<gtk::Image>()
+            .unwrap();
+        let media_count = media_icon
+            .next_sibling()
+            .and_downcast::<gtk::Label>()
+            .unwrap();
+        let date_label = media_count
             .next_sibling()
             .and_downcast::<gtk::Label>()
             .unwrap();
@@ -143,6 +183,31 @@ pub fn setup_timeline_list_view(
         if let Some(article) = node.article() {
             let title = article.title.as_deref().unwrap_or("Untitled");
             title_label.set_text(title);
+
+            // Media indicator. Pick a roughly-correct icon based on the first
+            // attachment's MIME type so podcasts and videos look distinct.
+            let n = article.attachments.len();
+            if n > 0 {
+                let first_type = article.attachments[0].mime_type.as_deref().unwrap_or("");
+                let icon_name = if first_type.starts_with("video/") {
+                    "video-x-generic-symbolic"
+                } else if first_type.starts_with("image/") {
+                    "image-x-generic-symbolic"
+                } else {
+                    "audio-x-generic-symbolic"
+                };
+                media_icon.set_icon_name(Some(icon_name));
+                media_icon.set_visible(true);
+                if n > 1 {
+                    media_count.set_text(&n.to_string());
+                    media_count.set_visible(true);
+                } else {
+                    media_count.set_visible(false);
+                }
+            } else {
+                media_icon.set_visible(false);
+                media_count.set_visible(false);
+            }
 
             let date_str = article
                 .date_published

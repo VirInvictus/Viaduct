@@ -3,10 +3,38 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 use crate::error::{ParseError, Result};
-use crate::models::{Author, ParsedFeed, ParsedItem};
+use crate::models::{Attachment, Author, ParsedFeed, ParsedItem};
 use crate::parser::date::parse_date;
 use md5::{Digest, Md5};
 use serde_json::Value;
+
+/// Parse JSON Feed `attachments[]` per the spec
+/// (<https://jsonfeed.org/version/1.1#items>): `url` (required), `mime_type`,
+/// `title`, `size_in_bytes`, `duration_in_seconds`. Skip entries without
+/// a non-empty URL.
+fn parse_jf_attachments(item: &Value) -> Vec<Attachment> {
+    let Some(arr) = item.get("attachments").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|a| {
+            let url = a.get("url").and_then(|v| v.as_str())?.to_string();
+            if url.is_empty() {
+                return None;
+            }
+            Some(Attachment {
+                url,
+                mime_type: a
+                    .get("mime_type")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                title: a.get("title").and_then(|v| v.as_str()).map(String::from),
+                size_in_bytes: a.get("size_in_bytes").and_then(|v| v.as_i64()),
+                duration_in_seconds: a.get("duration_in_seconds").and_then(|v| v.as_i64()),
+            })
+        })
+        .collect()
+}
 
 pub fn parse(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
     let root: Value = serde_json::from_slice(data).map_err(ParseError::Json)?;
@@ -150,6 +178,7 @@ fn parse_json_feed(root: &Value, feed_url: &str) -> Result<ParsedFeed> {
                 }
             }
 
+            let attachments = parse_jf_attachments(item);
             parsed_items.push(ParsedItem {
                 id,
                 title: item_title,
@@ -162,6 +191,7 @@ fn parse_json_feed(root: &Value, feed_url: &str) -> Result<ParsedFeed> {
                 date_published,
                 date_modified,
                 authors,
+                attachments,
             });
         }
     } else {
@@ -172,6 +202,8 @@ fn parse_json_feed(root: &Value, feed_url: &str) -> Result<ParsedFeed> {
         title,
         home_page_url,
         feed_url: parsed_feed_url,
+        icon_url: None,
+        language: None,
         items: parsed_items,
     })
 }
@@ -295,6 +327,7 @@ fn parse_rss_in_json(root: &Value, feed_url: &str) -> Result<ParsedFeed> {
                 date_published,
                 date_modified: None,
                 authors,
+                attachments: Vec::new(),
             });
         }
     }
@@ -303,6 +336,8 @@ fn parse_rss_in_json(root: &Value, feed_url: &str) -> Result<ParsedFeed> {
         title,
         home_page_url,
         feed_url: Some(feed_url.to_string()),
+        icon_url: None,
+        language: None,
         items: parsed_items,
     })
 }

@@ -135,29 +135,33 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Snippet extraction (`snippet()` FTS5 function) surfaced in the timeline preview row. *(`ArticleNode::with_snippet` + `populate_timeline_with_snippets`)*
 
 ## Phase 9: Keyboard Spatial Navigation
-- [ ] `Space`: smart read — scroll article if not at bottom; otherwise jump to next unread and mark current read.
-- [ ] `j` / `Down`: next article. `k` / `Up`: previous article.
-- [ ] `m`: toggle read/unread. `s`: toggle star.
-- [ ] `Enter`: open in default browser via `xdg-open`.
-- [ ] `Ctrl+R`: fetch now. `Ctrl+F`: focus search. `F9`: toggle sidebar. *(`LocalAccountRefresher` is wired end-to-end — this accelerator just needs to call `account.refresh_feeds(...)` via the tokio runtime from a `gio::SimpleAction`.)*
-- [ ] Accelerator cheat-sheet via `Ctrl+?` (GNOME HIG standard).
+- [x] `Space`: smart-read — port of NNW `scrollOrGoToNextUnread`. Pages article down if scrollable; else marks current read and jumps to next unread. *(`act_smart_read` in `window.rs`)*
+- [x] `Shift+Space`: page article up. *(`act_scroll_up`)*
+- [x] `n` / `Down` / `j`: next article (skipping read). `-` / `Up` / `k`: previous unread. *(`advance_unread`, NNW key + roadmap aliases stacked)*
+- [x] `r` / `m`: toggle read. `Shift+m`: mark unread and advance. `s`: toggle star. *(`act_toggle_read`, `act_mark_unread_advance`, `act_toggle_star`)*
+- [x] `b` / `Enter`: open in default browser via `gio::AppInfo::launch_default_for_uri`. *(`act_open_in_browser`; matches NNW's two bindings)*
+- [x] `Ctrl+r` fetch now (drives `LocalAccountRefresher` against full OPML), `Ctrl+f` focus search, `F9` toggle sidebar (collapses outer `AdwNavigationSplitView`). *(`act_refresh`, `act_focus_search`, `act_toggle_sidebar`)*
+- [x] `Ctrl+k` mark all read; `l` mark all read & advance; `o` mark older read. *(`act_mark_all_read`, `act_mark_all_read_advance`, `act_mark_older_read`)*
+- [x] `Ctrl+?` accelerator cheat-sheet — `gtk::ShortcutsWindow` from declarative `shortcuts.ui`. *(`act_shortcuts`)*
 
 ## Phase 10: Reader View (RAM-gated)
-- [ ] Prototype with the `readability` crate (html5ever + scoring heuristics) in a tokio blocking task.
-- [ ] Extracted HTML funnels through the same `ammonia` → `GtkTextBuffer` pipeline from Phase 6.
-- [ ] Triggered on-demand via hotkey/toolbar only — **never** eagerly on every article.
-- [ ] **Memory gate**: if a single extraction pushes peak RSS above 500 MB, either (a) run extraction in a short-lived subprocess for memory isolation, or (b) cut Reader View from v1.0.
-- [ ] Respect the `readerViewAlwaysEnabled` per-feed flag from `FeedSettingsDatabase`.
+- [x] Prototype with the `readability` crate (html5ever + scoring heuristics) in a `tokio::task::spawn_blocking`. *(`src/ui/reader_view.rs`)*
+- [x] Extracted HTML funnels through the same `ammonia` → `GtkTextBuffer` pipeline from Phase 6. *(`render_article_body` calls `article::render_html` with the extracted body)*
+- [x] Triggered on-demand via toolbar toggle in the article pane's `AdwHeaderBar`. *(`reader_btn` template child)*
+- [x] Respect the `readerViewAlwaysEnabled` per-feed flag from `FeedSettingsDatabase`. *(timeline-selection handler resolves it async and pre-toggles the button)*
+- [x] Input HTML capped at `INPUT_SIZE_CAP` (5 MB) before extraction; oversized pages return `ReaderError::TooLarge`.
+- [ ] **Memory gate verification**: re-run `mem_check` with a Reader-View extraction over a representative corpus (current harness only exercises DB path). If a single extraction pushes peak RSS above 500 MB, fall back to the subprocess-isolation pattern documented in `reader_view.rs`.
 
 ## Phase 11: Enclosures & Media
-- [ ] Parse `<enclosure>` and `<media:content>` tags in RSS; `attachments[]` in JSON Feed.
-- [ ] UI indicator (audio/video icon) on articles with media attachments.
-- [ ] Hotkey: pipe enclosure URL to `mpv` (or `yt-dlp` for services mpv can't handle directly).
-- [ ] No in-app playback — system media players do the work.
+- [x] Parse `<enclosure>` and `<media:content>` / `<media:thumbnail>` in RSS; `<link rel="enclosure">` in Atom; `attachments[]` in JSON Feed. All flow into `Article.attachments` (persisted as JSON column on the `articles` table). *(`enclosure_from_attrs`, `media_attachment_from_attrs`, `parse_jf_attachments`, `AtomLinkRel::Enclosure`)*
+- [x] UI indicator on the timeline row: audio/video/image icon based on the first attachment's MIME type, with a count badge when there's more than one. *(`media_icon` + `media_count` in `setup_timeline_list_view`)*
+- [x] `Ctrl+Enter` hotkey opens the first attachment via `gio::AppInfo::launch_default_for_uri` — the system's MIME handler decides the player. Users with `mpv` configured as their audio/video default get mpv (and yt-dlp via mpv's url-handler); we don't hard-code a player. *(`act_open_enclosure`)*
+- [x] No in-app playback — system media players do the work.
 
 ### Parser fidelity follow-ups (bundled here because they all require extending `ParsedFeed`/`ParsedItem`)
-- [ ] Capture RSS channel `<image>` as the feed-level icon URL.
-- [ ] Capture RSS/Atom `<language>` so the reading pane can tag text direction / hyphenation.
+- [x] Capture RSS channel `<image><url>` as the feed-level icon URL; refresher persists into `FeedSettings.icon_url`. *(in_channel_image state in `parse_rss`, `fetcher.rs::refresh_one_feed` persists `parsed.icon_url`)*
+- [x] Capture Atom `<icon>` and `<logo>` (icon wins over logo per NNW). *(in `parse_atom`, prefer `icon_url.or(logo_url)`)*
+- [x] Capture RSS `<language>` and Atom `<feed xml:lang>` into `ParsedFeed.language`. Stored on the parsed feed; reading-pane direction-tagging deferred (no v1.0 user need yet).
 - [ ] Atom `type="xhtml"` `<content>` and `<summary>` currently parse as plain text. NNW uses `XMLSAXParser.captureRawInnerContent` to hand back the raw inner bytes; `quick-xml` has no direct analog. Options: (a) accept degraded fidelity, (b) detect `type="xhtml"` at Start and buffer raw input until matching End, (c) switch to `html5ever` for those subtrees.
 
 ## Phase 12: OPML Import & Export
