@@ -55,38 +55,31 @@ pub fn render_html(text_view: &gtk::TextView, html: &str, image_cache: Option<Ar
 
 fn ensure_base_tags(buffer: &gtk::TextBuffer) {
     let table = buffer.tag_table();
-    let add_if_missing = |name: &str, build: &dyn Fn() -> gtk::TextTag| {
-        if table.lookup(name).is_none() {
-            let tag = build();
-            tag.set_property("name", name);
-            table.add(&tag);
-        }
-    };
+    // GtkTextTag's `name` is construct-only; it must be set in the builder,
+    // not via `set_property` after build. The closure receives a partly-built
+    // builder pre-seeded with the name and returns the finished tag.
+    let add_if_missing =
+        |name: &str, build: &dyn Fn(gtk::builders::TextTagBuilder) -> gtk::TextTag| {
+            if table.lookup(name).is_none() {
+                let tag = build(gtk::TextTag::builder().name(name));
+                table.add(&tag);
+            }
+        };
 
-    add_if_missing("bold", &|| {
-        gtk::TextTag::builder()
-            .weight(pango::Weight::Bold.into_glib())
-            .build()
+    add_if_missing("bold", &|b| {
+        b.weight(pango::Weight::Bold.into_glib()).build()
     });
-    add_if_missing("italic", &|| {
-        gtk::TextTag::builder().style(pango::Style::Italic).build()
-    });
-    add_if_missing("monospace", &|| {
-        gtk::TextTag::builder().family("monospace").build()
-    });
-    add_if_missing("code-block", &|| {
-        gtk::TextTag::builder()
-            .family("monospace")
+    add_if_missing("italic", &|b| b.style(pango::Style::Italic).build());
+    add_if_missing("monospace", &|b| b.family("monospace").build());
+    add_if_missing("code-block", &|b| {
+        b.family("monospace")
             .left_margin(16)
             .pixels_above_lines(6)
             .pixels_below_lines(6)
             .build()
     });
-    add_if_missing("blockquote", &|| {
-        gtk::TextTag::builder()
-            .left_margin(24)
-            .style(pango::Style::Italic)
-            .build()
+    add_if_missing("blockquote", &|b| {
+        b.left_margin(24).style(pango::Style::Italic).build()
     });
     for (i, scale) in [
         ("heading-1", 1.8),
@@ -96,18 +89,16 @@ fn ensure_base_tags(buffer: &gtk::TextBuffer) {
         ("heading-5", 1.05),
         ("heading-6", 1.0),
     ] {
-        add_if_missing(i, &|| {
-            gtk::TextTag::builder()
-                .scale(scale)
+        add_if_missing(i, &|b| {
+            b.scale(scale)
                 .weight(pango::Weight::Bold.into_glib())
                 .pixels_above_lines(8)
                 .pixels_below_lines(4)
                 .build()
         });
     }
-    add_if_missing("link", &|| {
-        gtk::TextTag::builder()
-            .underline(pango::Underline::Single)
+    add_if_missing("link", &|b| {
+        b.underline(pango::Underline::Single)
             .foreground("#3584e4")
             .build()
     });
@@ -338,10 +329,10 @@ fn ensure_link_tag(buffer: &gtk::TextBuffer, tag_name: &str) {
         return;
     }
     let tag = gtk::TextTag::builder()
+        .name(tag_name)
         .underline(pango::Underline::Single)
         .foreground("#3584e4")
         .build();
-    tag.set_property("name", tag_name);
     table.add(&tag);
 }
 

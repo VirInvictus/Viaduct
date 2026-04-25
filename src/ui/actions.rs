@@ -51,6 +51,10 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     register(window, "toggle-sidebar", |w| w.act_toggle_sidebar());
     register(window, "shortcuts", |w| w.act_shortcuts());
 
+    // OPML import/export — menu only, no accelerators (NNW does the same).
+    register(window, "import-opml", |w| w.act_import_opml());
+    register(window, "export-opml", |w| w.act_export_opml());
+
     // Accelerators. NNW-exact where available; roadmap's additions stacked
     // on top as alternates so both muscle memories work.
     //

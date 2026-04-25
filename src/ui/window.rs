@@ -47,6 +47,10 @@ mod imp {
         pub scope_toggle: TemplateChild<gtk::ToggleButton>,
         #[template_child]
         pub reader_btn: TemplateChild<gtk::ToggleButton>,
+        #[template_child]
+        pub toast_overlay: TemplateChild<adw::ToastOverlay>,
+        #[template_child]
+        pub mark_all_read_btn: TemplateChild<gtk::Button>,
 
         pub account: OnceCell<Arc<LocalAccount>>,
         pub image_cache: OnceCell<Arc<ImageCache>>,
@@ -175,21 +179,28 @@ impl ViaductWindow {
         imp.timeline_store.set(timeline_store.clone()).ok();
         imp.timeline_selection.set(timeline_selection.clone()).ok();
 
-        // Initial OPML load — populate the sidebar.
+        // Initial OPML load — populate the sidebar. `LocalAccount::load_opml`
+        // calls `tokio::fs`, which requires a tokio runtime context — and
+        // `glib::spawn_future_local` runs on the GLib main loop, NOT on tokio.
+        // Hop through `spawn_on_runtime` for the read, deliver the parsed
+        // OpmlFile back through a oneshot, and apply it on the GTK thread.
         let account = self.account();
         let delegate_for_load = delegate.clone();
         let controller_for_load = controller.clone();
         let data_source_for_load = data_source.clone();
+        let (load_tx, load_rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let _ = load_tx.send(account.load_opml().await);
+        });
         glib::spawn_future_local(async move {
-            match account.load_opml().await {
-                Ok(opml) => {
+            match load_rx.await {
+                Ok(Ok(opml)) => {
                     delegate_for_load.borrow().set_opml_file(opml);
                     controller_for_load.rebuild();
                     data_source_for_load.refresh_root();
                 }
-                Err(e) => {
-                    tracing::warn!(?e, "failed to load OPML at startup");
-                }
+                Ok(Err(e)) => tracing::warn!(?e, "failed to load OPML at startup"),
+                Err(_) => tracing::warn!("OPML load task aborted"),
             }
         });
 
@@ -251,13 +262,22 @@ impl ViaductWindow {
             let Some(article) = node.article() else {
                 return;
             };
+            let external = article.external_url.clone().or(article.url.clone());
+            let feed_id = article.feed_id.clone();
+            // Prefer content_html → content_text → summary, in order. NNW
+            // does the equivalent fall-through. If everything is empty
+            // (sparse feeds like pragprog.com that ship title+link only),
+            // synthesize a minimal HTML stub so the article pane shows the
+            // title and an "open in browser" link instead of going blank.
             let body = article
                 .content_html
                 .clone()
+                .filter(|s| !s.trim().is_empty())
                 .or(article.content_text.clone())
-                .unwrap_or_default();
-            let external = article.external_url.clone().or(article.url.clone());
-            let feed_id = article.feed_id.clone();
+                .filter(|s| !s.trim().is_empty())
+                .or(article.summary.clone())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| build_empty_body_fallback(&article));
 
             // Seed the display state for the new article. `auto_reader` is
             // loaded async from FeedSettings below; until it resolves we
@@ -299,6 +319,15 @@ impl ViaductWindow {
         imp.reader_btn.connect_toggled(move |_| {
             if let Some(window) = window_weak_for_reader.upgrade() {
                 window.render_article_body();
+            }
+        });
+
+        // Mark-all-read button — fires the same action as Ctrl+K so click
+        // and keyboard share a code path.
+        let window_weak_for_mark = self.downgrade();
+        imp.mark_all_read_btn.connect_clicked(move |_| {
+            if let Some(window) = window_weak_for_mark.upgrade() {
+                window.act_mark_all_read();
             }
         });
 
@@ -386,6 +415,12 @@ impl ViaductWindow {
             .bidirectional()
             .sync_create()
             .build();
+
+        // GtkSearchBar must be told which entry it owns so it can route
+        // text input from `key-capture-widget` properly. Without this we
+        // get the "search bar does not have an entry connected" warning on
+        // every keystroke that hits the timeline list view.
+        imp.search_bar.connect_entry(&*imp.search_entry);
 
         // Scope toggle: re-run the current search whenever it flips so the
         // user doesn't have to re-type.
@@ -829,6 +864,207 @@ impl ViaductWindow {
         shortcuts_window.set_transient_for(Some(self));
         shortcuts_window.present();
     }
+
+    /// Import OPML — port of NNW `ImportOPMLWindowController.importOPML`.
+    /// Single account, no picker sheet (NNW also short-circuits when
+    /// `accounts.count == 1`). The file dialog routes through
+    /// `org.freedesktop.portal.FileChooser` automatically under Flatpak.
+    pub(crate) fn act_import_opml(&self) {
+        let dialog = gtk::FileDialog::builder()
+            .title("Import OPML")
+            .modal(true)
+            .filters(&Self::opml_filters())
+            .build();
+        let window_weak = self.downgrade();
+        glib::spawn_future_local(async move {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let file = match dialog.open_future(Some(&window)).await {
+                Ok(f) => f,
+                Err(e) => {
+                    if !e.matches(gtk::DialogError::Dismissed) {
+                        tracing::warn!(?e, "import OPML: file dialog failed");
+                        window.show_toast("Could not open file picker.");
+                    }
+                    return;
+                }
+            };
+            let Some(path) = file.path() else {
+                window.show_toast("Selected file has no local path.");
+                return;
+            };
+
+            let account = window.account();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            crate::spawn_on_runtime(async move {
+                let _ = tx.send(account.import_opml(path).await);
+            });
+            match rx.await {
+                Ok(Ok(added)) => {
+                    let count = added.len();
+                    window.show_toast(&format!(
+                        "Imported {} feed{}.",
+                        count,
+                        if count == 1 { "" } else { "s" }
+                    ));
+                    window.reload_sidebar_after_opml_change();
+                    if !added.is_empty() {
+                        window.refresh_specific_feeds(added);
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(?e, "import OPML failed");
+                    window.show_toast("Couldn’t import OPML — file may be malformed.");
+                }
+                Err(_) => {
+                    tracing::warn!("import OPML: worker oneshot dropped");
+                }
+            }
+        });
+    }
+
+    /// Export OPML — port of NNW `ExportOPMLWindowController.exportOPML`.
+    pub(crate) fn act_export_opml(&self) {
+        let dialog = gtk::FileDialog::builder()
+            .title("Export OPML")
+            .modal(true)
+            .initial_name("Subscriptions-viaduct.opml")
+            .filters(&Self::opml_filters())
+            .build();
+        let window_weak = self.downgrade();
+        glib::spawn_future_local(async move {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let file = match dialog.save_future(Some(&window)).await {
+                Ok(f) => f,
+                Err(e) => {
+                    if !e.matches(gtk::DialogError::Dismissed) {
+                        tracing::warn!(?e, "export OPML: file dialog failed");
+                        window.show_toast("Could not open file picker.");
+                    }
+                    return;
+                }
+            };
+            let Some(path) = file.path() else {
+                window.show_toast("Chosen path is not a local file.");
+                return;
+            };
+            let title = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Subscriptions.opml")
+                .to_string();
+            let display_path = path.display().to_string();
+
+            let account = window.account();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            crate::spawn_on_runtime(async move {
+                let _ = tx.send(account.export_opml(path, &title).await);
+            });
+            match rx.await {
+                Ok(Ok(())) => window.show_toast(&format!("Exported to {display_path}.")),
+                Ok(Err(e)) => {
+                    tracing::warn!(?e, "export OPML failed");
+                    window.show_toast("Couldn’t export OPML — see logs.");
+                }
+                Err(_) => {
+                    tracing::warn!("export OPML: worker oneshot dropped");
+                }
+            }
+        });
+    }
+
+    fn opml_filters() -> gio::ListStore {
+        let store = gio::ListStore::new::<gtk::FileFilter>();
+        let opml = gtk::FileFilter::new();
+        opml.set_name(Some("OPML files"));
+        opml.add_pattern("*.opml");
+        opml.add_pattern("*.xml");
+        opml.add_mime_type("text/x-opml");
+        opml.add_mime_type("application/xml");
+        store.append(&opml);
+        let any = gtk::FileFilter::new();
+        any.set_name(Some("All files"));
+        any.add_pattern("*");
+        store.append(&any);
+        store
+    }
+
+    fn show_toast(&self, message: &str) {
+        let toast = adw::Toast::new(message);
+        self.imp().toast_overlay.add_toast(toast);
+    }
+
+    /// Re-emit OPML into the sidebar tree after import. Same tokio-context
+    /// hop as the startup load — `LocalAccount::load_opml` uses `tokio::fs`.
+    fn reload_sidebar_after_opml_change(&self) {
+        let imp = self.imp();
+        let Some(delegate) = imp.sidebar_delegate.get().cloned() else {
+            return;
+        };
+        let Some(controller) = imp.sidebar_tree_controller.get().cloned() else {
+            return;
+        };
+        let Some(data_source) = imp.sidebar_data_source.get().cloned() else {
+            return;
+        };
+        let account = self.account();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let _ = tx.send(account.load_opml().await);
+        });
+        glib::spawn_future_local(async move {
+            match rx.await {
+                Ok(Ok(opml)) => {
+                    delegate.borrow().set_opml_file(opml);
+                    controller.rebuild();
+                    data_source.refresh_root();
+                }
+                Ok(Err(e)) => tracing::warn!(?e, "reload sidebar after OPML import failed"),
+                Err(_) => tracing::warn!("reload sidebar task aborted"),
+            }
+        });
+    }
+
+    /// Kick `LocalAccountRefresher::refresh_feeds` against just the feeds
+    /// that were added by an import. Mirrors the post-`importOPML`
+    /// `delegate.refreshAll` step in NNW, but pre-filtered to the new feeds.
+    fn refresh_specific_feeds(&self, feeds: Vec<crate::models::Feed>) {
+        let account = self.account();
+        crate::spawn_on_runtime(async move {
+            let mut paired = Vec::with_capacity(feeds.len());
+            for feed in feeds {
+                let settings = account
+                    .fetch_feed_settings(feed.id.clone())
+                    .await
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| crate::models::FeedSettings {
+                        feed_id: feed.id.clone(),
+                        feed_url: feed.url.clone(),
+                        home_page_url: feed.home_page_url.clone(),
+                        icon_url: None,
+                        favicon_url: None,
+                        edited_name: feed.edited_name.clone(),
+                        content_hash: None,
+                        last_modified: None,
+                        etag: None,
+                        date_created: None,
+                        max_age: None,
+                        authors_json: None,
+                        folder_relationship_json: None,
+                        last_check_date: None,
+                        reader_view_always_enabled: false,
+                    });
+                paired.push((feed, settings));
+            }
+            let (changes_tx, mut changes_rx) = tokio::sync::mpsc::unbounded_channel();
+            let refresher = crate::network::LocalAccountRefresher::new(account, changes_tx);
+            tokio::spawn(async move { while changes_rx.recv().await.is_some() {} });
+            refresher.refresh_feeds(paired).await;
+        });
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -854,6 +1090,42 @@ fn populate_timeline_with_snippets(
 fn escape_fts5(term: &str) -> String {
     let escaped = term.replace('"', "\"\"");
     format!("\"{}\"", escaped)
+}
+
+/// Synthesize a minimal HTML body for articles whose feed shipped no
+/// `<description>` / `<content>` / `<summary>` (e.g. pragprog.com items).
+/// Renders title as h1 + an "Open in browser" link so the pane isn't blank.
+fn build_empty_body_fallback(article: &crate::models::Article) -> String {
+    let title = article.title.as_deref().unwrap_or("Untitled");
+    let url = article
+        .external_url
+        .as_deref()
+        .or(article.url.as_deref())
+        .unwrap_or("");
+    let mut html = format!("<h1>{}</h1>", html_escape(title));
+    if !url.is_empty() {
+        html.push_str(&format!(
+            "<p><a href=\"{}\">Open in browser →</a></p>",
+            html_escape(url)
+        ));
+    } else {
+        html.push_str("<p><em>No content available for this article.</em></p>");
+    }
+    html
+}
+
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn populate_timeline(store: &gio::ListStore, articles: Vec<crate::models::Article>) {

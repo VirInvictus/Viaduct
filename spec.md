@@ -1,6 +1,6 @@
 # viaduct — Application Specification
 
-**Version:** 0.5.0  
+**Version:** 0.7.0  
 **Target:** GNOME 50+, GTK4/libadwaita  
 **Language:** Rust (2024 Edition)  
 **Build System:** Cargo / Meson (for Flatpak packaging)  

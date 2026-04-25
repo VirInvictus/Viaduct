@@ -3,14 +3,17 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 use std::collections::HashMap;
+use std::path::Path;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::database::articles::ArticlesDbOp;
-use crate::database::opml::{OpmlFile, OpmlWriter};
+use crate::database::opml::{
+    OpmlFile, OpmlWriter, merge_opml, normalize_opml, parse_opml, serialize_account_opml,
+};
 use crate::database::settings::SettingsDbOp;
 use crate::database::worker::DbOp;
 use crate::error::{DatabaseError, Result, ViaductError};
-use crate::models::{Article, ArticleChanges, ArticleStatus, FeedSettings, ParsedItem};
+use crate::models::{Article, ArticleChanges, ArticleStatus, Feed, FeedSettings, ParsedItem};
 use crate::paths::opml_path;
 
 pub struct LocalAccount {
@@ -198,6 +201,39 @@ impl LocalAccount {
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// Import an OPML file from disk, merging into the current `local.opml`.
+    /// Port of NNW `LocalAccountDelegate.importOPML` + `Account.addOPMLItems`:
+    ///
+    /// 1. Read and parse the user-supplied file.
+    /// 2. Normalize (strip nameless wrappers, flatten nested folders, dedup
+    ///    by xmlUrl) — `OPMLNormalizer.normalize`.
+    /// 3. Merge into the existing `OpmlFile`: union by xmlUrl, fold matching
+    ///    folder names, never overwrite existing feeds.
+    /// 4. Persist the merged file via the debounced `OpmlWriter`.
+    /// 5. Return the list of newly-added feeds so the UI can kick a refresh
+    ///    against just those.
+    pub async fn import_opml(&self, path: impl AsRef<Path>) -> Result<Vec<Feed>> {
+        let xml = tokio::fs::read_to_string(path.as_ref()).await?;
+        let parsed = parse_opml(&xml)?;
+        let normalized = normalize_opml(parsed);
+        let existing = self.load_opml().await?;
+        let (merged, added) = merge_opml(&existing, normalized);
+        self.save_opml(merged).await?;
+        Ok(added)
+    }
+
+    /// Export the current `OpmlFile` to a user-chosen path. Port of NNW
+    /// `OPMLExporter.OPMLString` + the `ExportOPMLWindowController` write
+    /// step. Uses the byte-shape-faithful `serialize_account_opml` writer
+    /// rather than the serde-driven `serialize_opml` so the output matches
+    /// NetNewsWire's formatting (attribute order, tab indent, version="RSS").
+    pub async fn export_opml(&self, path: impl AsRef<Path>, title: &str) -> Result<()> {
+        let opml = self.load_opml().await?;
+        let body = serialize_account_opml(title, &opml);
+        tokio::fs::write(path.as_ref(), body).await?;
+        Ok(())
     }
 
     pub async fn cleanup_orphaned_settings(&self) -> Result<()> {
