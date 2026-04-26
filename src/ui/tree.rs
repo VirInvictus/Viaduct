@@ -23,12 +23,17 @@ pub mod imp {
     use gtk::gio;
     use std::cell::Cell;
 
-    #[derive(Default)]
+    #[derive(Default, glib::Properties)]
+    #[properties(wrapper_type = super::TreeNode)]
     pub struct TreeNode {
         pub represented_object: RefCell<Option<Rc<dyn std::any::Any>>>,
         pub can_have_child_nodes: Cell<bool>,
         pub is_group_item: Cell<bool>,
-        pub unread_count: Cell<usize>,
+        /// Unread count exposed as a glib property so the sidebar row factory
+        /// can subscribe to `notify::unread-count` and update badges in
+        /// place when counts change (status flips, refresh completion).
+        #[property(get, set)]
+        pub unread_count: Cell<u32>,
         pub child_nodes: RefCell<Vec<super::TreeNode>>,
         pub parent: RefCell<Option<glib::WeakRef<super::TreeNode>>>,
         // The list store exposed to GTK for this node's children
@@ -41,6 +46,7 @@ pub mod imp {
         type Type = super::TreeNode;
     }
 
+    #[glib::derived_properties]
     impl ObjectImpl for TreeNode {}
 }
 
@@ -91,14 +97,6 @@ impl TreeNode {
 
     pub fn set_is_group_item(&self, val: bool) {
         self.imp().is_group_item.set(val)
-    }
-
-    pub fn unread_count(&self) -> usize {
-        self.imp().unread_count.get()
-    }
-
-    pub fn set_unread_count(&self, count: usize) {
-        self.imp().unread_count.set(count)
     }
 
     pub fn child_nodes(&self) -> Vec<TreeNode> {

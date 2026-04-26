@@ -38,12 +38,26 @@ pub enum ArticlesDbOp {
         Vec<String>,
         oneshot::Sender<Result<HashMap<String, (bool, bool)>>>,
     ),
+    /// Per-feed unread totals for sidebar badges. Returns a map keyed by
+    /// `feed_id`; feeds with zero unread are absent from the map.
+    UnreadCountsByFeed(oneshot::Sender<Result<HashMap<String, i64>>>),
+    /// Counts for the three Smart Feed rows. Today / All Unread match the
+    /// timeline-fetch queries; Starred narrows to starred-and-unread (NNW
+    /// `BuiltinSmartFeed.unreadCount`).
+    SmartFeedCounts(oneshot::Sender<Result<SmartFeedCounts>>),
     UpdateFeed {
         feed_id: String,
         items: Vec<ParsedItem>,
         delete_older: bool,
         reply: oneshot::Sender<Result<ArticleChanges>>,
     },
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SmartFeedCounts {
+    pub today_unread: i64,
+    pub all_unread: i64,
+    pub starred_unread: i64,
 }
 
 /// Matches NNW's `Article.calculatedArticleID(feedID:uniqueID:)`:
@@ -212,6 +226,14 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
         }
         ArticlesDbOp::FetchStatusesByIds(ids, tx) => {
             let res = fetch_statuses_by_ids(conn, &ids);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::UnreadCountsByFeed(tx) => {
+            let res = unread_counts_by_feed(conn);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::SmartFeedCounts(tx) => {
+            let res = smart_feed_counts(conn);
             let _ = tx.send(res);
         }
         ArticlesDbOp::UpdateFeed {
@@ -513,6 +535,72 @@ fn fetch_statuses_by_ids(
         }
     }
     Ok(out)
+}
+
+/// Per-feed unread totals for the sidebar. Articles without a `statuses`
+/// row are treated as unread (NNW semantics: a missing status implies the
+/// article was just inserted and hasn't been seen yet) — the LEFT JOIN +
+/// COALESCE handles that without a separate insert path.
+fn unread_counts_by_feed(conn: &mut Connection) -> Result<HashMap<String, i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.feed_id, COUNT(*)
+         FROM articles a
+         LEFT JOIN statuses s ON a.article_id = s.article_id
+         WHERE COALESCE(s.read, 0) = 0
+         GROUP BY a.feed_id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let feed_id: String = row.get(0)?;
+        let count: i64 = row.get(1)?;
+        Ok((feed_id, count))
+    })?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (feed_id, count) = row?;
+        if count > 0 {
+            out.insert(feed_id, count);
+        }
+    }
+    Ok(out)
+}
+
+/// Counts for the three Smart Feed rows. Today and All Unread mirror the
+/// existing `fetch_today` / `fetch_unread` queries; Starred narrows to
+/// starred AND unread to match NNW's `BuiltinSmartFeed.unreadCount`.
+fn smart_feed_counts(conn: &mut Connection) -> Result<SmartFeedCounts> {
+    let today_start = chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp();
+
+    let today_unread: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM articles a
+         INNER JOIN statuses s ON a.article_id = s.article_id
+         WHERE s.read = 0
+           AND (s.date_arrived >= ? OR a.date_published >= ?)",
+        params![today_start, today_start],
+        |row| row.get(0),
+    )?;
+
+    let all_unread: i64 =
+        conn.query_row("SELECT COUNT(*) FROM statuses WHERE read = 0", [], |row| {
+            row.get(0)
+        })?;
+
+    let starred_unread: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM statuses WHERE starred = 1 AND read = 0",
+        [],
+        |row| row.get(0),
+    )?;
+
+    Ok(SmartFeedCounts {
+        today_unread,
+        all_unread,
+        starred_unread,
+    })
 }
 
 /// Port of NNW `ArticlesTable.update(parsedItems, feedID, deleteOlder, ...)`.

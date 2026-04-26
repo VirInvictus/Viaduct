@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::database::articles::ArticlesDbOp;
+use crate::database::articles::{ArticlesDbOp, SmartFeedCounts};
 use crate::database::opml::{
     OpmlFile, OpmlWriter, merge_opml, normalize_opml, parse_opml, serialize_account_opml,
 };
@@ -129,6 +129,29 @@ impl LocalAccount {
         let (tx, rx) = oneshot::channel();
         self.db_tx
             .send(DbOp::Articles(ArticlesDbOp::FetchStatusesByIds(ids, tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// Per-feed unread totals for sidebar badges. Feeds with zero unread
+    /// articles are absent from the result map.
+    pub async fn unread_counts_by_feed(&self) -> Result<HashMap<String, i64>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::UnreadCountsByFeed(tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// Counts for the three Smart Feed sidebar rows.
+    pub async fn smart_feed_counts(&self) -> Result<SmartFeedCounts> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::SmartFeedCounts(tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

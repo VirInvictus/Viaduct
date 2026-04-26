@@ -1,5 +1,23 @@
 # viaduct — Patch Notes
 
+## v0.8.1 — Read/Unread Completion
+
+Wires the two NNW behaviors that were tracked but not yet hooked up: auto-mark-read on selection, and live sidebar unread badges.
+
+### Auto-mark-read on selection
+- Port of NNW `TimelineViewController.tableViewSelectionDidChange` (TimelineViewController.swift:931). When the timeline_selection handler fires for an unread article, the node is flipped to `read=true` (optimistic so the title goes dim immediately), the status row is upserted, and `refresh_unread_counts` runs after the upsert succeeds. Existing keyboard `r`/`m` toggle is unchanged — auto-mark-read only kicks for previously-unread rows.
+
+### Sidebar unread badges
+- New `ArticlesDbOp::UnreadCountsByFeed` returns a `HashMap<feed_id, i64>` (feeds with zero unread are absent from the map). `LEFT JOIN statuses` so articles without a status row count as unread, matching NNW semantics for freshly-inserted articles.
+- New `ArticlesDbOp::SmartFeedCounts` returns `SmartFeedCounts { today_unread, all_unread, starred_unread }`. Today reuses the existing `fetch_today` cutoff (local midnight UTC); All Unread is a global `COUNT(*) WHERE read=0`; Starred narrows to `starred=1 AND read=0` matching NNW `BuiltinSmartFeed.unreadCount`.
+- `LocalAccount::unread_counts_by_feed()` and `LocalAccount::smart_feed_counts()` expose the ops.
+- `TreeNode.unread_count` is now a `glib::Properties`-derived `u32` (was `Cell<usize>`). The sidebar row factory connects `notify::unread-count` in `connect_bind` and disconnects in `connect_unbind` via the unsafe `set_data`/`steal_data` pattern. Setting the count on any clone of a TreeNode wrapper fires the notify on the underlying GObject so all bound rows update without re-binding the tree.
+- New `ViaductWindow::refresh_unread_counts` walks the controller's root node, applies per-feed counts, sums folder totals, applies smart-feed counts, and sets the SmartFeedGroup parent total. Folder summing is local (sums children seen during the walk) so deeply nested OPMLs that NNW's normalizer flattened still tally correctly.
+- Refresh hooks: initial OPML load completion, post-import sidebar reload, `apply_status_to_current` upsert success, `mark_read_in_range` bulk upsert success, `mark_current_read_then_advance` upsert success, `act_refresh` cycle completion, `refresh_specific_feeds` cycle completion, and the new auto-mark-read upsert.
+
+### Tests
+- 30 passing — wiring is GTK-side; no new unit tests. Integration coverage exercises the badges through the running app.
+
 ## v0.8.0 — Phase 13: System Integration & Theming
 
 Three of four Phase 13 sub-items land in this release. The fourth (xdg-desktop-portal Background daemon) moves to Phase 17 because it shares plumbing with the Flatpak manifest work.

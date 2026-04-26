@@ -351,18 +351,52 @@ pub fn setup_sidebar_list_view(
             icon_stack.set_visible_child_name("icon");
         }
 
-        let count = node.unread_count();
-        if count > 0 {
-            badge.set_text(&count.to_string());
-            badge.set_visible(true);
-        } else {
-            badge.set_text("");
-            badge.set_visible(false);
+        apply_unread_badge(&badge, node.unread_count());
+
+        // Re-render the badge whenever the node's unread count flips. Same
+        // pattern as ArticleNode/notify::read in the timeline factory: id
+        // stashed on the list_item, disconnected by `connect_unbind` when
+        // the row recycles to a different node.
+        let badge_for_notify = badge.downgrade();
+        let id = node.connect_notify_local(Some("unread-count"), move |node, _| {
+            if let Some(badge) = badge_for_notify.upgrade() {
+                apply_unread_badge(&badge, node.unread_count());
+            }
+        });
+        unsafe {
+            item.set_data("viaduct-unread-handler", id);
+        }
+    });
+
+    factory.connect_unbind(|_factory, list_item| {
+        let item = list_item
+            .downcast_ref::<gtk::ListItem>()
+            .expect("Needs to be ListItem");
+        let Some(row) = item.item().and_downcast::<gtk::TreeListRow>() else {
+            return;
+        };
+        let Some(node) = row.item().and_downcast::<TreeNode>() else {
+            return;
+        };
+        unsafe {
+            if let Some(id) = item.steal_data::<glib::SignalHandlerId>("viaduct-unread-handler") {
+                node.disconnect(id);
+            }
         }
     });
 
     list_view.set_factory(Some(&factory));
     selection_model
+}
+
+fn apply_unread_badge(badge: &gtk::Label, count: u32) {
+    if count > 0 {
+        badge.set_text(&count.to_string());
+        badge.set_visible(true);
+    } else {
+        badge.set_text("");
+        badge.set_visible(false);
+    }
 }
 
 /// Async-fetch the favicon for a feed and apply it to the row's avatar.

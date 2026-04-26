@@ -215,6 +215,9 @@ impl ViaductWindow {
                     delegate_for_load.borrow().set_opml_file(opml);
                     controller_for_load.rebuild();
                     data_source_for_load.refresh_root();
+                    if let Some(window) = window_weak_for_load.upgrade() {
+                        window.refresh_unread_counts();
+                    }
                 }
                 Ok(Err(e)) => tracing::warn!(?e, "failed to load OPML at startup"),
                 Err(_) => tracing::warn!("OPML load task aborted"),
@@ -310,6 +313,32 @@ impl ViaductWindow {
             // want it to reflect `auto_reader` after the settings fetch).
             window.imp().reader_btn.set_active(false);
             window.render_article_body();
+
+            // Auto-mark-read on selection — port of NNW
+            // `tableViewSelectionDidChange` (TimelineViewController.swift:931).
+            // Optimistic: flip the node first so the title goes dim and the
+            // sidebar's unread totals can re-fetch. The DB upsert is async
+            // and the sidebar refresh follows it.
+            if !node.is_read() {
+                node.set_status(true, node.is_starred());
+                let status = crate::models::ArticleStatus {
+                    article_id: article.article_id.clone(),
+                    read: true,
+                    starred: node.is_starred(),
+                    date_arrived: chrono::Utc::now(),
+                };
+                let account = account_for_article.clone();
+                let window_for_count = window.downgrade();
+                glib::spawn_future_local(async move {
+                    if let Err(e) = account.upsert_statuses(vec![status]).await {
+                        tracing::warn!(?e, "auto-mark-read upsert failed");
+                        return;
+                    }
+                    if let Some(window) = window_for_count.upgrade() {
+                        window.refresh_unread_counts();
+                    }
+                });
+            }
 
             // Async-resolve the feed's readerViewAlwaysEnabled preference.
             let account = account_for_article.clone();
@@ -572,9 +601,14 @@ impl ViaductWindow {
                 date_arrived: chrono::Utc::now(),
             };
             let account = self.account();
+            let window_weak = self.downgrade();
             glib::spawn_future_local(async move {
                 if let Err(e) = account.upsert_statuses(vec![status]).await {
                     tracing::warn!(?e, "smart-read: upsert_statuses failed");
+                    return;
+                }
+                if let Some(window) = window_weak.upgrade() {
+                    window.refresh_unread_counts();
                 }
             });
         }
@@ -700,9 +734,14 @@ impl ViaductWindow {
             date_arrived: chrono::Utc::now(),
         };
         let account = self.account();
+        let window_weak = self.downgrade();
         glib::spawn_future_local(async move {
             if let Err(e) = account.upsert_statuses(vec![status]).await {
                 tracing::warn!(?e, "status upsert failed");
+                return;
+            }
+            if let Some(window) = window_weak.upgrade() {
+                window.refresh_unread_counts();
             }
         });
     }
@@ -741,9 +780,14 @@ impl ViaductWindow {
             return;
         }
         let account = self.account();
+        let window_weak = self.downgrade();
         glib::spawn_future_local(async move {
             if let Err(e) = account.upsert_statuses(statuses).await {
                 tracing::warn!(?e, "bulk read upsert failed");
+                return;
+            }
+            if let Some(window) = window_weak.upgrade() {
+                window.refresh_unread_counts();
             }
         });
     }
@@ -831,6 +875,7 @@ impl ViaductWindow {
             let Ok(total) = done_rx.await else { return };
             if let Some(window) = window_weak.upgrade() {
                 window.dispatch_refresh_notification(total);
+                window.refresh_unread_counts();
             }
         });
     }
@@ -1052,6 +1097,9 @@ impl ViaductWindow {
                     delegate.borrow().set_opml_file(opml);
                     controller.rebuild();
                     data_source.refresh_root();
+                    if let Some(window) = window_weak.upgrade() {
+                        window.refresh_unread_counts();
+                    }
                 }
                 Ok(Err(e)) => tracing::warn!(?e, "reload sidebar after OPML import failed"),
                 Err(_) => tracing::warn!("reload sidebar task aborted"),
@@ -1062,6 +1110,89 @@ impl ViaductWindow {
     /// Kick `LocalAccountRefresher::refresh_feeds` against just the feeds
     /// that were added by an import. Mirrors the post-`importOPML`
     /// `delegate.refreshAll` step in NNW, but pre-filtered to the new feeds.
+    /// Recompute sidebar unread badges from the current DB state. Fires one
+    /// query each for per-feed counts and Smart-Feed counts, walks the tree
+    /// once to apply, and propagates folder/group totals as the sum of their
+    /// children. The notify::unread-count signal on each `TreeNode` drives
+    /// the actual badge re-render (see `apply_unread_badge` in sidebar.rs).
+    pub(crate) fn refresh_unread_counts(&self) {
+        let Some(controller) = self.imp().sidebar_tree_controller.get().cloned() else {
+            return;
+        };
+        let account = self.account();
+        glib::spawn_future_local(async move {
+            let per_feed = match account.unread_counts_by_feed().await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::debug!(?e, "unread_counts_by_feed failed");
+                    return;
+                }
+            };
+            let smart = account.smart_feed_counts().await.ok();
+
+            let to_u32 = |n: i64| n.max(0).min(u32::MAX as i64) as u32;
+            let count_for_feed = |id: &str| to_u32(per_feed.get(id).copied().unwrap_or(0));
+
+            for top in controller.root_node.child_nodes() {
+                let Some(rep) = top.represented_object() else {
+                    continue;
+                };
+                let Some(item) = rep.downcast_ref::<crate::ui::sidebar::SidebarItem>() else {
+                    continue;
+                };
+                match item {
+                    crate::ui::sidebar::SidebarItem::SmartFeedGroup => {
+                        let mut group_total: u32 = 0;
+                        for child in top.child_nodes() {
+                            let Some(c_rep) = child.represented_object() else {
+                                continue;
+                            };
+                            let Some(c_item) =
+                                c_rep.downcast_ref::<crate::ui::sidebar::SidebarItem>()
+                            else {
+                                continue;
+                            };
+                            if let crate::ui::sidebar::SidebarItem::SmartFeed(name) = c_item {
+                                let count = match (name.as_str(), smart) {
+                                    ("Today", Some(s)) => to_u32(s.today_unread),
+                                    ("All Unread", Some(s)) => to_u32(s.all_unread),
+                                    ("Starred", Some(s)) => to_u32(s.starred_unread),
+                                    _ => 0,
+                                };
+                                child.set_unread_count(count);
+                                group_total = group_total.saturating_add(count);
+                            }
+                        }
+                        top.set_unread_count(group_total);
+                    }
+                    crate::ui::sidebar::SidebarItem::Folder(_) => {
+                        let mut folder_total: u32 = 0;
+                        for child in top.child_nodes() {
+                            let Some(c_rep) = child.represented_object() else {
+                                continue;
+                            };
+                            let Some(c_item) =
+                                c_rep.downcast_ref::<crate::ui::sidebar::SidebarItem>()
+                            else {
+                                continue;
+                            };
+                            if let crate::ui::sidebar::SidebarItem::Feed(feed) = c_item {
+                                let count = count_for_feed(&feed.id);
+                                child.set_unread_count(count);
+                                folder_total = folder_total.saturating_add(count);
+                            }
+                        }
+                        top.set_unread_count(folder_total);
+                    }
+                    crate::ui::sidebar::SidebarItem::Feed(feed) => {
+                        top.set_unread_count(count_for_feed(&feed.id));
+                    }
+                    crate::ui::sidebar::SidebarItem::SmartFeed(_) => {}
+                }
+            }
+        });
+    }
+
     /// Walk an `OpmlFile` and (re)populate the feed-name resolver. Same name
     /// preference order as the sidebar: `edited_name` → `name` → URL host →
     /// raw URL. After repopulating, kick `items_changed` on the timeline
@@ -1151,6 +1282,7 @@ impl ViaductWindow {
             let Ok(total) = done_rx.await else { return };
             if let Some(window) = window_weak.upgrade() {
                 window.dispatch_refresh_notification(total);
+                window.refresh_unread_counts();
             }
         });
     }
