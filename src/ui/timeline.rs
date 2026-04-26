@@ -7,6 +7,8 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 glib::wrapper! {
     /// A GObject wrapper around the domain `Article` so it can be used in `gio::ListModel`.
@@ -17,15 +19,19 @@ pub mod imp {
     use super::*;
     use std::cell::Cell;
 
-    #[derive(Default)]
+    #[derive(Default, glib::Properties)]
+    #[properties(wrapper_type = super::ArticleNode)]
     pub struct ArticleNode {
         pub article: RefCell<Option<Article>>,
         /// Optional FTS5 snippet for search-result rows. When set, the timeline
         /// row renders this in the preview area instead of the article summary.
         pub snippet: RefCell<Option<String>>,
-        /// Cached status from the `statuses` table. Populated in bulk after
-        /// the timeline is loaded; navigation actions read these.
+        /// Cached status from the `statuses` table. Exposed as glib properties so
+        /// the row factory can subscribe to `notify::read` and re-style the title
+        /// without waiting for a recycle.
+        #[property(get, set)]
         pub read: Cell<bool>,
+        #[property(get, set)]
         pub starred: Cell<bool>,
     }
 
@@ -35,6 +41,7 @@ pub mod imp {
         type Type = super::ArticleNode;
     }
 
+    #[glib::derived_properties]
     impl ObjectImpl for ArticleNode {}
 }
 
@@ -61,24 +68,35 @@ impl ArticleNode {
     }
 
     pub fn is_read(&self) -> bool {
-        self.imp().read.get()
+        self.read()
     }
 
     pub fn is_starred(&self) -> bool {
-        self.imp().starred.get()
+        self.starred()
     }
 
     pub fn set_status(&self, read: bool, starred: bool) {
-        self.imp().read.set(read);
-        self.imp().starred.set(starred);
+        if self.read() != read {
+            self.set_read(read);
+        }
+        if self.starred() != starred {
+            self.set_starred(starred);
+        }
     }
 }
+
+/// Resolver from `feed_id` to display name. Built off the OPML tree once at
+/// load time and rebuilt on every OPML mutation. The timeline row factory
+/// reads through it on each bind, falling back to the feed_id (URL) when the
+/// feed isn't in the map yet.
+pub type FeedNameMap = Rc<RefCell<HashMap<String, String>>>;
 
 /// Sets up the Timeline ListView with models and the row factory.
 /// Returns the `SingleSelection` so the caller can drive article rendering.
 pub fn setup_timeline_list_view(
     list_view: &gtk::ListView,
     list_store: &gtk::gio::ListStore,
+    feed_names: FeedNameMap,
 ) -> gtk::SingleSelection {
     let selection_model = gtk::SingleSelection::new(Some(list_store.clone()));
     selection_model.set_autoselect(false);
@@ -105,8 +123,6 @@ pub fn setup_timeline_list_view(
         title_label.set_hexpand(true);
         title_label.set_halign(gtk::Align::Start);
         title_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        // Use bold text for title
-        title_label.add_css_class("heading");
 
         // Media indicator: small icon when the article has attachments
         // (podcast/video enclosures, MRSS media). Count badge appears when
@@ -139,7 +155,7 @@ pub fn setup_timeline_list_view(
         preview_label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         preview_label.set_lines(2);
         preview_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        preview_label.add_css_class("dim-label"); // Might not be dim, but preview is usually lighter
+        preview_label.add_css_class("dim-label");
 
         vbox.append(&top_hbox);
         vbox.append(&feed_name_label);
@@ -148,6 +164,7 @@ pub fn setup_timeline_list_view(
         item.set_child(Some(&vbox));
     });
 
+    let feed_names_for_bind = feed_names.clone();
     factory.connect_bind(move |_factory, list_item| {
         let item = list_item
             .downcast_ref::<gtk::ListItem>()
@@ -184,6 +201,8 @@ pub fn setup_timeline_list_view(
             let title = article.title.as_deref().unwrap_or("Untitled");
             title_label.set_text(title);
 
+            apply_read_styling(&title_label, node.read());
+
             // Media indicator. Pick a roughly-correct icon based on the first
             // attachment's MIME type so podcasts and videos look distinct.
             let n = article.attachments.len();
@@ -215,9 +234,15 @@ pub fn setup_timeline_list_view(
                 .unwrap_or_default();
             date_label.set_text(&date_str);
 
-            // Feed name requires a join with the Feed store, for now we show feed_id or placeholder
-            // In a full implementation, we'd pass a resolver or include the feed name in the Article/Node
-            feed_name_label.set_text(&article.feed_id);
+            // Resolve display name through the feed-name map. Falls back to
+            // the feed_id (which is the URL) when the feed isn't loaded yet
+            // — startup race when the timeline beats the OPML load.
+            let display_name = feed_names_for_bind
+                .borrow()
+                .get(&article.feed_id)
+                .cloned()
+                .unwrap_or_else(|| article.feed_id.clone());
+            feed_name_label.set_text(&display_name);
 
             // Search results carry an FTS5 snippet; prefer that over the
             // generic summary/content preview so the user sees why the row
@@ -233,8 +258,48 @@ pub fn setup_timeline_list_view(
             let clean_preview = preview_source.replace('\n', " ").replace('\r', "");
             preview_label.set_text(&clean_preview);
         }
+
+        // Re-style the title whenever the node's read flag flips. Stored on
+        // the list_item so connect_unbind can disconnect cleanly when the
+        // row recycles to a different node.
+        let title_for_notify = title_label.downgrade();
+        let id = node.connect_notify_local(Some("read"), move |node, _| {
+            if let Some(label) = title_for_notify.upgrade() {
+                apply_read_styling(&label, node.read());
+            }
+        });
+        unsafe {
+            item.set_data("viaduct-read-handler", id);
+        }
+    });
+
+    factory.connect_unbind(|_factory, list_item| {
+        let item = list_item
+            .downcast_ref::<gtk::ListItem>()
+            .expect("Needs to be ListItem");
+        let Some(node) = item.item().and_downcast::<ArticleNode>() else {
+            return;
+        };
+        unsafe {
+            if let Some(id) = item.steal_data::<glib::SignalHandlerId>("viaduct-read-handler") {
+                node.disconnect(id);
+            }
+        }
     });
 
     list_view.set_factory(Some(&factory));
     selection_model
+}
+
+/// Toggle bold/dim-label classes on the title to reflect read state. NNW
+/// renders unread titles in bold full color and read titles in regular
+/// weight + slight gray.
+fn apply_read_styling(title: &gtk::Label, read: bool) {
+    if read {
+        title.remove_css_class("heading");
+        title.add_css_class("dim-label");
+    } else {
+        title.remove_css_class("dim-label");
+        title.add_css_class("heading");
+    }
 }

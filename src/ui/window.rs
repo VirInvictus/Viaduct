@@ -15,7 +15,7 @@ use crate::ui::sidebar::{
     SidebarDataSource, SidebarItem, SidebarTreeControllerDelegate, selected_sidebar_item,
     setup_sidebar_list_view,
 };
-use crate::ui::timeline::{ArticleNode, setup_timeline_list_view};
+use crate::ui::timeline::{ArticleNode, FeedNameMap, setup_timeline_list_view};
 use crate::ui::tree::TreeController;
 
 mod imp {
@@ -59,6 +59,10 @@ mod imp {
         pub sidebar_delegate: OnceCell<Rc<RefCell<SidebarTreeControllerDelegate>>>,
         pub sidebar_data_source: OnceCell<Rc<SidebarDataSource>>,
         pub sidebar_tree_controller: OnceCell<Rc<TreeController>>,
+        /// Map from `feed_id` → display name. Built from OPML at load time
+        /// and rebuilt on every import; the timeline factory reads through
+        /// it on each bind so rows show "Daring Fireball" instead of the URL.
+        pub feed_names: OnceCell<crate::ui::timeline::FeedNameMap>,
         /// Pending debounced search timeout, restarted on every keystroke.
         pub search_timeout: RefCell<Option<glib::SourceId>>,
         /// Feed ID of the currently-selected sidebar row. Used by the search
@@ -149,6 +153,7 @@ impl ViaductWindow {
 
     fn wire_models(&self) {
         use std::cell::RefCell;
+        use std::collections::HashMap;
         use std::rc::Rc;
 
         let imp = self.imp();
@@ -168,9 +173,17 @@ impl ViaductWindow {
             self.image_cache(),
         );
 
+        // Feed-name resolver passed to the timeline factory. Empty until OPML
+        // loads; the bind closure falls back to feed_id (URL) until then.
+        let feed_names: FeedNameMap = Rc::new(RefCell::new(HashMap::new()));
+        imp.feed_names.set(feed_names.clone()).ok();
+
         // Timeline store + selection.
         let timeline_store = gio::ListStore::new::<ArticleNode>();
-        let timeline_selection = setup_timeline_list_view(&imp.timeline_list_view, &timeline_store);
+        let timeline_selection =
+            setup_timeline_list_view(&imp.timeline_list_view, &timeline_store, feed_names.clone());
+
+        self.install_timeline_capture_shortcuts();
 
         // Persist references so they outlive `wire_models` and the GC.
         imp.sidebar_delegate.set(delegate.clone()).ok();
@@ -188,6 +201,7 @@ impl ViaductWindow {
         let delegate_for_load = delegate.clone();
         let controller_for_load = controller.clone();
         let data_source_for_load = data_source.clone();
+        let window_weak_for_load = self.downgrade();
         let (load_tx, load_rx) = tokio::sync::oneshot::channel();
         crate::spawn_on_runtime(async move {
             let _ = load_tx.send(account.load_opml().await);
@@ -195,6 +209,9 @@ impl ViaductWindow {
         glib::spawn_future_local(async move {
             match load_rx.await {
                 Ok(Ok(opml)) => {
+                    if let Some(window) = window_weak_for_load.upgrade() {
+                        window.rebuild_feed_names_from(&opml);
+                    }
                     delegate_for_load.borrow().set_opml_file(opml);
                     controller_for_load.rebuild();
                     data_source_for_load.refresh_root();
@@ -1015,9 +1032,13 @@ impl ViaductWindow {
         crate::spawn_on_runtime(async move {
             let _ = tx.send(account.load_opml().await);
         });
+        let window_weak = self.downgrade();
         glib::spawn_future_local(async move {
             match rx.await {
                 Ok(Ok(opml)) => {
+                    if let Some(window) = window_weak.upgrade() {
+                        window.rebuild_feed_names_from(&opml);
+                    }
                     delegate.borrow().set_opml_file(opml);
                     controller.rebuild();
                     data_source.refresh_root();
@@ -1031,6 +1052,82 @@ impl ViaductWindow {
     /// Kick `LocalAccountRefresher::refresh_feeds` against just the feeds
     /// that were added by an import. Mirrors the post-`importOPML`
     /// `delegate.refreshAll` step in NNW, but pre-filtered to the new feeds.
+    /// Walk an `OpmlFile` and (re)populate the feed-name resolver. Same name
+    /// preference order as the sidebar: `edited_name` → `name` → URL host →
+    /// raw URL. After repopulating, kick `items_changed` on the timeline
+    /// store so already-bound rows pick up the new names.
+    fn rebuild_feed_names_from(&self, opml: &crate::database::opml::OpmlFile) {
+        let Some(map_rc) = self.imp().feed_names.get() else {
+            return;
+        };
+        {
+            let mut map = map_rc.borrow_mut();
+            map.clear();
+            for feed in &opml.standalone_feeds {
+                map.insert(feed.id.clone(), display_name_for_feed(feed));
+            }
+            for folder in &opml.folders {
+                for feed in &folder.feeds {
+                    map.insert(feed.id.clone(), display_name_for_feed(feed));
+                }
+            }
+        }
+        if let Some(store) = self.imp().timeline_store.get() {
+            let n = store.n_items();
+            if n > 0 {
+                store.items_changed(0, n, n);
+            }
+        }
+    }
+
+    /// Capture-phase shortcut controller scoped to the timeline `ListView`.
+    /// `gtk::Application::set_accels_for_action` installs window-bubble
+    /// accelerators which fire AFTER the focused widget — and `GtkListView`
+    /// consumes Up/Down/Home/End/Return/space in the target phase. Without
+    /// this we'd lose `j`/`k`/`Down`/`Up`/`space`/`Return` and friends as
+    /// soon as the user clicked a row. By attaching a Capture-phase
+    /// controller directly to the list view, the action fires before the
+    /// list view's built-in handlers.
+    fn install_timeline_capture_shortcuts(&self) {
+        let controller = gtk::ShortcutController::new();
+        controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+        const NAV_BINDINGS: &[(&str, &str)] = &[
+            ("Down", "win.next-unread"),
+            ("j", "win.next-unread"),
+            ("n", "win.next-unread"),
+            ("Up", "win.prev-unread"),
+            ("k", "win.prev-unread"),
+            ("minus", "win.prev-unread"),
+            ("space", "win.smart-read"),
+            ("<Shift>space", "win.scroll-up"),
+            ("r", "win.toggle-read"),
+            ("m", "win.toggle-read"),
+            ("<Shift>m", "win.mark-unread-advance"),
+            ("s", "win.toggle-star"),
+            ("b", "win.open-in-browser"),
+            ("Return", "win.open-in-browser"),
+            ("<Ctrl>Return", "win.open-enclosure"),
+            ("l", "win.mark-all-read-advance"),
+            ("o", "win.mark-older-read"),
+        ];
+
+        for (trigger_str, action_name) in NAV_BINDINGS {
+            let Some(trigger) = gtk::ShortcutTrigger::parse_string(trigger_str) else {
+                tracing::warn!(trigger = %trigger_str, "failed to parse capture shortcut trigger");
+                continue;
+            };
+            let action = gtk::NamedAction::new(action_name);
+            let shortcut = gtk::Shortcut::builder()
+                .trigger(&trigger)
+                .action(&action)
+                .build();
+            controller.add_shortcut(shortcut);
+        }
+
+        self.imp().timeline_list_view.add_controller(controller);
+    }
+
     fn refresh_specific_feeds(&self, feeds: Vec<crate::models::Feed>) {
         let account = self.account();
         crate::spawn_on_runtime(async move {
@@ -1112,6 +1209,29 @@ fn build_empty_body_fallback(article: &crate::models::Article) -> String {
         html.push_str("<p><em>No content available for this article.</em></p>");
     }
     html
+}
+
+/// Resolve a friendly display name for a feed: `edited_name` (user override)
+/// wins, then `name` from the parsed feed, then the URL's host as a last
+/// resort. Mirrors NNW's `WebFeed.nameForDisplay` semantics for the local
+/// account.
+fn display_name_for_feed(feed: &crate::models::Feed) -> String {
+    if let Some(edited) = feed.edited_name.as_deref()
+        && !edited.is_empty()
+    {
+        return edited.to_string();
+    }
+    if let Some(name) = feed.name.as_deref()
+        && !name.is_empty()
+    {
+        return name.to_string();
+    }
+    if let Ok(parsed) = url::Url::parse(&feed.url)
+        && let Some(host) = parsed.host_str()
+    {
+        return host.to_string();
+    }
+    feed.url.clone()
 }
 
 fn html_escape(s: &str) -> String {

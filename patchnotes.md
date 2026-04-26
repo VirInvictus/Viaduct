@@ -1,5 +1,19 @@
 # viaduct — Patch Notes
 
+## v0.7.1 — Timeline Polish
+
+Three deferred polish items that surfaced during Phase 12 import testing. No new dependencies; no NetNewsWire deviation.
+
+### Timeline display
+- **Feed-name resolution**: timeline rows now show the feed's display name (`edited_name` → parsed `name` → URL host → raw URL) instead of the raw `feed_id`. New `FeedNameMap` type alias (`Rc<RefCell<HashMap<String, String>>>`) lives in `src/ui/timeline.rs` and is threaded into `setup_timeline_list_view`. The window owns one map (`feed_names: OnceCell<FeedNameMap>`) and rebuilds it from `OpmlFile` on startup load and after every import via the new `rebuild_feed_names_from` helper. After repopulating, `store.items_changed(0, n, n)` re-binds existing rows so they pick up the new names without waiting for the user to scroll. Display-name resolution port: NNW `WebFeed.nameForDisplay`.
+- **Bold/unread visuals**: `ArticleNode.read` and `.starred` are now `glib::Properties` instead of plain `Cell<bool>`. The factory's `connect_bind` subscribes to `notify::read` and toggles `heading` / `dim-label` CSS classes on the title via `apply_read_styling`; `connect_unbind` disconnects the handler so recycled rows don't accumulate handlers across nodes. Optimistic mark-read flips visual immediately. Existing `is_read` / `is_starred` / `set_status` helpers preserved as wrappers so window.rs callers don't churn.
+
+### Keyboard
+- **Capture-phase shortcut routing on the timeline `ListView`**. `gtk::Application::set_accels_for_action` installs window-bubble accelerators which fire after the focused widget — and `GtkListView` consumes Up/Down/Home/End/Return/space in the target phase. `install_timeline_capture_shortcuts` adds a `gtk::ShortcutController` with `PropagationPhase::Capture` directly on the timeline list view, with `NamedAction` shortcuts for `Down`/`j`/`n`/`Up`/`k`/`-`/`space`/`<Shift>space`/`r`/`m`/`<Shift>m`/`s`/`b`/`Return`/`<Ctrl>Return`/`l`/`o`. The actions fire before the list view's built-in key handlers, so muscle-memory navigation works once a row is focused. Search-entry input is unaffected (the controller is scoped to the list view, not the window).
+
+### Tests
+- 30 passing — no new tests; polish is GTK-side and doesn't change DB / parser logic.
+
 ## v0.7.0 — Phase 12: OPML Import & Export
 
 User-facing OPML exchange. The internal parse/serialize plumbing has existed since Phase 2; this release wires it to two menu actions and ports the NetNewsWire merge semantics so imports behave the way NNW users expect.

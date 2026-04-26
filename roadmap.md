@@ -1,6 +1,6 @@
 # viaduct — Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.7.0.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.7.1.
 
 ---
 
@@ -179,8 +179,8 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 ## Phase 13: System Integration & Theming
 - [ ] `libadwaita` system color scheme follow (Dark / Light / Auto).
 - [ ] `libnotify` for new article counts per refresh cycle (opt-in per feed via `newArticleNotificationsEnabled`).
-- [ ] Background daemon via `xdg-desktop-portal` Background API for cron-based refresh while the UI is closed.
 - [ ] `GSettings` schema for user prefs (refresh interval, retention days, font overrides).
+- [ ] ~~Background daemon via `xdg-desktop-portal` Background API for cron-based refresh while the UI is closed.~~ *(Moved to Phase 17 — needs `ashpd` + Flatpak manifest plumbing; naturally pairs with the sandbox work there. NNW's mac equivalent (`NSBackgroundActivityScheduler`) has no Linux analog without a portal client.)*
 
 ## Phase 14: The Pruning Engine
 - [ ] Port NNW's `RetentionStyle.feedBased` — local and Inoreader accounts prune against the feed's own content.
@@ -206,6 +206,7 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 - [ ] Flatpak manifest: `network` permission only; no `--filesystem=home`. OPML I/O entirely via `org.freedesktop.portal.FileChooser`.
 - [ ] AppStream metadata (`appdata.xml`), icons at all required sizes, desktop entry.
 - [ ] Reproducible build verified against the target Flathub runtime.
+- [ ] Background daemon via `xdg-desktop-portal` Background API for cron-based refresh while the UI is closed (moved from Phase 13). Adds `ashpd` for the portal client; pairs with the manifest's `org.freedesktop.portal.Background` entry.
 - [ ] Tag `1.0.0` and submit to Flathub.
 
 ---

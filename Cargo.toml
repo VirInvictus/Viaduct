@@ -1,6 +1,6 @@
 [package]
 name = "viaduct"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 description = "A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire."
 license = "MIT"
