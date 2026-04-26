@@ -63,7 +63,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let items: Vec<ParsedItem> = (0..ARTICLES_PER_FEED)
             .map(|art_ix| synth_item(feed_ix, art_ix))
             .collect();
-        account.update_feed(feed_id, items, true).await?;
+        account
+            .update_feed(
+                feed_id,
+                items,
+                true,
+                viaduct::database::articles::DEFAULT_RETENTION_DAYS,
+            )
+            .await?;
     }
     let elapsed = start.elapsed();
 

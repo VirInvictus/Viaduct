@@ -848,6 +848,7 @@ impl ViaductWindow {
     pub(crate) fn act_refresh(&self) {
         let account = self.account();
         let window_weak = self.downgrade();
+        let retention_days = current_retention_days();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<usize>();
         crate::spawn_on_runtime(async move {
             let opml = match account.load_opml().await {
@@ -868,7 +869,7 @@ impl ViaductWindow {
                 return;
             }
             let paired = pair_feeds_with_settings(&account, feeds).await;
-            let total = run_refresh_with_tally(account, paired).await;
+            let total = run_refresh_with_tally(account, paired, retention_days).await;
             let _ = done_tx.send(total);
         });
         glib::spawn_future_local(async move {
@@ -1272,10 +1273,11 @@ impl ViaductWindow {
     fn refresh_specific_feeds(&self, feeds: Vec<crate::models::Feed>) {
         let account = self.account();
         let window_weak = self.downgrade();
+        let retention_days = current_retention_days();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<usize>();
         crate::spawn_on_runtime(async move {
             let paired = pair_feeds_with_settings(&account, feeds).await;
-            let total = run_refresh_with_tally(account, paired).await;
+            let total = run_refresh_with_tally(account, paired, retention_days).await;
             let _ = done_tx.send(total);
         });
         glib::spawn_future_local(async move {
@@ -1326,10 +1328,12 @@ async fn pair_feeds_with_settings(
 /// Run a refresh cycle and return the total `new_articles` count across all
 /// `ArticleChanges` batches the refresher emitted. Drops the refresher
 /// before awaiting the drain task so all `changes_tx` clones close and the
-/// drain returns naturally.
+/// drain returns naturally. `retention_days` is forwarded to `update_feed`
+/// for the per-feed prune.
 async fn run_refresh_with_tally(
     account: Arc<LocalAccount>,
     paired: Vec<(crate::models::Feed, crate::models::FeedSettings)>,
+    retention_days: i64,
 ) -> usize {
     let (changes_tx, mut changes_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::models::ArticleChanges>();
@@ -1340,10 +1344,20 @@ async fn run_refresh_with_tally(
         }
         total
     });
-    let refresher = crate::network::LocalAccountRefresher::new(account, changes_tx);
+    let refresher = crate::network::LocalAccountRefresher::new(account, changes_tx, retention_days);
     refresher.refresh_feeds(paired).await;
     drop(refresher);
     drain.await.unwrap_or(0)
+}
+
+/// Read `retention-days` fresh from GSettings on the GTK thread. Falls back
+/// to the schema default (30) when the schema isn't installed (dev env
+/// without `glib-compile-schemas`). `gio::Settings` is `!Send`, so this
+/// helper must run before we hand control to the tokio runtime.
+fn current_retention_days() -> i64 {
+    crate::preferences::settings()
+        .map(|s| crate::preferences::retention_days(&s))
+        .unwrap_or(30)
 }
 
 #[derive(Copy, Clone)]

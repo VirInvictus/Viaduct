@@ -19,6 +19,7 @@ pub const SCHEMA_ID: &str = "org.virinvictus.Viaduct";
 pub mod keys {
     pub const COLOR_SCHEME: &str = "color-scheme";
     pub const NOTIFICATIONS_ON_REFRESH: &str = "notifications-on-refresh";
+    pub const RETENTION_DAYS: &str = "retention-days";
 }
 
 /// Open the user-visible preferences. Returns `None` when the schema isn't
@@ -60,4 +61,12 @@ fn update_style_manager(settings: &gio::Settings, manager: &adw::StyleManager) {
 /// effect on the next refresh without restart.
 pub fn notifications_enabled(settings: &gio::Settings) -> bool {
     settings.boolean(keys::NOTIFICATIONS_ON_REFRESH)
+}
+
+/// Article retention in days, used by the per-update prune in
+/// `LocalAccount::update_feed`. Read fresh on each refresh so dialog
+/// changes take effect on the next cycle without restart. Schema constrains
+/// the value to `[1, 365]`; clamped here regardless to keep callers honest.
+pub fn retention_days(settings: &gio::Settings) -> i64 {
+    settings.int(keys::RETENTION_DAYS).clamp(1, 365) as i64
 }

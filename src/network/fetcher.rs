@@ -212,17 +212,20 @@ pub struct LocalAccountRefresher {
     fetcher: Fetcher,
     account: Arc<LocalAccount>,
     changes_sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
+    retention_days: i64,
 }
 
 impl LocalAccountRefresher {
     pub fn new(
         account: Arc<LocalAccount>,
         changes_sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
+        retention_days: i64,
     ) -> Self {
         Self {
             fetcher: Fetcher::new(),
             account,
             changes_sender,
+            retention_days,
         }
     }
 
@@ -239,9 +242,10 @@ impl LocalAccountRefresher {
             let fetcher = self.fetcher.clone();
             let account = self.account.clone();
             let sender = self.changes_sender.clone();
+            let retention_days = self.retention_days;
 
             futures.push(tokio::spawn(async move {
-                refresh_one_feed(fetcher, account, sender, feed, settings).await;
+                refresh_one_feed(fetcher, account, sender, feed, settings, retention_days).await;
             }));
         }
 
@@ -332,6 +336,7 @@ async fn refresh_one_feed(
     sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
     feed: Feed,
     settings: FeedSettings,
+    retention_days: i64,
 ) {
     let (etag, last_modified) = maybe_expire_conditional_get_info(&feed, &settings);
     let mut new_settings = settings.clone();
@@ -399,7 +404,7 @@ async fn refresh_one_feed(
                         new_settings.icon_url = parsed.icon_url.clone();
                     }
                     match account
-                        .update_feed(feed.id.clone(), parsed.items, true)
+                        .update_feed(feed.id.clone(), parsed.items, true, retention_days)
                         .await
                     {
                         Ok(changes) => {

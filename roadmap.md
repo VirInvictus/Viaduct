@@ -1,6 +1,6 @@
 # viaduct — Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.8.0.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.9.0.
 
 ---
 
@@ -183,11 +183,11 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 - [ ] ~~Background daemon via `xdg-desktop-portal` Background API for cron-based refresh while the UI is closed.~~ *(Moved to Phase 17 — needs `ashpd` + Flatpak manifest plumbing; naturally pairs with the sandbox work there. NNW's mac equivalent (`NSBackgroundActivityScheduler`) has no Linux analog without a portal client.)*
 
 ## Phase 14: The Pruning Engine
-- [ ] Port NNW's `RetentionStyle.feedBased` — local and Inoreader accounts prune against the feed's own content.
-- [ ] Age-based purge: articles older than the configured retention (default 30 days) and not starred are deleted.
-- [ ] Unread status does not protect from pruning (NNW semantics).
-- [ ] Periodic `VACUUM` on startup; coalesced with OPML load so it runs off the main thread.
-- [ ] Cascade: deleting an article row triggers FTS5 row deletion via the existing trigger.
+- [x] Port NNW's `RetentionStyle.feedBased` — local and Inoreader accounts prune against the feed's own content. *(`update_feed` per-feed prune since v0.5.2; startup cleanup chain — `delete_articles_not_in_feeds` + `delete_old_statuses` + `vacuum_databases` — added in v0.9.0 via `LocalAccount::cleanup_at_startup`)*
+- [x] Age-based purge: articles older than the configured retention (default 30 days) and not starred are deleted. *(`UpdateFeed` now plumbs `retention_days` through; `act_refresh` and `refresh_specific_feeds` in `window.rs` read `retention-days` from GSettings via `current_retention_days` and pass it to `LocalAccountRefresher::new`. Schema default 30; range `[1, 365]`.)*
+- [x] Unread status does not protect from pruning (NNW semantics). *(per-update prune in `update_feed` checks `starred` only; `delete_old_statuses` also checks `starred = 0` only)*
+- [x] Periodic `VACUUM` on startup; coalesced with OPML load so it runs off the main thread. *(new `ArticlesDbOp::Vacuum` and `SettingsDbOp::Vacuum`; `LocalAccount::vacuum_databases` fires both serially through the worker channel from the startup cleanup chain — runs on the worker thread, GTK never blocks)*
+- [x] Cascade: deleting an article row triggers FTS5 row deletion via the existing trigger. *(`articles_ad` trigger in `setup_schema` since v0.5.2 — covered by the existing FTS5 invariant)*
 
 ## Phase 15: Inoreader Sync Engine (NetNewsWire Port)
 - [ ] Refactor `LocalAccount` into a generic `Account` structure backed by an `AccountDelegate` trait, strictly mirroring NetNewsWire's abstraction.

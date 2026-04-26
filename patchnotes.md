@@ -1,5 +1,94 @@
 # viaduct — Patch Notes
 
+## v0.9.0 — Phase 14: Pruning Engine
+
+Wires the startup cleanup chain NNW runs in `Account.init`
+(`Account.swift:335–340` → `ArticlesDatabase.cleanupDatabaseAtStartup`) and
+makes the per-update prune cutoff user-tunable through the
+`retention-days` GSetting that's been declared since v0.8.0.
+
+### Three new article-DB ops
+- `ArticlesDbOp::DeleteArticlesNotInFeeds(Vec<feed_id>, …)` — port of
+  `ArticlesTable.deleteArticlesNotInSubscribedToFeedIDs`. Empty input is
+  a no-op (mirrors the FeedSettingsDatabase early-return guard from
+  v0.5.2 — a transient OPML-load failure must never trigger a wholesale
+  article wipe). Existing `articles_ad` and `articles_ad_lookup` triggers
+  cascade FTS5 + authorsLookup cleanup automatically.
+- `ArticlesDbOp::DeleteOldStatuses { retention_days, … }` — port of
+  `ArticlesTable.deleteOldStatuses` (`feedBased` branch):
+  `WHERE date_arrived < ? AND starred = 0 AND article_id NOT IN (SELECT
+  article_id FROM articles)`. Reaps the long tail of orphan status rows
+  after retention has removed the underlying article. Status rows for
+  still-existing articles are left alone so read/starred state survives
+  idempotent feed reloads.
+- `ArticlesDbOp::Vacuum` — runs `VACUUM` on the worker thread.
+  `SettingsDbOp::Vacuum` is the FeedSettings counterpart (NNW vacuums
+  this DB on every init at `FeedSettingsDatabase.swift:67`).
+
+### Configurable retention
+- `update_feed` (and the `UpdateFeed` op variant) now take
+  `retention_days: i64` instead of using the hardcoded `RETENTION_CUTOFF_DAYS = 30`
+  constant. The constant survives renamed as `DEFAULT_RETENTION_DAYS`
+  for callers that don't have a GSettings handle (`mem_check`, the
+  startup status sweep).
+- `LocalAccountRefresher::new(account, sender, retention_days)` plumbs
+  the value through to `refresh_one_feed` → `account.update_feed`.
+- `window.rs::current_retention_days` reads `retention-days` from
+  GSettings on the GTK thread (the type is `!Send` so this has to happen
+  before we hand off to tokio), clamped to `[1, 365]`. Falls back to 30
+  when the schema isn't installed (dev env without `glib-compile-schemas`).
+  Both `act_refresh` and `refresh_specific_feeds` resolve the value
+  fresh per refresh, so flipping the prefs dialog takes effect on the
+  next cycle without restart.
+
+### Startup cleanup chain
+- New `LocalAccount::cleanup_at_startup(retention_days)` runs the four
+  steps NNW chains in `Account.init`'s `DispatchQueue.main.async`:
+  (1) prune `feed_settings` for feeds not in the OPML
+  (the existing `cleanup_orphaned_settings` body, factored into a
+  shared private helper), (2) `delete_articles_not_in_feeds` for those
+  same feeds, (3) `delete_old_statuses` with the supplied cutoff, then
+  (4) `vacuum_databases` on both SQLite files. Each step is independent
+  and non-fatal — a failure logs `tracing::warn` but doesn't abort the
+  chain.
+- `LocalAccount::new` now drives `cleanup_at_startup(DEFAULT_RETENTION_DAYS)`
+  in place of the old `cleanup_orphaned_settings` call. The user's
+  retention pref shapes the next refresh, not startup; using the schema
+  default here matches NNW (whose `deleteOldStatuses` is also
+  hardcoded 30) and avoids a `gio::Settings::new` from inside an async
+  init that may run before the GTK thread exists.
+- `cleanup_orphaned_settings` is preserved for callers that just want
+  the settings sweep without the article work.
+
+### Module additions
+- New `pub const DEFAULT_RETENTION_DAYS: i64 = 30` in
+  `src/database/articles.rs`.
+- New `pub fn retention_days(&Settings) -> i64` in `src/preferences.rs`
+  with `keys::RETENTION_DAYS`.
+- New private helpers `opml_feed_urls` and `opml_feed_ids` in
+  `src/database/accounts.rs` (centralize the standalone+folder walk so
+  cleanup_orphaned_settings and cleanup_at_startup share one
+  implementation).
+
+### Tests
+- 35 passing (was 30). Five new regression tests in
+  `database::articles::tests`:
+  `update_feed_honors_custom_retention_days` (7-day retention sweeps a
+  10-day-old orphan that 30-day retention would keep),
+  `delete_articles_not_in_feeds_evicts_orphans_only`,
+  `delete_articles_not_in_feeds_empty_input_is_noop` (regression mirror
+  of the settings-table early-return),
+  `delete_old_statuses_prunes_orphans_only` (verifies the still-an-article
+  / starred / within-retention exemptions all survive), and
+  `vacuum_succeeds_on_clean_db`.
+
+### Out of scope
+- **`deleteOldArticles` (NNW `syncSystem`-only branch)** is not ported.
+  v1.0 is feedBased; the per-update prune already handles the
+  feed-driven retention NNW assigns to local accounts.
+- **Per-feed retention overrides.** NNW has no UI for this either; the
+  `retention-days` knob is global.
+
 ## v0.8.1 — Read/Unread Completion
 
 Wires the two NNW behaviors that were tracked but not yet hooked up: auto-mark-read on selection, and live sidebar unread badges.

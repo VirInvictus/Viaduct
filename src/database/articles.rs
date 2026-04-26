@@ -14,8 +14,11 @@ use crate::models::{Article, ArticleChanges, ArticleStatus, Attachment, Author, 
 /// NNW's `ArticleStatus.staleIntervalInSeconds` — articles older than ~6 months default to read.
 const STALE_INTERVAL_DAYS: i64 = 180;
 
-/// NNW's `feedBased` retention cutoff — non-starred articles older than 30 days get pruned.
-const RETENTION_CUTOFF_DAYS: i64 = 30;
+/// Default `feedBased` retention used when callers don't override (matches
+/// NNW's hardcoded 30 days in `ArticlesTable.deleteOldStatuses`). The
+/// per-update sweep that runs from the refresher reads `retention-days`
+/// from GSettings instead.
+pub const DEFAULT_RETENTION_DAYS: i64 = 30;
 
 pub enum ArticlesDbOp {
     BatchInsert(Vec<Article>, oneshot::Sender<Result<()>>),
@@ -49,8 +52,24 @@ pub enum ArticlesDbOp {
         feed_id: String,
         items: Vec<ParsedItem>,
         delete_older: bool,
+        retention_days: i64,
         reply: oneshot::Sender<Result<ArticleChanges>>,
     },
+    /// Drop article rows whose `feed_id` is not in the supplied list. Used
+    /// by the startup cleanup to evict articles for unsubscribed feeds.
+    /// Returns the count removed. Empty input is a no-op (matches NNW's
+    /// `deleteArticlesNotInSubscribedToFeedIDs` early return).
+    DeleteArticlesNotInFeeds(Vec<String>, oneshot::Sender<Result<usize>>),
+    /// NNW's `deleteOldStatuses` (feedBased branch): prune statuses for
+    /// articles that no longer exist, are not starred, and arrived before
+    /// the cutoff. Returns the count removed.
+    DeleteOldStatuses {
+        retention_days: i64,
+        reply: oneshot::Sender<Result<usize>>,
+    },
+    /// Run `VACUUM` on the connection. Worker-thread-only; never call from
+    /// inside another transaction.
+    Vacuum(oneshot::Sender<Result<()>>),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -240,10 +259,26 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
             feed_id,
             items,
             delete_older,
+            retention_days,
             reply,
         } => {
-            let res = update_feed(conn, &feed_id, items, delete_older);
+            let res = update_feed(conn, &feed_id, items, delete_older, retention_days);
             let _ = reply.send(res);
+        }
+        ArticlesDbOp::DeleteArticlesNotInFeeds(feed_ids, tx) => {
+            let res = delete_articles_not_in_feeds(conn, &feed_ids);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::DeleteOldStatuses {
+            retention_days,
+            reply,
+        } => {
+            let res = delete_old_statuses(conn, retention_days);
+            let _ = reply.send(res);
+        }
+        ArticlesDbOp::Vacuum(tx) => {
+            let res = vacuum(conn);
+            let _ = tx.send(res);
         }
     }
 }
@@ -609,7 +644,7 @@ fn smart_feed_counts(conn: &mut Connection) -> Result<SmartFeedCounts> {
 /// 1. Map parsed items to `Article`s (computes MD5 article_id from feed_id + unique_id).
 /// 2. Fetch existing articles for the feed.
 /// 3. New = incoming not in DB. Updated = incoming present but content differs.
-/// 4. If `delete_older`: delete existing articles that are (!starred, date_arrived < 30d, no longer in feed).
+/// 4. If `delete_older`: delete existing articles that are (!starred, date_arrived < retention_days, no longer in feed).
 /// 5. Ensure a `statuses` row for every new article. Stale items (>6 months old) default to `read=1`.
 /// 6. Emit `ArticleChanges` for the UI.
 fn update_feed(
@@ -617,6 +652,7 @@ fn update_feed(
     feed_id: &str,
     items: Vec<ParsedItem>,
     delete_older: bool,
+    retention_days: i64,
 ) -> Result<ArticleChanges> {
     if items.is_empty() {
         return Ok(ArticleChanges::default());
@@ -655,7 +691,7 @@ fn update_feed(
     // 4. Determine deletes (only if delete_older=true, NNW's feedBased retention).
     let mut deleted_ids: HashSet<String> = HashSet::new();
     if delete_older {
-        let retention_cutoff = Utc::now() - Duration::days(RETENTION_CUTOFF_DAYS);
+        let retention_cutoff = Utc::now() - Duration::days(retention_days);
         let orphans: Vec<&String> = existing
             .keys()
             .filter(|id| !incoming.contains_key(*id))
@@ -742,6 +778,52 @@ fn update_feed(
     })
 }
 
+/// Port of NNW `ArticlesTable.deleteArticlesNotInSubscribedToFeedIDs`.
+/// Empty input is a no-op (NNW: `if feedIDs.isEmpty { return }`) so a
+/// transient OPML-load failure can't blow away the user's article history.
+/// The `articles_ad` and `articles_ad_lookup` triggers cascade FTS5 +
+/// authorsLookup cleanup automatically.
+fn delete_articles_not_in_feeds(conn: &mut Connection, feed_ids: &[String]) -> Result<usize> {
+    if feed_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = vec!["?"; feed_ids.len()].join(", ");
+    let sql = format!(
+        "DELETE FROM articles WHERE feed_id NOT IN ({})",
+        placeholders
+    );
+    let count = conn.execute(&sql, rusqlite::params_from_iter(feed_ids))?;
+    Ok(count)
+}
+
+/// Port of NNW `ArticlesTable.deleteOldStatuses` (`feedBased` branch):
+///   `DELETE FROM statuses WHERE date_arrived < ? AND starred = 0
+///    AND article_id NOT IN (SELECT article_id FROM articles)`
+/// Status rows are intentionally retained when the article still exists
+/// (so read/starred state survives idempotent feed reloads); this only
+/// reaps the long tail of orphaned status rows after retention has
+/// removed the underlying article.
+fn delete_old_statuses(conn: &mut Connection, retention_days: i64) -> Result<usize> {
+    let cutoff = (Utc::now() - Duration::days(retention_days)).timestamp();
+    let count = conn.execute(
+        "DELETE FROM statuses
+         WHERE date_arrived < ?
+           AND starred = 0
+           AND article_id NOT IN (SELECT article_id FROM articles)",
+        params![cutoff],
+    )?;
+    Ok(count)
+}
+
+/// `VACUUM` reclaims unused pages and rebuilds the file. Must run outside
+/// any open transaction; the worker thread serializes ops so that holds
+/// naturally. Cheap on small DBs, expensive after a large prune — fire
+/// once per startup to amortize.
+fn vacuum(conn: &mut Connection) -> Result<()> {
+    conn.execute_batch("VACUUM")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,6 +870,7 @@ mod tests {
             feed_id,
             vec![item("a", "First", "body1"), item("b", "Second", "body2")],
             false,
+            DEFAULT_RETENTION_DAYS,
         )
         .unwrap();
         assert_eq!(changes.new_articles.len(), 2);
@@ -804,6 +887,7 @@ mod tests {
                 item("c", "Third", "body3"),            // new
             ],
             false,
+            DEFAULT_RETENTION_DAYS,
         )
         .unwrap();
         assert_eq!(changes.new_articles.len(), 1);
@@ -821,6 +905,7 @@ mod tests {
             feed_id,
             vec![item("a", "A", "1"), item("b", "B", "2")],
             false,
+            DEFAULT_RETENTION_DAYS,
         )
         .unwrap();
 
@@ -829,14 +914,49 @@ mod tests {
         conn.execute(
             "UPDATE statuses SET date_arrived = ? WHERE article_id = ?",
             params![
-                (Utc::now() - Duration::days(RETENTION_CUTOFF_DAYS + 5)).timestamp(),
+                (Utc::now() - Duration::days(DEFAULT_RETENTION_DAYS + 5)).timestamp(),
                 a_id,
             ],
         )
         .unwrap();
 
         // Feed now only contains `b` — `a` should be deleted.
-        let changes = update_feed(&mut conn, feed_id, vec![item("b", "B", "2")], true).unwrap();
+        let changes = update_feed(
+            &mut conn,
+            feed_id,
+            vec![item("b", "B", "2")],
+            true,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+        assert!(changes.deleted_article_ids.contains(&a_id));
+    }
+
+    #[test]
+    fn update_feed_honors_custom_retention_days() {
+        // Regression for the GSettings-driven knob: a 7-day retention
+        // should sweep an article whose status row arrived 10 days ago,
+        // even though the default 30-day retention would keep it.
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![item("a", "A", "1"), item("b", "B", "2")],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        let a_id = article_id_for(feed_id, "a");
+        conn.execute(
+            "UPDATE statuses SET date_arrived = ? WHERE article_id = ?",
+            params![(Utc::now() - Duration::days(10)).timestamp(), a_id],
+        )
+        .unwrap();
+
+        let changes = update_feed(&mut conn, feed_id, vec![item("b", "B", "2")], true, 7).unwrap();
         assert!(changes.deleted_article_ids.contains(&a_id));
     }
 
@@ -859,8 +979,22 @@ mod tests {
         );
         item_b.content_text = item_b.content_html.clone();
 
-        update_feed(&mut conn, feed_a, vec![item_a], false).unwrap();
-        update_feed(&mut conn, feed_b, vec![item_b], false).unwrap();
+        update_feed(
+            &mut conn,
+            feed_a,
+            vec![item_a],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+        update_feed(
+            &mut conn,
+            feed_b,
+            vec![item_b],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
 
         let results = search_with_snippets(&mut conn, "memory", None).unwrap();
         assert_eq!(results.len(), 2);
@@ -884,7 +1018,7 @@ mod tests {
         let mut old = item("old", "Old", "body");
         old.date_published = Some(Utc::now() - Duration::days(STALE_INTERVAL_DAYS + 1));
 
-        update_feed(&mut conn, feed_id, vec![old], false).unwrap();
+        update_feed(&mut conn, feed_id, vec![old], false, DEFAULT_RETENTION_DAYS).unwrap();
 
         let old_id = article_id_for(feed_id, "old");
         let read: i64 = conn
@@ -895,5 +1029,134 @@ mod tests {
             )
             .unwrap();
         assert_eq!(read, 1);
+    }
+
+    #[test]
+    fn delete_articles_not_in_feeds_evicts_orphans_only() {
+        let mut conn = in_memory();
+        let feed_a = "https://a.example/feed";
+        let feed_b = "https://b.example/feed";
+
+        update_feed(
+            &mut conn,
+            feed_a,
+            vec![item("1", "A1", "x")],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+        update_feed(
+            &mut conn,
+            feed_b,
+            vec![item("2", "B1", "y")],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        // User unsubscribed from feed_b. feed_a survives.
+        let removed = delete_articles_not_in_feeds(&mut conn, &[feed_a.to_string()]).unwrap();
+        assert_eq!(removed, 1);
+
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM articles", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 1);
+
+        let remaining_feed: String = conn
+            .query_row("SELECT feed_id FROM articles", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining_feed, feed_a);
+    }
+
+    #[test]
+    fn delete_articles_not_in_feeds_empty_input_is_noop() {
+        // Regression mirror of the FeedSettingsDatabase early-return: a
+        // transient OPML failure (yielding zero subscribed feed IDs) must
+        // not trigger a wholesale article wipe.
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![item("a", "A", "x")],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        let removed = delete_articles_not_in_feeds(&mut conn, &[]).unwrap();
+        assert_eq!(removed, 0);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM articles", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn delete_old_statuses_prunes_orphans_only() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![
+                item("live", "Live", "x"),
+                item("orphan_recent", "Recent", "y"),
+                item("orphan_old", "Old", "z"),
+                item("orphan_starred", "Star", "s"),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        // Mark `orphan_starred` starred, backdate two of the three orphans, and
+        // drop the article rows so their statuses become true orphans.
+        let starred_id = article_id_for(feed_id, "orphan_starred");
+        conn.execute(
+            "UPDATE statuses SET starred = 1 WHERE article_id = ?",
+            [&starred_id],
+        )
+        .unwrap();
+
+        let old_id = article_id_for(feed_id, "orphan_old");
+        let starred_id_for_back = starred_id.clone();
+        for id in [&old_id, &starred_id_for_back] {
+            conn.execute(
+                "UPDATE statuses SET date_arrived = ? WHERE article_id = ?",
+                params![(Utc::now() - Duration::days(60)).timestamp(), id],
+            )
+            .unwrap();
+        }
+
+        for id in ["orphan_recent", "orphan_old", "orphan_starred"] {
+            let aid = article_id_for(feed_id, id);
+            conn.execute("DELETE FROM articles WHERE article_id = ?", [&aid])
+                .unwrap();
+        }
+
+        let removed = delete_old_statuses(&mut conn, DEFAULT_RETENTION_DAYS).unwrap();
+        assert_eq!(removed, 1, "only orphan_old should be pruned");
+
+        // `live` (article still exists), `orphan_recent` (within retention),
+        // and `orphan_starred` (starred=1) all survive.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM statuses", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn vacuum_succeeds_on_clean_db() {
+        let mut conn = in_memory();
+        // No transaction open; vacuum should run without error and leave
+        // the schema intact.
+        vacuum(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM articles", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::database::articles::{ArticlesDbOp, SmartFeedCounts};
+use crate::database::articles::{ArticlesDbOp, DEFAULT_RETENTION_DAYS, SmartFeedCounts};
 use crate::database::opml::{
     OpmlFile, OpmlWriter, merge_opml, normalize_opml, parse_opml, serialize_account_opml,
 };
@@ -28,8 +28,15 @@ impl LocalAccount {
 
         let account = Self { db_tx, opml_writer };
 
-        // Perform startup cleanup
-        account.cleanup_orphaned_settings().await?;
+        // Port of NNW `Account.init` startup cleanup chain
+        // (`Account.swift:335-340`): prune settings for unsubscribed feeds,
+        // drop articles for those same feeds, sweep stale status orphans,
+        // then vacuum both databases. Runs on the worker thread so the GTK
+        // main loop never blocks. Errors are logged but non-fatal —
+        // cleanup is best-effort.
+        if let Err(e) = account.cleanup_at_startup(DEFAULT_RETENTION_DAYS).await {
+            tracing::warn!(?e, "startup cleanup failed");
+        }
 
         Ok(account)
     }
@@ -181,11 +188,14 @@ impl LocalAccount {
 
     /// Update a feed with freshly parsed items. Diffs against DB state and returns
     /// new/updated/deleted deltas for UI coalescing (port of NNW `updateAsync`).
+    /// `retention_days` controls the orphaned-article sweep when `delete_older`
+    /// is true; pass `DEFAULT_RETENTION_DAYS` for NNW's hardcoded 30-day window.
     pub async fn update_feed(
         &self,
         feed_id: String,
         items: Vec<ParsedItem>,
         delete_older: bool,
+        retention_days: i64,
     ) -> Result<ArticleChanges> {
         let (reply, rx) = oneshot::channel();
         self.db_tx
@@ -193,6 +203,7 @@ impl LocalAccount {
                 feed_id,
                 items,
                 delete_older,
+                retention_days,
                 reply,
             }))
             .await
@@ -261,32 +272,150 @@ impl LocalAccount {
 
     pub async fn cleanup_orphaned_settings(&self) -> Result<()> {
         let opml = self.load_opml().await?;
-        let mut valid_urls = Vec::new();
+        let valid_urls: Vec<String> = opml_feed_urls(&opml);
 
-        for feed in &opml.standalone_feeds {
-            valid_urls.push(feed.url.clone());
+        let removed = self.delete_settings_for_feeds_not_in(valid_urls).await?;
+        if removed > 0 {
+            tracing::info!("Cleaned up {} orphaned feed settings", removed);
         }
-        for folder in &opml.folders {
-            for feed in &folder.feeds {
-                valid_urls.push(feed.url.clone());
-            }
+        Ok(())
+    }
+
+    /// Phase 14 startup cleanup. Mirrors NNW
+    /// `ArticlesDatabase.cleanupDatabaseAtStartup` plus the
+    /// `FeedSettingsDatabase` vacuum: prune settings + articles for feeds
+    /// the user no longer subscribes to, sweep stale orphan statuses, then
+    /// VACUUM both databases. All four ops are independent and non-fatal —
+    /// each logs its own failure rather than aborting the chain.
+    pub async fn cleanup_at_startup(&self, retention_days: i64) -> Result<()> {
+        let opml = self.load_opml().await?;
+        let valid_urls = opml_feed_urls(&opml);
+        let valid_ids = opml_feed_ids(&opml);
+
+        let removed_settings = self
+            .delete_settings_for_feeds_not_in(valid_urls)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(?e, "delete_settings_for_feeds_not_in failed");
+                0
+            });
+        if removed_settings > 0 {
+            tracing::info!("Cleaned up {} orphaned feed settings", removed_settings);
         }
 
-        let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Settings(Box::new(
-                SettingsDbOp::DeleteSettingsForFeedsNotIn(valid_urls, tx),
-            )))
+        let removed_articles = self
+            .delete_articles_not_in_feeds(valid_ids)
             .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
-        let removed_count = rx
-            .await
-            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))?;
+            .unwrap_or_else(|e| {
+                tracing::warn!(?e, "delete_articles_not_in_feeds failed");
+                0
+            });
+        if removed_articles > 0 {
+            tracing::info!(
+                "Cleaned up {} articles for unsubscribed feeds",
+                removed_articles
+            );
+        }
 
-        if removed_count > 0 {
-            tracing::info!("Cleaned up {} orphaned feed settings", removed_count);
+        let removed_statuses = self
+            .delete_old_statuses(retention_days)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(?e, "delete_old_statuses failed");
+                0
+            });
+        if removed_statuses > 0 {
+            tracing::info!("Cleaned up {} orphan status rows", removed_statuses);
+        }
+
+        if let Err(e) = self.vacuum_databases().await {
+            tracing::warn!(?e, "vacuum_databases failed");
         }
 
         Ok(())
     }
+
+    async fn delete_settings_for_feeds_not_in(&self, feed_urls: Vec<String>) -> Result<usize> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Settings(Box::new(
+                SettingsDbOp::DeleteSettingsForFeedsNotIn(feed_urls, tx),
+            )))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    async fn delete_articles_not_in_feeds(&self, feed_ids: Vec<String>) -> Result<usize> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::DeleteArticlesNotInFeeds(
+                feed_ids, tx,
+            )))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    async fn delete_old_statuses(&self, retention_days: i64) -> Result<usize> {
+        let (reply, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::DeleteOldStatuses {
+                retention_days,
+                reply,
+            }))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// VACUUM both SQLite files. The two ops fire serially through the same
+    /// worker channel, so they don't contend with each other or with any
+    /// other write.
+    pub async fn vacuum_databases(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::Vacuum(tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))?;
+
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Settings(Box::new(SettingsDbOp::Vacuum(tx))))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+}
+
+fn opml_feed_urls(opml: &OpmlFile) -> Vec<String> {
+    let mut out = Vec::new();
+    for feed in &opml.standalone_feeds {
+        out.push(feed.url.clone());
+    }
+    for folder in &opml.folders {
+        for feed in &folder.feeds {
+            out.push(feed.url.clone());
+        }
+    }
+    out
+}
+
+fn opml_feed_ids(opml: &OpmlFile) -> Vec<String> {
+    let mut out = Vec::new();
+    for feed in &opml.standalone_feeds {
+        out.push(feed.id.clone());
+    }
+    for folder in &opml.folders {
+        for feed in &folder.feeds {
+            out.push(feed.id.clone());
+        }
+    }
+    out
 }

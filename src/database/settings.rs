@@ -13,6 +13,9 @@ pub enum SettingsDbOp {
     Fetch(String, oneshot::Sender<Result<Option<FeedSettings>>>),
     Upsert(Box<FeedSettings>, oneshot::Sender<Result<()>>),
     DeleteSettingsForFeedsNotIn(Vec<String>, oneshot::Sender<Result<usize>>),
+    /// Run `VACUUM`. NNW vacuums the FeedSettingsDatabase on every init
+    /// (`FeedSettingsDatabase.swift:67`); we do the same once per startup.
+    Vacuum(oneshot::Sender<Result<()>>),
 }
 
 pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
@@ -58,7 +61,16 @@ pub(crate) fn handle_op(conn: &mut Connection, op: SettingsDbOp) {
             let res = delete_settings_for_feeds_not_in(conn, feed_urls);
             let _ = tx.send(res);
         }
+        SettingsDbOp::Vacuum(tx) => {
+            let res = vacuum(conn);
+            let _ = tx.send(res);
+        }
     }
+}
+
+fn vacuum(conn: &mut Connection) -> Result<()> {
+    conn.execute_batch("VACUUM")?;
+    Ok(())
 }
 
 fn fetch(conn: &mut Connection, feed_id: &str) -> Result<Option<FeedSettings>> {
