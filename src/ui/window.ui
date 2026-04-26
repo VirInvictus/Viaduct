@@ -18,6 +18,10 @@ Licensed under the MIT License. See LICENSE in the project root for details.
     </section>
     <section>
       <item>
+        <attribute name="label" translatable="yes">Preferences</attribute>
+        <attribute name="action">win.preferences</attribute>
+      </item>
+      <item>
         <attribute name="label" translatable="yes">Keyboard Shortcuts</attribute>
         <attribute name="action">win.shortcuts</attribute>
       </item>

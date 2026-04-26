@@ -14,6 +14,12 @@ use viaduct::{database, paths, ui};
 fn main() -> glib::ExitCode {
     init_tracing();
 
+    // Point GSettings at our compiled schema dir before any gio call. Dev
+    // builds rely on `build.rs` having run `glib-compile-schemas data/`;
+    // installed builds (Flatpak in Phase 17) ignore this because the schema
+    // ships in the runtime's prefix.
+    ensure_schema_dir();
+
     // Install the library-wide Tokio runtime. Multi-thread flavor because
     // the refresher fans out per-feed fetches via tokio::spawn.
     let rt = tokio::runtime::Runtime::new().expect("Unable to create Tokio runtime");
@@ -52,7 +58,28 @@ fn init_tracing() {
     fmt().with_env_filter(filter).init();
 }
 
+/// Set `GSETTINGS_SCHEMA_DIR` to the source-tree `data/` (where `build.rs`
+/// dropped `gschemas.compiled`) so `gio::Settings::new` finds our schema in
+/// dev builds. Skipped if the user has already exported the variable, or if
+/// we're running from an installed prefix where the system schema dir wins.
+fn ensure_schema_dir() {
+    if std::env::var_os("GSETTINGS_SCHEMA_DIR").is_some() {
+        return;
+    }
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let schema_dir = std::path::Path::new(manifest_dir).join("data");
+    if schema_dir.join("gschemas.compiled").exists() {
+        // SAFETY: called before tokio runtime / gio init / threads spawn.
+        unsafe {
+            std::env::set_var("GSETTINGS_SCHEMA_DIR", &schema_dir);
+        }
+    }
+}
+
 fn build_ui(app: &adw::Application, account: Arc<LocalAccount>) {
+    if let Some(settings) = viaduct::preferences::settings() {
+        viaduct::preferences::apply_color_scheme(&settings);
+    }
     let window = ui::window::ViaductWindow::new(app, account);
     window.present();
 }

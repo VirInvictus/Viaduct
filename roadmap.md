@@ -1,6 +1,6 @@
 # viaduct — Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.7.1.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.8.0.
 
 ---
 
@@ -177,9 +177,9 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 - [x] Failure modes: malformed OPML → toast + `tracing::warn` (`parse_opml` errors bubble through `LocalAccount::import_opml`). File-dialog dismissal is silent.
 
 ## Phase 13: System Integration & Theming
-- [ ] `libadwaita` system color scheme follow (Dark / Light / Auto).
-- [ ] `libnotify` for new article counts per refresh cycle (opt-in per feed via `newArticleNotificationsEnabled`).
-- [ ] `GSettings` schema for user prefs (refresh interval, retention days, font overrides).
+- [x] `libadwaita` system color scheme follow (Dark / Light / Auto). *(`adw::StyleManager` driven by the `color-scheme` GSetting; user override via Preferences dropdown — `apply_color_scheme` in `src/preferences.rs`)*
+- [x] Desktop notifications for new article counts per refresh cycle. *(`gio::Notification` via `Application::send_notification`, gated by the `notifications-on-refresh` GSetting; tally happens in `run_refresh_with_tally` then dispatches via `dispatch_refresh_notification` on the GTK thread. NNW's per-feed `newArticleNotificationsEnabled` toggle deferred — needs a feed-inspector pane we don't have yet, so v0.8.0 ships a single global toggle.)*
+- [x] `GSettings` schema for user prefs. *(`data/org.virinvictus.Viaduct.gschema.xml` declares `color-scheme`, `notifications-on-refresh`, `refresh-interval-minutes`, `retention-days`, `font-monospace`, `font-serif`. v0.8.0 wires the first two into behavior; the remaining three are reserved for the phases that introduce their consumers (Phase 14 retention, future cron Phase 17, future font-override pane).)*
 - [ ] ~~Background daemon via `xdg-desktop-portal` Background API for cron-based refresh while the UI is closed.~~ *(Moved to Phase 17 — needs `ashpd` + Flatpak manifest plumbing; naturally pairs with the sandbox work there. NNW's mac equivalent (`NSBackgroundActivityScheduler`) has no Linux analog without a portal client.)*
 
 ## Phase 14: The Pruning Engine

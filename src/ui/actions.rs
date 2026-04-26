@@ -50,6 +50,7 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     register(window, "focus-search", |w| w.act_focus_search());
     register(window, "toggle-sidebar", |w| w.act_toggle_sidebar());
     register(window, "shortcuts", |w| w.act_shortcuts());
+    register(window, "preferences", |w| w.act_preferences());
 
     // OPML import/export — menu only, no accelerators (NNW does the same).
     register(window, "import-opml", |w| w.act_import_opml());

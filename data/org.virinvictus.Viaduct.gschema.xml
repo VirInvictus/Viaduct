@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <enum id="org.virinvictus.Viaduct.ColorScheme">
+    <value nick="default" value="0"/>
+    <value nick="force-light" value="1"/>
+    <value nick="force-dark" value="2"/>
+  </enum>
+
+  <schema id="org.virinvictus.Viaduct" path="/org/virinvictus/Viaduct/">
+    <key name="color-scheme" enum="org.virinvictus.Viaduct.ColorScheme">
+      <default>"default"</default>
+      <summary>Color scheme</summary>
+      <description>
+        Whether viaduct follows the system color scheme (default), forces a
+        light theme, or forces a dark theme. Maps to AdwColorScheme.
+      </description>
+    </key>
+
+    <key name="notifications-on-refresh" type="b">
+      <default>false</default>
+      <summary>Show notification when new articles arrive</summary>
+      <description>
+        When enabled, viaduct emits a desktop notification summarizing the
+        number of new articles received during each refresh cycle.
+      </description>
+    </key>
+
+    <key name="refresh-interval-minutes" type="i">
+      <default>60</default>
+      <range min="10" max="1440"/>
+      <summary>Background refresh interval in minutes</summary>
+      <description>
+        How often viaduct fetches new articles in the background. Wired in a
+        future phase that adds the xdg-desktop-portal Background daemon.
+      </description>
+    </key>
+
+    <key name="retention-days" type="i">
+      <default>30</default>
+      <range min="1" max="365"/>
+      <summary>Article retention in days</summary>
+      <description>
+        Articles older than this are pruned from the database (starred
+        articles are exempt). Wired by the Phase 14 pruning engine.
+      </description>
+    </key>
+
+    <key name="font-monospace" type="s">
+      <default>""</default>
+      <summary>Monospace font override</summary>
+      <description>
+        Optional font family name override for monospace article content.
+        Empty string means "follow system default".
+      </description>
+    </key>
+
+    <key name="font-serif" type="s">
+      <default>""</default>
+      <summary>Serif font override</summary>
+      <description>
+        Optional font family name override for serif article content. Empty
+        string means "follow system default".
+      </description>
+    </key>
+  </schema>
+</schemalist>

@@ -26,3 +26,7 @@ target
 
 /target
 .netnewswire/
+
+# Compiled GSettings schemas — produced by build.rs; the source XML is
+# checked in.
+data/gschemas.compiled

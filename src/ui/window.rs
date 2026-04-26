@@ -798,14 +798,19 @@ impl ViaductWindow {
 
     /// Drive `LocalAccountRefresher::refresh_feeds` for every feed in the
     /// current OPML. Refresher needs a tokio runtime context, so we dispatch
-    /// on the global runtime (not the GLib main loop).
+    /// on the global runtime (not the GLib main loop). Tallies `new_articles`
+    /// across the whole cycle and routes the count back to the GTK thread for
+    /// an optional desktop notification (see `dispatch_refresh_notification`).
     pub(crate) fn act_refresh(&self) {
         let account = self.account();
+        let window_weak = self.downgrade();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<usize>();
         crate::spawn_on_runtime(async move {
             let opml = match account.load_opml().await {
                 Ok(o) => o,
                 Err(e) => {
                     tracing::warn!(?e, "refresh: OPML load failed");
+                    let _ = done_tx.send(0);
                     return;
                 }
             };
@@ -815,45 +820,46 @@ impl ViaductWindow {
                 feeds.extend(folder.feeds.iter().cloned());
             }
             if feeds.is_empty() {
+                let _ = done_tx.send(0);
                 return;
             }
-            // Pair each feed with its persisted FeedSettings (or a blank one
-            // if the feed hasn't been seen before). Refresher uses settings
-            // for conditional-GET info, content hash, last_check_date etc.
-            let mut paired: Vec<(crate::models::Feed, crate::models::FeedSettings)> =
-                Vec::with_capacity(feeds.len());
-            for feed in feeds {
-                let settings = account
-                    .fetch_feed_settings(feed.id.clone())
-                    .await
-                    .unwrap_or(None)
-                    .unwrap_or_else(|| crate::models::FeedSettings {
-                        feed_id: feed.id.clone(),
-                        feed_url: feed.url.clone(),
-                        home_page_url: feed.home_page_url.clone(),
-                        icon_url: None,
-                        favicon_url: None,
-                        edited_name: feed.edited_name.clone(),
-                        content_hash: None,
-                        last_modified: None,
-                        etag: None,
-                        date_created: None,
-                        max_age: None,
-                        authors_json: None,
-                        folder_relationship_json: None,
-                        last_check_date: None,
-                        reader_view_always_enabled: false,
-                    });
-                paired.push((feed, settings));
-            }
-            // ArticleChanges sender: for now drain and drop on the receiver
-            // side — timeline repopulation already happens on sidebar
-            // selection; we'll wire change-driven UI updates in a later pass.
-            let (changes_tx, mut changes_rx) = tokio::sync::mpsc::unbounded_channel();
-            let refresher = crate::network::LocalAccountRefresher::new(account, changes_tx);
-            tokio::spawn(async move { while changes_rx.recv().await.is_some() {} });
-            refresher.refresh_feeds(paired).await;
+            let paired = pair_feeds_with_settings(&account, feeds).await;
+            let total = run_refresh_with_tally(account, paired).await;
+            let _ = done_tx.send(total);
         });
+        glib::spawn_future_local(async move {
+            let Ok(total) = done_rx.await else { return };
+            if let Some(window) = window_weak.upgrade() {
+                window.dispatch_refresh_notification(total);
+            }
+        });
+    }
+
+    /// Show a desktop notification summarizing a refresh cycle, gated by the
+    /// `notifications-on-refresh` GSetting. Silent when total == 0 or the
+    /// pref is off.
+    fn dispatch_refresh_notification(&self, new_total: usize) {
+        if new_total == 0 {
+            return;
+        }
+        let Some(settings) = crate::preferences::settings() else {
+            return;
+        };
+        if !crate::preferences::notifications_enabled(&settings) {
+            return;
+        }
+        let Some(app) = self.application() else {
+            return;
+        };
+        let body = if new_total == 1 {
+            "1 new article".to_string()
+        } else {
+            format!("{new_total} new articles")
+        };
+        let notif = gio::Notification::new("viaduct");
+        notif.set_body(Some(&body));
+        notif.set_priority(gio::NotificationPriority::Normal);
+        app.send_notification(Some("viaduct.refresh"), &notif);
     }
 
     pub(crate) fn act_focus_search(&self) {
@@ -880,6 +886,10 @@ impl ViaductWindow {
         };
         shortcuts_window.set_transient_for(Some(self));
         shortcuts_window.present();
+    }
+
+    pub(crate) fn act_preferences(&self) {
+        crate::ui::preferences_dialog::present(self);
     }
 
     /// Import OPML — port of NNW `ImportOPMLWindowController.importOPML`.
@@ -1130,38 +1140,78 @@ impl ViaductWindow {
 
     fn refresh_specific_feeds(&self, feeds: Vec<crate::models::Feed>) {
         let account = self.account();
+        let window_weak = self.downgrade();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<usize>();
         crate::spawn_on_runtime(async move {
-            let mut paired = Vec::with_capacity(feeds.len());
-            for feed in feeds {
-                let settings = account
-                    .fetch_feed_settings(feed.id.clone())
-                    .await
-                    .unwrap_or(None)
-                    .unwrap_or_else(|| crate::models::FeedSettings {
-                        feed_id: feed.id.clone(),
-                        feed_url: feed.url.clone(),
-                        home_page_url: feed.home_page_url.clone(),
-                        icon_url: None,
-                        favicon_url: None,
-                        edited_name: feed.edited_name.clone(),
-                        content_hash: None,
-                        last_modified: None,
-                        etag: None,
-                        date_created: None,
-                        max_age: None,
-                        authors_json: None,
-                        folder_relationship_json: None,
-                        last_check_date: None,
-                        reader_view_always_enabled: false,
-                    });
-                paired.push((feed, settings));
+            let paired = pair_feeds_with_settings(&account, feeds).await;
+            let total = run_refresh_with_tally(account, paired).await;
+            let _ = done_tx.send(total);
+        });
+        glib::spawn_future_local(async move {
+            let Ok(total) = done_rx.await else { return };
+            if let Some(window) = window_weak.upgrade() {
+                window.dispatch_refresh_notification(total);
             }
-            let (changes_tx, mut changes_rx) = tokio::sync::mpsc::unbounded_channel();
-            let refresher = crate::network::LocalAccountRefresher::new(account, changes_tx);
-            tokio::spawn(async move { while changes_rx.recv().await.is_some() {} });
-            refresher.refresh_feeds(paired).await;
         });
     }
+}
+
+/// Pair each feed with its persisted FeedSettings (or a blank one if the
+/// feed hasn't been seen before). The refresher uses settings for
+/// conditional-GET info, content hash, last_check_date, etc.
+async fn pair_feeds_with_settings(
+    account: &Arc<LocalAccount>,
+    feeds: Vec<crate::models::Feed>,
+) -> Vec<(crate::models::Feed, crate::models::FeedSettings)> {
+    let mut paired = Vec::with_capacity(feeds.len());
+    for feed in feeds {
+        let settings = account
+            .fetch_feed_settings(feed.id.clone())
+            .await
+            .unwrap_or(None)
+            .unwrap_or_else(|| crate::models::FeedSettings {
+                feed_id: feed.id.clone(),
+                feed_url: feed.url.clone(),
+                home_page_url: feed.home_page_url.clone(),
+                icon_url: None,
+                favicon_url: None,
+                edited_name: feed.edited_name.clone(),
+                content_hash: None,
+                last_modified: None,
+                etag: None,
+                date_created: None,
+                max_age: None,
+                authors_json: None,
+                folder_relationship_json: None,
+                last_check_date: None,
+                reader_view_always_enabled: false,
+            });
+        paired.push((feed, settings));
+    }
+    paired
+}
+
+/// Run a refresh cycle and return the total `new_articles` count across all
+/// `ArticleChanges` batches the refresher emitted. Drops the refresher
+/// before awaiting the drain task so all `changes_tx` clones close and the
+/// drain returns naturally.
+async fn run_refresh_with_tally(
+    account: Arc<LocalAccount>,
+    paired: Vec<(crate::models::Feed, crate::models::FeedSettings)>,
+) -> usize {
+    let (changes_tx, mut changes_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::models::ArticleChanges>();
+    let drain = tokio::spawn(async move {
+        let mut total: usize = 0;
+        while let Some(changes) = changes_rx.recv().await {
+            total = total.saturating_add(changes.new_articles.len());
+        }
+        total
+    });
+    let refresher = crate::network::LocalAccountRefresher::new(account, changes_tx);
+    refresher.refresh_feeds(paired).await;
+    drop(refresher);
+    drain.await.unwrap_or(0)
 }
 
 #[derive(Copy, Clone)]

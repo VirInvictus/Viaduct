@@ -13,6 +13,7 @@ pub mod models;
 pub mod network;
 pub mod parser;
 pub mod paths;
+pub mod preferences;
 pub mod ui;
 
 use std::sync::OnceLock;

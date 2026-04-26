@@ -1,5 +1,42 @@
 # viaduct — Patch Notes
 
+## v0.8.0 — Phase 13: System Integration & Theming
+
+Three of four Phase 13 sub-items land in this release. The fourth (xdg-desktop-portal Background daemon) moves to Phase 17 because it shares plumbing with the Flatpak manifest work.
+
+### GSettings schema
+- New `data/org.virinvictus.Viaduct.gschema.xml`. Declares an enum (`ColorScheme`: default / force-light / force-dark) and six keys: `color-scheme`, `notifications-on-refresh`, `refresh-interval-minutes` (10-1440), `retention-days` (1-365), `font-monospace`, `font-serif`. v0.8.0 wires the first two into behavior; the rest are reserved for the phases that introduce their consumers.
+- `build.rs` runs `glib-compile-schemas data/` on cargo build so dev runs find the compiled schema. Failures emit `cargo:warning` and the runtime falls back to defaults — CI runners without GLib dev tools still produce a binary.
+- `main.rs::ensure_schema_dir` exports `GSETTINGS_SCHEMA_DIR=$CARGO_MANIFEST_DIR/data` before any gio call when `gschemas.compiled` exists there. Production Flatpak builds (Phase 17) install the schema in the runtime prefix and ignore this hook.
+- `src/preferences.rs` wraps the schema: `settings()` returns `Option<gio::Settings>` (None when the schema isn't installed), `apply_color_scheme(&settings)` sets `adw::StyleManager` and connects to `notify::color-scheme` for live flips, `notifications_enabled(&settings)` reads the toggle on each call.
+
+### Color scheme follow
+- On `app.connect_activate`, `build_ui` calls `viaduct::preferences::apply_color_scheme` so the global `AdwStyleManager` either follows the system (default), forces light, or forces dark per the GSetting. Port: NNW `AppearancePreferencesView` writing `NSApp.appearance` — translated to libadwaita's color-scheme primitive.
+
+### Refresh notifications
+- Refactored both `act_refresh` (full OPML refresh) and `refresh_specific_feeds` (post-import) to route through two new helpers: `pair_feeds_with_settings` (lifts the FeedSettings-or-blank logic out of duplicated bodies) and `run_refresh_with_tally` (runs the refresher, drains `ArticleChanges` into a `usize` count of new articles, drops the refresher to close the channel cleanly, awaits the drain task).
+- Result is piped through a `tokio::sync::oneshot::channel::<usize>` back to a `glib::spawn_future_local` on the GTK thread, which calls `dispatch_refresh_notification`. That method gates on the GSetting and `application()`, builds a `gio::Notification` titled "viaduct" with body "N new articles", sends it via `Application::send_notification(Some("viaduct.refresh"), …)`. The static notification id replaces in-place per refresh cycle so back-to-back refreshes don't pile up notifications. Sandbox-friendly via `org.freedesktop.portal.Notification` under Flatpak.
+- NNW deviation logged: NNW's `newArticleNotificationsEnabled` is per-feed (set via the Inspector pane). We don't have an inspector yet, so v0.8.0 ships a single global toggle. The per-feed gate is tracked as a follow-up under the future inspector phase; once it lands, the global toggle becomes the AND-gate atop per-feed.
+
+### Preferences dialog
+- New `src/ui/preferences_dialog.rs::present(parent)`. `AdwPreferencesDialog` with a single "General" page containing two `AdwPreferencesGroup`s: Appearance (color-scheme `AdwComboRow`) and Notifications (`AdwSwitchRow` bound bidirectionally via `gio::Settings::bind`). External flips (e.g. `dconf-editor`, terminal `gsettings set`) sync back to the dropdown via `connect_changed`. When the schema isn't installed (dev-only failure mode), the dialog renders an explanatory inert row instead of crashing.
+- Primary menu (`window.ui::primary_menu`) gained a "Preferences" entry above "Keyboard Shortcuts". `actions.rs` registers `win.preferences` (no accelerator); `window.rs::act_preferences` calls into the dialog module.
+
+### Module additions
+- `src/preferences.rs` (library-level GSettings wrapper).
+- `src/ui/preferences_dialog.rs` (the dialog).
+- `data/org.virinvictus.Viaduct.gschema.xml` (the schema).
+- `build.rs` (compile schemas at build time).
+- `.gitignore` ignores `data/gschemas.compiled` (build artifact; source XML is checked in).
+
+### Tests
+- 30 passing — no new tests; Phase 13 is GTK-side and GSettings-side, exercised through integration only.
+
+### Deferred / scope notes
+- **Background daemon** moved from Phase 13 to Phase 17. Rationale: it needs `ashpd` (xdg-portal client) and pairs naturally with the Flatpak manifest's `org.freedesktop.portal.Background` entry. Roadmap updated.
+- **Per-feed notification toggle** (NNW's `newArticleNotificationsEnabled`) deferred until a feed-inspector pane exists; v0.8.0 has a single global toggle. The schema field was deliberately not added to `FeedSettings` so we don't carry dead state until there's UI to flip it.
+- **Refresh-interval / retention-days / font-override** keys exist in the schema but are not yet wired. They'll come online with Phase 14 (retention / pruning engine) and Phase 17 (cron daemon) without further schema churn.
+
 ## v0.7.1 — Timeline Polish
 
 Three deferred polish items that surfaced during Phase 12 import testing. No new dependencies; no NetNewsWire deviation.
