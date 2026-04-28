@@ -267,6 +267,58 @@ pub fn merge_opml(existing: &OpmlFile, incoming: OpmlFile) -> (OpmlFile, Vec<Fee
     (merged, added)
 }
 
+pub fn sync_inoreader_account(
+    _existing: &OpmlFile,
+    subscriptions: Vec<crate::network::inoreader::ReaderAPISubscription>,
+    tags: Vec<crate::network::inoreader::ReaderAPITag>,
+) -> OpmlFile {
+    let mut folders = Vec::new();
+    let mut standalone_feeds = Vec::new();
+    let mut feed_map = std::collections::HashMap::new();
+
+    // 1. Process tags into folders
+    for tag in tags {
+        // Inoreader folders have IDs like "user/123/label/FolderName"
+        if let Some(name) = tag.id.split('/').last() {
+            if !tag.id.contains("/state/") {
+                folders.push(Folder {
+                    name: name.to_string(),
+                    feeds: Vec::new(),
+                });
+            }
+        }
+    }
+
+    // 2. Process subscriptions into feeds and assign to folders
+    for sub in subscriptions {
+        let feed = Feed {
+            id: sub.feed_id.clone(),
+            url: sub.url.clone(),
+            name: Some(sub.title.clone()),
+            edited_name: None,
+            home_page_url: sub.html_url.clone(),
+        };
+        feed_map.insert(sub.feed_id.clone(), feed.clone());
+
+        if sub.categories.is_empty() {
+            standalone_feeds.push(feed);
+        } else {
+            for category in sub.categories {
+                if let Some(folder_name) = category.id.split('/').last() {
+                    if let Some(folder) = folders.iter_mut().find(|f| f.name == folder_name) {
+                        folder.feeds.push(feed.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    OpmlFile {
+        folders,
+        standalone_feeds,
+    }
+}
+
 /// Hand-rolled OPML writer matching NNW's `OPMLExporter.OPMLString` byte
 /// shape. The on-disk save path uses the serde-driven `serialize_opml`
 /// because round-trippable structure is what matters there; user-facing

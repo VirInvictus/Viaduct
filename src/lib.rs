@@ -17,6 +17,17 @@ pub mod preferences;
 pub mod ui;
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn is_debug_mode() -> bool {
+    DEBUG_MODE.load(Ordering::Relaxed)
+}
+
+pub fn set_debug_mode(enabled: bool) {
+    DEBUG_MODE.store(enabled, Ordering::Relaxed);
+}
 
 /// Global Tokio runtime handle. Initialized once by the binary (`main.rs`
 /// for the GTK app, individual bins like `mem_check.rs` for harnesses) via
@@ -47,7 +58,7 @@ where
 
 /// Block-run a future on the library-wide tokio runtime. Use only from
 /// synchronous callers that cannot be made async (e.g. the one-time
-/// `LocalAccount` init in `main.rs`). Do NOT call from inside tokio tasks
+/// `Account` init in `main.rs`). Do NOT call from inside tokio tasks
 /// or from the GTK main loop — either will deadlock or stall the UI.
 pub fn block_on_runtime<F>(future: F) -> F::Output
 where

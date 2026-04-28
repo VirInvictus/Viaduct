@@ -20,6 +20,8 @@ pub mod keys {
     pub const COLOR_SCHEME: &str = "color-scheme";
     pub const NOTIFICATIONS_ON_REFRESH: &str = "notifications-on-refresh";
     pub const RETENTION_DAYS: &str = "retention-days";
+    pub const FONT_MONOSPACE: &str = "font-monospace";
+    pub const FONT_SERIF: &str = "font-serif";
 }
 
 /// Open the user-visible preferences. Returns `None` when the schema isn't
@@ -46,6 +48,61 @@ pub fn apply_color_scheme(settings: &gio::Settings) {
     );
 }
 
+/// Apply typography overrides to the application using a global CSS provider.
+/// Syncs live when settings change.
+pub fn apply_fonts(settings: &gio::Settings) {
+    let provider = gtk::CssProvider::new();
+    gtk::style_context_add_provider_for_display(
+        &gtk::gdk::Display::default().unwrap(),
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
+    update_fonts(settings, &provider);
+    settings.connect_changed(
+        Some(keys::FONT_SERIF),
+        glib::clone!(
+            #[weak]
+            provider,
+            move |s, _| update_fonts(s, &provider)
+        ),
+    );
+    settings.connect_changed(
+        Some(keys::FONT_MONOSPACE),
+        glib::clone!(
+            #[weak]
+            provider,
+            move |s, _| update_fonts(s, &provider)
+        ),
+    );
+}
+
+fn update_fonts(settings: &gio::Settings, provider: &gtk::CssProvider) {
+    let mut css = String::from(
+        "window { font-family: \"Inter\", system-ui, sans-serif; }
+        #article_text_view { font-size: 17px; line-height: 1.7; }
+        #article_title_label { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 8px; }
+        #article_meta_label { font-size: 14px; font-weight: 500; letter-spacing: 0.01em; }
+        ",
+    );
+
+    let serif = font_serif(settings);
+    if !serif.is_empty() {
+        css.push_str(&format!("#article_text_view {{ font-family: \"{}\", serif; }}\n", serif));
+    } else {
+        css.push_str("#article_text_view { font-family: \"Source Serif 4\", \"Georgia\", serif; }\n");
+    }
+
+    let mono = font_monospace(settings);
+    if !mono.is_empty() {
+        css.push_str(&format!("code, pre {{ font-family: \"{}\", monospace; }}\n", mono));
+    } else {
+        css.push_str("code, pre { font-family: \"JetBrains Mono\", monospace; }\n");
+    }
+
+    provider.load_from_string(&css);
+}
+
 fn update_style_manager(settings: &gio::Settings, manager: &adw::StyleManager) {
     let nick = settings.string(keys::COLOR_SCHEME);
     let scheme = match nick.as_str() {
@@ -64,9 +121,21 @@ pub fn notifications_enabled(settings: &gio::Settings) -> bool {
 }
 
 /// Article retention in days, used by the per-update prune in
-/// `LocalAccount::update_feed`. Read fresh on each refresh so dialog
+/// `Account::update_feed`. Read fresh on each refresh so dialog
 /// changes take effect on the next cycle without restart. Schema constrains
 /// the value to `[1, 365]`; clamped here regardless to keep callers honest.
 pub fn retention_days(settings: &gio::Settings) -> i64 {
     settings.int(keys::RETENTION_DAYS).clamp(1, 365) as i64
+}
+
+/// Monospace font family override for the article body. Empty string means
+/// "use system/app default".
+pub fn font_monospace(settings: &gio::Settings) -> String {
+    settings.string(keys::FONT_MONOSPACE).to_string()
+}
+
+/// Serif font family override for the article body. Empty string means
+/// "use system/app default".
+pub fn font_serif(settings: &gio::Settings) -> String {
+    settings.string(keys::FONT_SERIF).to_string()
 }

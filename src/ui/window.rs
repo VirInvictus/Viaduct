@@ -3,11 +3,11 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 use adw::subclass::prelude::*;
-use gtk::prelude::*;
+use adw::prelude::*;
 use gtk::{gio, glib};
 use std::sync::Arc;
 
-use crate::database::accounts::LocalAccount;
+use crate::database::accounts::Account;
 use crate::network::ImageCache;
 use crate::paths::{favicon_cache_dir, image_cache_dir};
 use crate::ui::article;
@@ -38,6 +38,10 @@ mod imp {
         #[template_child]
         pub article_text_view: TemplateChild<gtk::TextView>,
         #[template_child]
+        pub article_title_label: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub article_meta_label: TemplateChild<gtk::Label>,
+        #[template_child]
         pub search_bar: TemplateChild<gtk::SearchBar>,
         #[template_child]
         pub search_entry: TemplateChild<gtk::SearchEntry>,
@@ -51,8 +55,10 @@ mod imp {
         pub toast_overlay: TemplateChild<adw::ToastOverlay>,
         #[template_child]
         pub mark_all_read_btn: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub primary_menu: TemplateChild<gio::Menu>,
 
-        pub account: OnceCell<Arc<LocalAccount>>,
+        pub account: OnceCell<Arc<Account>>,
         pub image_cache: OnceCell<Arc<ImageCache>>,
         pub timeline_store: OnceCell<gio::ListStore>,
         pub timeline_selection: OnceCell<gtk::SingleSelection>,
@@ -72,6 +78,7 @@ mod imp {
         /// `render_article_body` so toggle flips and async extractor
         /// completions don't need to re-derive everything.
         pub article_display: RefCell<ArticleDisplayState>,
+        pub batch_update: crate::ui::batch::BatchUpdate,
     }
 
     /// Captured state for whatever article is currently on-screen.
@@ -116,7 +123,7 @@ glib::wrapper! {
 }
 
 impl ViaductWindow {
-    pub fn new(app: &adw::Application, account: Arc<LocalAccount>) -> Self {
+    pub fn new(app: &adw::Application, account: Arc<Account>) -> Self {
         let window: Self = glib::Object::builder().property("application", app).build();
         window.imp().account.set(account).ok();
         // Build the image cache rooted at our XDG cache subdirs. Errors here
@@ -132,15 +139,22 @@ impl ViaductWindow {
             .ok();
         window.wire_models();
         crate::ui::actions::install(&window, app);
+
+        if crate::is_debug_mode() {
+            let debug_section = gio::Menu::new();
+            debug_section.append(Some("Crash (Panic)"), Some("win.debug-crash"));
+            window.imp().primary_menu.append_submenu(Some("Debug"), &debug_section);
+        }
+
         window
     }
 
-    fn account(&self) -> Arc<LocalAccount> {
+    fn account(&self) -> Arc<Account> {
         self.imp()
             .account
             .get()
             .cloned()
-            .expect("ViaductWindow constructed without LocalAccount")
+            .expect("ViaductWindow constructed without Account")
     }
 
     fn image_cache(&self) -> Arc<ImageCache> {
@@ -192,7 +206,7 @@ impl ViaductWindow {
         imp.timeline_store.set(timeline_store.clone()).ok();
         imp.timeline_selection.set(timeline_selection.clone()).ok();
 
-        // Initial OPML load — populate the sidebar. `LocalAccount::load_opml`
+        // Initial OPML load — populate the sidebar. `Account::load_opml`
         // calls `tokio::fs`, which requires a tokio runtime context — and
         // `glib::spawn_future_local` runs on the GLib main loop, NOT on tokio.
         // Hop through `spawn_on_runtime` for the read, deliver the parsed
@@ -284,6 +298,26 @@ impl ViaductWindow {
             };
             let external = article.external_url.clone().or(article.url.clone());
             let feed_id = article.feed_id.clone();
+
+            // Populate Header Labels
+            window.imp().article_title_label.set_text(article.title.as_deref().unwrap_or("Untitled"));
+            
+            let mut meta_parts = Vec::new();
+            if let Some(names) = window.imp().feed_names.get() {
+                if let Some(name) = names.borrow().get(&feed_id) {
+                    meta_parts.push(name.clone());
+                }
+            }
+            if let Some(date) = article.date_published {
+                meta_parts.push(date.format("%B %e, %Y at %l:%M %p").to_string());
+            }
+            if let Some(author) = article.authors.first() {
+                if let Some(ref name) = author.name {
+                    meta_parts.push(format!("by {}", name));
+                }
+            }
+            window.imp().article_meta_label.set_text(&meta_parts.join(" • "));
+
             // Prefer content_html → content_text → summary, in order. NNW
             // does the equivalent fall-through. If everything is empty
             // (sparse feeds like pragprog.com that ship title+link only),
@@ -840,7 +874,7 @@ impl ViaductWindow {
         }
     }
 
-    /// Drive `LocalAccountRefresher::refresh_feeds` for every feed in the
+    /// Drive `AccountRefresher::refresh_feeds` for every feed in the
     /// current OPML. Refresher needs a tokio runtime context, so we dispatch
     /// on the global runtime (not the GLib main loop). Tallies `new_articles`
     /// across the whole cycle and routes the count back to the GTK thread for
@@ -872,11 +906,18 @@ impl ViaductWindow {
             let total = run_refresh_with_tally(account, paired, retention_days).await;
             let _ = done_tx.send(total);
         });
+        self.imp().batch_update.start();
         glib::spawn_future_local(async move {
-            let Ok(total) = done_rx.await else { return };
+            let Ok(total) = done_rx.await else {
+                if let Some(window) = window_weak.upgrade() {
+                    window.imp().batch_update.end();
+                }
+                return;
+            };
             if let Some(window) = window_weak.upgrade() {
                 window.dispatch_refresh_notification(total);
                 window.refresh_unread_counts();
+                window.imp().batch_update.end();
             }
         });
     }
@@ -1065,13 +1106,29 @@ impl ViaductWindow {
         store
     }
 
+    pub(crate) fn act_about(&self) {
+        let about = adw::AboutDialog::builder()
+            .application_name("viaduct")
+            .version(env!("CARGO_PKG_VERSION"))
+            .developer_name("Brandon LaRocque")
+            .issue_url("https://github.com/virinvictus/viaduct/issues")
+            .website("https://github.com/virinvictus/viaduct")
+            .license_type(gtk::License::MitX11)
+            .build();
+        about.present(Some(self));
+    }
+
+    pub(crate) fn act_debug_crash(&self) {
+        panic!("Intentional crash triggered from Debug menu");
+    }
+
     fn show_toast(&self, message: &str) {
         let toast = adw::Toast::new(message);
         self.imp().toast_overlay.add_toast(toast);
     }
 
     /// Re-emit OPML into the sidebar tree after import. Same tokio-context
-    /// hop as the startup load — `LocalAccount::load_opml` uses `tokio::fs`.
+    /// hop as the startup load — `Account::load_opml` uses `tokio::fs`.
     fn reload_sidebar_after_opml_change(&self) {
         let imp = self.imp();
         let Some(delegate) = imp.sidebar_delegate.get().cloned() else {
@@ -1108,7 +1165,7 @@ impl ViaductWindow {
         });
     }
 
-    /// Kick `LocalAccountRefresher::refresh_feeds` against just the feeds
+    /// Kick `AccountRefresher::refresh_feeds` against just the feeds
     /// that were added by an import. Mirrors the post-`importOPML`
     /// `delegate.refreshAll` step in NNW, but pre-filtered to the new feeds.
     /// Recompute sidebar unread badges from the current DB state. Fires one
@@ -1294,7 +1351,7 @@ impl ViaductWindow {
 /// feed hasn't been seen before). The refresher uses settings for
 /// conditional-GET info, content hash, last_check_date, etc.
 async fn pair_feeds_with_settings(
-    account: &Arc<LocalAccount>,
+    account: &Arc<Account>,
     feeds: Vec<crate::models::Feed>,
 ) -> Vec<(crate::models::Feed, crate::models::FeedSettings)> {
     let mut paired = Vec::with_capacity(feeds.len());
@@ -1331,7 +1388,7 @@ async fn pair_feeds_with_settings(
 /// drain returns naturally. `retention_days` is forwarded to `update_feed`
 /// for the per-feed prune.
 async fn run_refresh_with_tally(
-    account: Arc<LocalAccount>,
+    account: Arc<Account>,
     paired: Vec<(crate::models::Feed, crate::models::FeedSettings)>,
     retention_days: i64,
 ) -> usize {
@@ -1344,7 +1401,7 @@ async fn run_refresh_with_tally(
         }
         total
     });
-    let refresher = crate::network::LocalAccountRefresher::new(account, changes_tx, retention_days);
+    let refresher = crate::network::AccountRefresher::new(account, changes_tx, retention_days);
     refresher.refresh_feeds(paired).await;
     drop(refresher);
     drain.await.unwrap_or(0)
@@ -1453,7 +1510,7 @@ fn populate_timeline(store: &gio::ListStore, articles: Vec<crate::models::Articl
 
 /// Bulk-fetch statuses for every `ArticleNode` currently in the timeline
 /// store and copy them onto the nodes. Runs after every timeline repopulate.
-fn refresh_timeline_statuses(account: Arc<LocalAccount>, store: gio::ListStore) {
+fn refresh_timeline_statuses(account: Arc<Account>, store: gio::ListStore) {
     let mut ids: Vec<String> = Vec::with_capacity(store.n_items() as usize);
     let mut nodes: Vec<ArticleNode> = Vec::with_capacity(ids.capacity());
     for i in 0..store.n_items() {
@@ -1495,7 +1552,7 @@ fn refresh_timeline_statuses(account: Arc<LocalAccount>, store: gio::ListStore) 
 /// bounded and runs entirely through the single DB-writer thread, so there's
 /// no write contention to worry about.
 async fn fetch_folder_articles(
-    account: &std::sync::Arc<LocalAccount>,
+    account: &std::sync::Arc<Account>,
     folder: &crate::models::Folder,
 ) -> crate::error::Result<Vec<crate::models::Article>> {
     if folder.feeds.is_empty() {

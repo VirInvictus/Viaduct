@@ -14,7 +14,7 @@ NetNewsWire is open-source, battle-tested, and has already solved every hard pro
 
 If you catch yourself thinking "I have a better idea" — you don't. Go read the corresponding Swift file in `.netnewswire/` and port *that*. The app is local-only, no sync backends, no WebKit, strict memory budget. Targets **GNOME 50+** and **libadwaita 1.7+** on Wayland.
 
-Current version: **v0.9.0** (Phases 0–14 complete; Phase 15 Inoreader Sync Engine next). The xdg-desktop-portal Background daemon moved from Phase 13 to Phase 17 because it pairs naturally with the Flatpak manifest work. See `roadmap.md` for the live phase plan and `patchnotes.md` for the shipped log.
+Current version: **v1.0.0** (Stable). The xdg-desktop-portal Background daemon moved from Phase 13 to Phase 17 because it pairs naturally with the Flatpak manifest work. See `roadmap.md` for the live phase plan and `patchnotes.md` for the shipped log.
 
 **License:** MIT. **Edition:** Rust 2024.
 
@@ -221,6 +221,7 @@ Swift's memory model is forgiving in ways Rust's isn't. Specifically, porting Sw
 * **`GObject` is `!Send`.** GTK widgets cannot cross threads. Do not hold a `GtkWidget` inside a struct that will be passed to `tokio::spawn`. Move *data* across the boundary, not widgets. The pattern: background task sends `ArticleChanges` → GTK-thread handler receives it via `glib::MainContext::channel` → handler updates widgets on the main thread.
 * **Use `glib::clone!` with weak refs.** A signal handler that captures `self` strongly creates a reference cycle (widget → handler closure → widget) that GTK will not clean up. Always prefer `glib::clone!(#[weak] self_ => async move { ... })` or `#[weak_allow_none]`. Strong captures (`#[strong]`) are acceptable only when you explicitly want the closure to extend the widget's lifetime and you've thought about it.
 * **Tokio runtime lives outside the GTK loop.** Spawn background work with `tokio::spawn` against the runtime built in `main.rs`; spawn UI-touching work with `glib::spawn_future_local`. Never `.await` on a tokio future from a GTK signal handler — route through a channel instead.
+* **Tokio I/O Requires a Reactor:** If you call Tokio network/filesystem APIs (`reqwest`, `tokio::fs`) from inside a `glib::spawn_future_local` block, they will panic with "there is no reactor running". GTK's async executor is not backed by Tokio. Always use `crate::spawn_on_runtime` to execute I/O work, then hand the result back to the GTK thread.
 * **`glib::MainContext::channel` is one-way.** It delivers from a worker to the GTK loop. For GTK → worker, use the `mpsc::Sender` held by `src/database/worker.rs` (or equivalent). Don't try to make one channel work both directions.
 * **Swift's `weak self` ≠ Rust's `Weak<T>`.** When porting a Swift closure that uses `[weak self]`, translate to `glib::clone!(#[weak] ...)` for GObject-rooted captures, or `Weak<RefCell<T>>` / `Arc::downgrade` for plain Rust types. Don't paper over it with `Arc` and hope.
 

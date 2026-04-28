@@ -55,6 +55,12 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     // OPML import/export — menu only, no accelerators (NNW does the same).
     register(window, "import-opml", |w| w.act_import_opml());
     register(window, "export-opml", |w| w.act_export_opml());
+    register(window, "about", |w| w.act_about());
+
+    if crate::is_debug_mode() {
+        // Debug
+        register(window, "debug-crash", |w| w.act_debug_crash());
+    }
 
     // Accelerators. NNW-exact where available; roadmap's additions stacked
     // on top as alternates so both muscle memories work.

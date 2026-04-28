@@ -27,6 +27,11 @@ pub enum ArticlesDbOp {
     FetchByArticleId(String, oneshot::Sender<Result<Option<Article>>>),
     FetchUnread(oneshot::Sender<Result<Vec<Article>>>),
     FetchStarred(oneshot::Sender<Result<Vec<Article>>>),
+    FetchUnreadArticleIds(oneshot::Sender<Result<HashSet<String>>>),
+    FetchStarredArticleIds(oneshot::Sender<Result<HashSet<String>>>),
+    UpdateStatusesRead(Vec<String>, bool, oneshot::Sender<Result<()>>),
+    UpdateStatusesStarred(Vec<String>, bool, oneshot::Sender<Result<()>>),
+    FetchMissingArticleIds(oneshot::Sender<Result<Vec<String>>>),
     FetchToday(oneshot::Sender<Result<Vec<Article>>>),
     Search(String, oneshot::Sender<Result<Vec<Article>>>),
     SearchWithSnippets(
@@ -231,6 +236,26 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
             let res = fetch_starred(conn);
             let _ = tx.send(res);
         }
+        ArticlesDbOp::FetchUnreadArticleIds(tx) => {
+            let res = fetch_unread_article_ids(conn);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::FetchStarredArticleIds(tx) => {
+            let res = fetch_starred_article_ids(conn);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::UpdateStatusesRead(ids, read, tx) => {
+            let res = update_statuses_read(conn, &ids, read);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::UpdateStatusesStarred(ids, starred, tx) => {
+            let res = update_statuses_starred(conn, &ids, starred);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::FetchMissingArticleIds(tx) => {
+            let res = fetch_missing_article_ids(conn);
+            let _ = tx.send(res);
+        }
         ArticlesDbOp::FetchToday(tx) => {
             let res = fetch_today(conn);
             let _ = tx.send(res);
@@ -401,10 +426,10 @@ fn row_to_article(row: &rusqlite::Row) -> rusqlite::Result<Article> {
         image_url: row.get("image_url")?,
         date_published: row
             .get::<_, Option<i64>>("date_published")?
-            .map(|t| Utc.timestamp_opt(t, 0).unwrap()),
+            .and_then(|t| Utc.timestamp_opt(t, 0).single()),
         date_modified: row
             .get::<_, Option<i64>>("date_modified")?
-            .map(|t| Utc.timestamp_opt(t, 0).unwrap()),
+            .and_then(|t| Utc.timestamp_opt(t, 0).single()),
         authors,
         attachments,
     })
@@ -458,12 +483,80 @@ fn fetch_starred(conn: &mut Connection) -> Result<Vec<Article>> {
     Ok(articles)
 }
 
+fn fetch_unread_article_ids(conn: &mut Connection) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT article_id FROM statuses WHERE read = 0")?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    let mut ids = HashSet::new();
+    for row in rows {
+        ids.insert(row?);
+    }
+    Ok(ids)
+}
+
+fn fetch_starred_article_ids(conn: &mut Connection) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT article_id FROM statuses WHERE starred = 1")?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    let mut ids = HashSet::new();
+    for row in rows {
+        ids.insert(row?);
+    }
+    Ok(ids)
+}
+
+fn update_statuses_read(conn: &mut Connection, ids: &[String], read: bool) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    const CHUNK: usize = 500;
+    for chunk in ids.chunks(CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "UPDATE statuses SET read = ? WHERE article_id IN ({})",
+            placeholders
+        );
+        let mut params = vec![rusqlite::types::Value::from(if read { 1i64 } else { 0i64 })];
+        params.extend(chunk.iter().map(|s| rusqlite::types::Value::from(s.clone())));
+        conn.execute(&sql, rusqlite::params_from_iter(params))?;
+    }
+    Ok(())
+}
+
+fn update_statuses_starred(conn: &mut Connection, ids: &[String], starred: bool) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    const CHUNK: usize = 500;
+    for chunk in ids.chunks(CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "UPDATE statuses SET starred = ? WHERE article_id IN ({})",
+            placeholders
+        );
+        let mut params = vec![rusqlite::types::Value::from(if starred { 1i64 } else { 0i64 })];
+        params.extend(chunk.iter().map(|s| rusqlite::types::Value::from(s.clone())));
+        conn.execute(&sql, rusqlite::params_from_iter(params))?;
+    }
+    Ok(())
+}
+
+fn fetch_missing_article_ids(conn: &mut Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT article_id FROM statuses WHERE article_id NOT IN (SELECT article_id FROM articles)")?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    let mut ids = Vec::new();
+    for row in rows {
+        ids.push(row?);
+    }
+    Ok(ids)
+}
+
 fn fetch_today(conn: &mut Connection) -> Result<Vec<Article>> {
     let today_start = chrono::Local::now()
         .date_naive()
         .and_hms_opt(0, 0, 0)
         .unwrap()
-        .and_utc()
+        .and_local_timezone(chrono::Local)
+        .unwrap()
+        .to_utc()
         .timestamp();
     let mut stmt = conn.prepare(
         "SELECT a.* FROM articles a 
@@ -705,7 +798,7 @@ fn update_feed(
                     .optional()?;
                 if let Some((starred, date_arrived)) = status
                     && !starred
-                    && Utc.timestamp_opt(date_arrived, 0).unwrap() < retention_cutoff
+                    && Utc.timestamp_opt(date_arrived, 0).single().map(|t| t < retention_cutoff).unwrap_or(true)
                 {
                     deleted_ids.insert(id.clone());
                 }

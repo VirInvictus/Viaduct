@@ -31,6 +31,12 @@ pub enum ViaductError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error("credentials error: {0}")]
+    Credentials(String),
+
+    #[error(transparent)]
+    Generic(#[from] anyhow::Error),
 }
 
 impl From<rusqlite::Error> for ViaductError {

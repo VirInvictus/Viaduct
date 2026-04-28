@@ -29,6 +29,10 @@ pub fn feed_settings_db_path() -> Result<PathBuf> {
     Ok(data_dir()?.join("feed-settings.sqlite"))
 }
 
+pub fn sync_db_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join("sync.sqlite"))
+}
+
 pub fn favicon_cache_dir() -> Result<PathBuf> {
     Ok(cache_dir()?.join("favicons"))
 }
@@ -37,17 +41,55 @@ pub fn image_cache_dir() -> Result<PathBuf> {
     Ok(cache_dir()?.join("images"))
 }
 
+pub fn fonts_dir() -> Result<PathBuf> {
+    Ok(xdg_home("XDG_DATA_HOME", ".local/share")?.join("fonts").join(APP_DIR))
+}
+
 pub fn ensure_dirs() -> Result<()> {
     for dir in [
         data_dir()?,
         cache_dir()?,
         favicon_cache_dir()?,
         image_cache_dir()?,
+        fonts_dir()?,
     ] {
         std::fs::create_dir_all(&dir).map_err(|source| ViaductError::CreateDir {
             path: dir.clone(),
             source,
         })?;
+    }
+    install_bundled_fonts()?;
+    Ok(())
+}
+
+fn install_bundled_fonts() -> Result<()> {
+    let target_dir = fonts_dir()?;
+    let fonts = [
+        ("Inter-Regular.ttf", include_bytes!("../data/fonts/Inter-Regular.ttf").as_slice()),
+        ("Inter-Bold.ttf", include_bytes!("../data/fonts/Inter-Bold.ttf").as_slice()),
+        ("SourceSerif4-Regular.ttf", include_bytes!("../data/fonts/SourceSerif4-Regular.ttf").as_slice()),
+        ("SourceSerif4-Bold.ttf", include_bytes!("../data/fonts/SourceSerif4-Bold.ttf").as_slice()),
+        ("JetBrainsMono-Regular.ttf", include_bytes!("../data/fonts/JetBrainsMono-Regular.ttf").as_slice()),
+    ];
+
+    let mut changed = false;
+    for (name, bytes) in fonts {
+        let path = target_dir.join(name);
+        if !path.exists() {
+            if let Err(e) = std::fs::write(&path, bytes) {
+                tracing::warn!("Failed to install bundled font {}: {}", name, e);
+            } else {
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        tracing::info!("Installed bundled fonts to {}. Rebuilding font cache...", target_dir.display());
+        let _ = std::process::Command::new("fc-cache")
+            .arg("-f")
+            .arg(&target_dir)
+            .status();
     }
     Ok(())
 }

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-use crate::database::accounts::LocalAccount;
+use crate::database::accounts::Account;
 use crate::database::opml::OpmlFile;
 use crate::models::{Feed, Folder};
 use crate::network::ImageCache;
@@ -204,7 +204,7 @@ impl SidebarDataSource {
 pub fn setup_sidebar_list_view(
     list_view: &gtk::ListView,
     data_source: &SidebarDataSource,
-    account: Arc<LocalAccount>,
+    account: Arc<Account>,
     image_cache: Arc<ImageCache>,
 ) -> gtk::SingleSelection {
     let tree_model = gtk::TreeListModel::new(
@@ -408,7 +408,7 @@ fn apply_unread_badge(badge: &gtk::Label, count: u32) {
 /// avatar's currently-displayed text to the name we kicked off with and bail if
 /// it changed.
 fn spawn_favicon_fetch(
-    account: Arc<LocalAccount>,
+    account: Arc<Account>,
     image_cache: Arc<ImageCache>,
     feed_id: String,
     expected_name: String,

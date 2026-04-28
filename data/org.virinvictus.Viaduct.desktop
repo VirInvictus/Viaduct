@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Viaduct
+Comment=Fast, native RSS reader for GNOME
+Exec=viaduct
+Icon=org.virinvictus.Viaduct
+Terminal=false
+Type=Application
+Categories=GNOME;GTK;Network;News;
+Keywords=RSS;Feed;Reader;News;Inoreader;
+StartupNotify=true
+DBusActivatable=true
+X-Purism-FormFactor=Workstation;Mobile;

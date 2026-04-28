@@ -3,8 +3,11 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 // Network layer for fetching feeds and images
+pub mod background;
 pub mod cache;
+pub mod credentials;
 pub mod fetcher;
+pub mod inoreader;
 
 pub use cache::{ImageCache, color_for};
-pub use fetcher::{Fetcher, LocalAccountRefresher};
+pub use fetcher::{Fetcher, AccountRefresher};

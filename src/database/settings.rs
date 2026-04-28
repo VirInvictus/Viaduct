@@ -89,13 +89,13 @@ fn fetch(conn: &mut Connection, feed_id: &str) -> Result<Option<FeedSettings>> {
                 etag: row.get("etag")?,
                 date_created: row
                     .get::<_, Option<i64>>("date_created")?
-                    .map(|t| Utc.timestamp_opt(t, 0).unwrap()),
+                    .and_then(|t| Utc.timestamp_opt(t, 0).single()),
                 max_age: row.get("max_age")?,
                 authors_json: row.get("authors_json")?,
                 folder_relationship_json: row.get("folder_relationship_json")?,
                 last_check_date: row
                     .get::<_, Option<i64>>("last_check_date")?
-                    .map(|t| Utc.timestamp_opt(t, 0).unwrap()),
+                    .and_then(|t| Utc.timestamp_opt(t, 0).single()),
                 reader_view_always_enabled: row.get::<_, i64>("reader_view_always_enabled")? != 0,
             })
         })

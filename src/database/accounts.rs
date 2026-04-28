@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tokio::sync::{mpsc, oneshot};
 
@@ -16,17 +16,34 @@ use crate::error::{DatabaseError, Result, ViaductError};
 use crate::models::{Article, ArticleChanges, ArticleStatus, Feed, FeedSettings, ParsedItem};
 use crate::paths::opml_path;
 
-pub struct LocalAccount {
+use crate::database::delegate::{AccountDelegate, LocalAccountDelegate};
+use crate::database::sync::SyncDbOp;
+use std::sync::Arc;
+
+pub struct Account {
     db_tx: mpsc::Sender<DbOp>,
+    sync_tx: mpsc::Sender<SyncDbOp>,
     opml_writer: OpmlWriter,
+    delegate: Arc<dyn AccountDelegate>,
 }
 
-impl LocalAccount {
-    pub async fn new(db_tx: mpsc::Sender<DbOp>) -> Result<Self> {
+impl Account {
+    pub async fn new(db_tx: mpsc::Sender<DbOp>, sync_tx: mpsc::Sender<SyncDbOp>) -> Result<Self> {
         let opml_file_path = opml_path()?;
         let opml_writer = OpmlWriter::spawn(opml_file_path.clone());
 
-        let account = Self { db_tx, opml_writer };
+        let delegate: Arc<dyn AccountDelegate> = if crate::network::credentials::fetch_credentials("inoreader").await?.is_some() {
+            Arc::new(crate::database::delegate::InoreaderAccountDelegate::new())
+        } else {
+            Arc::new(LocalAccountDelegate)
+        };
+
+        let account = Self {
+            db_tx,
+            sync_tx,
+            opml_writer,
+            delegate,
+        };
 
         // Port of NNW `Account.init` startup cleanup chain
         // (`Account.swift:335-340`): prune settings for unsubscribed feeds,
@@ -103,6 +120,56 @@ impl LocalAccount {
         let (tx, rx) = oneshot::channel();
         self.db_tx
             .send(DbOp::Articles(ArticlesDbOp::FetchStarred(tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    pub async fn fetch_unread_article_ids(&self) -> Result<HashSet<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::FetchUnreadArticleIds(tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    pub async fn fetch_starred_article_ids(&self) -> Result<HashSet<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::FetchStarredArticleIds(tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    pub async fn update_statuses_read(&self, ids: Vec<String>, read: bool) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::UpdateStatusesRead(ids, read, tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    pub async fn update_statuses_starred(&self, ids: Vec<String>, starred: bool) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::UpdateStatusesStarred(ids, starred, tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    pub async fn fetch_missing_article_ids(&self) -> Result<Vec<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::FetchMissingArticleIds(tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
@@ -238,7 +305,7 @@ impl LocalAccount {
     }
 
     /// Import an OPML file from disk, merging into the current `local.opml`.
-    /// Port of NNW `LocalAccountDelegate.importOPML` + `Account.addOPMLItems`:
+    /// Port of NNW `AccountDelegate.importOPML` + `Account.addOPMLItems`:
     ///
     /// 1. Read and parse the user-supplied file.
     /// 2. Normalize (strip nameless wrappers, flatten nested folders, dedup
@@ -248,7 +315,11 @@ impl LocalAccount {
     /// 4. Persist the merged file via the debounced `OpmlWriter`.
     /// 5. Return the list of newly-added feeds so the UI can kick a refresh
     ///    against just those.
-    pub async fn import_opml(&self, path: impl AsRef<Path>) -> Result<Vec<Feed>> {
+    pub async fn import_opml(self: &std::sync::Arc<Self>, path: impl AsRef<Path>) -> Result<Vec<Feed>> {
+        self.delegate.clone().import_opml(self.clone(), path.as_ref()).await
+    }
+
+    pub async fn import_opml_internal(&self, path: impl AsRef<Path>) -> Result<Vec<Feed>> {
         let xml = tokio::fs::read_to_string(path.as_ref()).await?;
         let parsed = parse_opml(&xml)?;
         let normalized = normalize_opml(parsed);
@@ -387,6 +458,48 @@ impl LocalAccount {
         let (tx, rx) = oneshot::channel();
         self.db_tx
             .send(DbOp::Settings(Box::new(SettingsDbOp::Vacuum(tx))))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    // --- SyncDatabase API ---
+
+    pub async fn insert_sync_statuses(&self, statuses: Vec<crate::database::sync::SyncStatus>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sync_tx
+            .send(SyncDbOp::InsertStatuses(statuses, tx))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    pub async fn select_sync_statuses_for_processing(&self, limit: Option<usize>) -> Result<Vec<crate::database::sync::SyncStatus>> {
+        let (tx, rx) = oneshot::channel();
+        self.sync_tx
+            .send(SyncDbOp::SelectForProcessing(limit, tx))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    pub async fn delete_sync_statuses_selected_for_processing(&self, ids: Vec<String>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sync_tx
+            .send(SyncDbOp::DeleteSelectedForProcessing(ids, tx))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    pub async fn reset_all_sync_statuses_selected_for_processing(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sync_tx
+            .send(SyncDbOp::ResetAllSelectedForProcessing(tx))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

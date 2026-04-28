@@ -25,7 +25,7 @@ use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use viaduct::database::accounts::LocalAccount;
+use viaduct::database::accounts::Account;
 use viaduct::database::{self};
 use viaduct::models::{Author, ParsedItem};
 
@@ -45,8 +45,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     viaduct::paths::ensure_dirs()?;
 
     let (db_tx, db_rx) = mpsc::channel(256);
-    database::worker::spawn_db_worker(db_rx)?;
-    let account = Arc::new(LocalAccount::new(db_tx).await?);
+    database::spawn_db_worker(db_rx)?;
+    
+    let (sync_tx, sync_rx) = mpsc::channel(256);
+    database::spawn_sync_worker(sync_rx)?;
+
+    let account = Arc::new(Account::new(db_tx, sync_tx).await?);
 
     let baseline = read_vm_hwm_mb().unwrap_or(0);
     println!(

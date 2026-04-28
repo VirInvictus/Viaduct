@@ -4,8 +4,10 @@
 
 pub mod accounts;
 pub mod articles;
+pub mod delegate;
 pub mod opml;
 pub mod settings;
+pub mod sync;
 pub mod worker;
 
-pub use worker::{DbOp, spawn_db_worker};
+pub use worker::{DbOp, spawn_db_worker, spawn_sync_worker};

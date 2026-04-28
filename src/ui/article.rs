@@ -73,27 +73,31 @@ fn ensure_base_tags(buffer: &gtk::TextBuffer) {
     add_if_missing("monospace", &|b| b.family("monospace").build());
     add_if_missing("code-block", &|b| {
         b.family("monospace")
-            .left_margin(16)
-            .pixels_above_lines(6)
-            .pixels_below_lines(6)
+            .left_margin(24)
+            .pixels_above_lines(16)
+            .pixels_below_lines(16)
             .build()
     });
     add_if_missing("blockquote", &|b| {
-        b.left_margin(24).style(pango::Style::Italic).build()
+        b.left_margin(32)
+            .style(pango::Style::Italic)
+            .pixels_above_lines(16)
+            .pixels_below_lines(16)
+            .build()
     });
     for (i, scale) in [
-        ("heading-1", 1.8),
-        ("heading-2", 1.5),
-        ("heading-3", 1.3),
+        ("heading-1", 1.6),
+        ("heading-2", 1.4),
+        ("heading-3", 1.25),
         ("heading-4", 1.15),
-        ("heading-5", 1.05),
+        ("heading-5", 1.1),
         ("heading-6", 1.0),
     ] {
         add_if_missing(i, &|b| {
             b.scale(scale)
                 .weight(pango::Weight::Bold.into_glib())
-                .pixels_above_lines(8)
-                .pixels_below_lines(4)
+                .pixels_above_lines(16)
+                .pixels_below_lines(8)
                 .build()
         });
     }

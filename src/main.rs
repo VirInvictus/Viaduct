@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt};
-use viaduct::database::accounts::LocalAccount;
+use viaduct::database::accounts::Account;
 use viaduct::{database, paths, ui};
 
 fn main() -> glib::ExitCode {
@@ -32,15 +32,21 @@ fn main() -> glib::ExitCode {
 
     info!(version = env!("CARGO_PKG_VERSION"), "Starting viaduct");
 
-    let (db_tx, db_rx) = mpsc::channel(100);
-    if let Err(e) = database::worker::spawn_db_worker(db_rx) {
+    let (db_tx, db_rx) = mpsc::channel(256);
+    if let Err(e) = database::spawn_db_worker(db_rx) {
         error!(?e, "Failed to spawn database worker; aborting");
         return glib::ExitCode::FAILURE;
     }
 
+    let (sync_tx, sync_rx) = mpsc::channel(256);
+    if let Err(e) = database::spawn_sync_worker(sync_rx) {
+        error!(?e, "Failed to spawn sync worker; aborting");
+        return glib::ExitCode::FAILURE;
+    }
+
     let account = Arc::new(
-        viaduct::block_on_runtime(LocalAccount::new(db_tx))
-            .expect("Failed to initialize LocalAccount"),
+        viaduct::block_on_runtime(Account::new(db_tx, sync_tx))
+            .expect("Failed to initialize Account"),
     );
 
     let app = adw::Application::builder()
@@ -54,7 +60,12 @@ fn main() -> glib::ExitCode {
 }
 
 fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let mut default_level = "info";
+    if std::env::args().any(|arg| arg == "--debug") {
+        default_level = "debug,viaduct=trace";
+        viaduct::set_debug_mode(true);
+    }
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
     fmt().with_env_filter(filter).init();
 }
 
@@ -76,9 +87,10 @@ fn ensure_schema_dir() {
     }
 }
 
-fn build_ui(app: &adw::Application, account: Arc<LocalAccount>) {
+fn build_ui(app: &adw::Application, account: Arc<Account>) {
     if let Some(settings) = viaduct::preferences::settings() {
         viaduct::preferences::apply_color_scheme(&settings);
+        viaduct::preferences::apply_fonts(&settings);
     }
     let window = ui::window::ViaductWindow::new(app, account);
     window.present();

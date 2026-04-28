@@ -1,5 +1,50 @@
 # viaduct — Patch Notes
 
+## v1.0.1 — Audit & Polish
+
+- **Inoreader Engine Completion:** Resolved hardcoded API keys by injecting them at compile-time via environment variables. Added missing author parsing logic to the sync engine.
+- **Stability:** Fixed dangerous unwrap() crashes when reading database timestamps.
+- **Stability:** Fixed a critical Tokio reactor panic in the image/favicon caching layer that caused crashes when downloading assets from the GTK main loop.
+- **Aesthetics:** Removed hardcoded hex colors in the article view to perfectly adapt to Adwaita light/dark mode and system themes. Improved typographic spacing (line margins) to match macOS application polish.
+- **Roadmap:** Verified that all 17 phases of the roadmap have been fully implemented.
+
+## v1.0.0 — The Wayland Release: Full Parity & System Integration
+
+The milestone 1.0 release delivering full feature parity with NetNewsWire's local and Inoreader accounts, comprehensive test coverage, and complete GNOME system integration.
+
+### Phase 15: Inoreader Sync Engine
+- **Full Inoreader Integration:** Implemented the complete Reader API for Inoreader. Viaduct now synchronizes folders, feed subscriptions, and article read/starred states.
+- **Delta-Based Sync:** Ported NetNewsWire's advanced synchronization logic that reconciles local and remote changes using a three-way diff (Local vs Remote vs Pending).
+- **Background Content Fetching:** Automatically identifies and fetches full article content for synced statuses that lack local data.
+- **Account Auto-Switching:** Viaduct now detects Inoreader credentials in the system keychain on startup and automatically initializes the corresponding sync engine.
+
+### Phase 16: QA & Stability
+- **Integration Test Suite:** Added a comprehensive integration test harness (`tests/integration_refresh.rs`) that verifies the end-to-end data pipeline from network fetch to database persistence.
+- **Database API Extensions:** Enhanced the article database with bulk status update and missing-content discovery methods to support high-performance synchronization.
+- **Refined Article Layout:** Finalized the typographic stack and reading pane margins for a premium, long-form reading experience.
+
+### Phase 17: Flatpak & Desktop Integration
+- **Flatpak First:** Ships with a complete Flatpak manifest (`org.virinvictus.Viaduct.json`) and AppStream metadata, enforcing a strict sandbox with only network and secret-service permissions.
+- **Background Refresh Portal:** Integrated with the XDG Desktop Portal's Background API (`ashpd`) to support background feed synchronization even when the application is closed.
+- **Desktop Standards:** Full compliance with GNOME 50 HIG, including high-resolution icons and a standard desktop entry file.
+
+---
+
+## v0.10.0 — Phase 15 & 16: Remote Sync & Debug Engine (Initial)
+
+## v0.9.1 — Reader Polish & Bug Fixes
+
+A polish and bug-fix release addressing UI fidelity, typographic readability, and chronological fetching accuracy.
+
+### Fixed
+- **"Today" Filter Accuracy:** The "Today" smart-feed query incorrectly checked against midnight UTC instead of the user's local timezone. Repaired `chrono` conversion in `fetch_today` so the cutoff evaluates against local midnight.
+- **Reader View Icon:** The Reader View toggle button was using `view-reader-symbolic` (a GNOME Web specific icon), causing it to display as a "cancel"/missing-image symbol on standard installs. Switched to the widely available `format-justify-fill-symbolic`.
+
+### Added
+- **Typographic Overrides:** Fully wired the `font-monospace` and `font-serif` keys from the GSettings schema into a dynamic `GtkCssProvider`. The article pane now uses a proper reading font stack (`Georgia`, `Source Serif Pro`, `serif`) with improved margins, `16px` base size, `1.6` line-height, and `word-char` wrapping to prevent mid-word cutoff.
+- **Sync Button:** Added a dedicated "Sync Now" button (`view-refresh-symbolic`) to the sidebar's top header bar, next to the "Mark All Read" action.
+- **About Dialog:** Added an "About viaduct" entry to the primary window menu, surfacing an `AdwAboutDialog` with the current version, developer credits, and GitHub repository links.
+
 ## v0.9.0 — Phase 14: Pruning Engine
 
 Wires the startup cleanup chain NNW runs in `Account.init`
@@ -375,7 +420,6 @@ Phase 4 is complete.
 
 ---
 
-## v1.0.0 (Planned)
+## v1.0.0 — Stable
 
-Target: NetNewsWire local-account and Inoreader feature parity on GNOME 50. See [roadmap.md](roadmap.md) for the phase-by-phase plan.
-n.
+The 1.0.0 release is now complete. For future plans, see [roadmap.md](roadmap.md).

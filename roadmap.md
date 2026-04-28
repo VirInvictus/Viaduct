@@ -1,6 +1,6 @@
 # viaduct — Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v0.9.0.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v1.0.0.
 
 ---
 
@@ -190,23 +190,23 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 - [x] Cascade: deleting an article row triggers FTS5 row deletion via the existing trigger. *(`articles_ad` trigger in `setup_schema` since v0.5.2 — covered by the existing FTS5 invariant)*
 
 ## Phase 15: Inoreader Sync Engine (NetNewsWire Port)
-- [ ] Refactor `LocalAccount` into a generic `Account` structure backed by an `AccountDelegate` trait, strictly mirroring NetNewsWire's abstraction.
-- [ ] Port `SyncDatabase` from `.netnewswire/Modules/SyncDatabase/` to track remote sync state (article UUIDs, read/starred sync status).
-- [ ] Port `InoreaderAccountDelegate` and the API caller from `.netnewswire/Modules/Account/` into Rust. We will strictly port the Swift networking logic, token-bucket approach, and batch sync rules.
-- [ ] Secure credentials storage via `libsecret` (porting the concepts from `.netnewswire/Modules/Secrets/`).
+- [x] Refactor `LocalAccount` into a generic `Account` structure backed by an `AccountDelegate` trait, strictly mirroring NetNewsWire's abstraction.
+- [x] Port `SyncDatabase` from `.netnewswire/Modules/SyncDatabase/` to track remote sync state (article UUIDs, read/starred sync status).
+- [x] Port `InoreaderAccountDelegate` and the API caller from `.netnewswire/Modules/Account/` into Rust. We will strictly port the Swift networking logic, token-bucket approach, and batch sync rules.
+- [x] Secure credentials storage via `libsecret` (porting the concepts from `.netnewswire/Modules/Secrets/`).
 
 ## Phase 16: QA, Test Suites, & Debug Mode
-- [ ] Implement a `viaduct --debug` flag or environment variable that enables verbose `tracing` logs, disables database WAL truncation (for easier inspection), and adds a hidden Debug menu to the UI.
-- [ ] Build out integration test suites for the refresh pipeline (`LocalAccountRefresher` and Inoreader sync), mocking the network layer.
-- [ ] Implement UI test harnesses to ensure sidebar/timeline/article pane state transitions are rock solid.
-- [ ] Port any remaining applicable unit tests from `.netnewswire/Tests/` and module test directories.
-- [ ] **DB worker supervision**: `database::worker::spawn_db_worker` spawns a plain `std::thread::spawn` — if the worker panics every future op is orphaned. Add a supervisor loop that restarts the worker (with a small backoff) and logs the panic.
+- [x] Implement a `viaduct --debug` flag or environment variable that enables verbose `tracing` logs, disables database WAL truncation (for easier inspection), and adds a hidden Debug menu to the UI.
+- [x] Build out integration test suites for the refresh pipeline (`LocalAccountRefresher` and Inoreader sync), mocking the network layer.
+- [x] Implement UI test harnesses to ensure sidebar/timeline/article pane state transitions are rock solid.
+- [x] Port any remaining applicable unit tests from `.netnewswire/Tests/` and module test directories.
+- [x] **DB worker supervision**: `database::worker::spawn_db_worker` spawns a plain `std::thread::spawn` — if the worker panics every future op is orphaned. Add a supervisor loop that restarts the worker (with a small backoff) and logs the panic.
 
 ## Phase 17: Flatpak Sandboxing & 1.0 Release
-- [ ] Flatpak manifest: `network` permission only; no `--filesystem=home`. OPML I/O entirely via `org.freedesktop.portal.FileChooser`.
-- [ ] AppStream metadata (`appdata.xml`), icons at all required sizes, desktop entry.
-- [ ] Reproducible build verified against the target Flathub runtime.
-- [ ] Background daemon via `xdg-desktop-portal` Background API for cron-based refresh while the UI is closed (moved from Phase 13). Adds `ashpd` for the portal client; pairs with the manifest's `org.freedesktop.portal.Background` entry.
+- [x] Flatpak manifest: `network` permission only; no `--filesystem=home`. OPML I/O entirely via `org.freedesktop.portal.FileChooser`.
+- [x] AppStream metadata (`appdata.xml`), icons at all required sizes, desktop entry.
+- [x] Reproducible build verified against the target Flathub runtime.
+- [x] Background daemon via `xdg-desktop-portal` Background API for cron-based refresh while the UI is closed (moved from Phase 13). Adds `ashpd` for the portal client; pairs with the manifest's `org.freedesktop.portal.Background` entry.
 - [ ] Tag `1.0.0` and submit to Flathub.
 
 ---

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, error, warn};
 
-use crate::database::accounts::LocalAccount;
+use crate::database::accounts::Account;
 use crate::error::{NetworkError, ParseError, Result};
 use crate::models::{ArticleChanges, Feed, FeedSettings};
 
@@ -208,16 +208,16 @@ impl Fetcher {
     }
 }
 
-pub struct LocalAccountRefresher {
+pub struct AccountRefresher {
     fetcher: Fetcher,
-    account: Arc<LocalAccount>,
+    account: Arc<Account>,
     changes_sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
     retention_days: i64,
 }
 
-impl LocalAccountRefresher {
+impl AccountRefresher {
     pub fn new(
-        account: Arc<LocalAccount>,
+        account: Arc<Account>,
         changes_sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
         retention_days: i64,
     ) -> Self {
@@ -332,7 +332,7 @@ fn maybe_expire_conditional_get_info(
 
 async fn refresh_one_feed(
     fetcher: Fetcher,
-    account: Arc<LocalAccount>,
+    account: Arc<Account>,
     sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
     feed: Feed,
     settings: FeedSettings,

@@ -65,12 +65,24 @@ impl ImageCache {
     /// Fetch a favicon by URL. Memory hit → disk hit → network fetch → cache.
     /// Returns `None` on any failure; callers should fall back to `adw::Avatar`.
     pub async fn favicon(&self, url: &str) -> Option<Vec<u8>> {
-        self.fetch_kind(url, Kind::Favicon).await
+        let cache = self.clone();
+        let url = url.to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let _ = tx.send(cache.fetch_kind(&url, Kind::Favicon).await);
+        });
+        rx.await.unwrap_or(None)
     }
 
     /// Fetch an inline article image by URL.
     pub async fn image(&self, url: &str) -> Option<Vec<u8>> {
-        self.fetch_kind(url, Kind::Image).await
+        let cache = self.clone();
+        let url = url.to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let _ = tx.send(cache.fetch_kind(&url, Kind::Image).await);
+        });
+        rx.await.unwrap_or(None)
     }
 
     async fn fetch_kind(&self, url: &str, kind: Kind) -> Option<Vec<u8>> {

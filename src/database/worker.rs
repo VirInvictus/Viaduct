@@ -13,7 +13,7 @@ use std::path::Path;
 use tokio::sync::mpsc;
 
 use crate::error::Result;
-use crate::paths::{articles_db_path, feed_settings_db_path};
+use crate::paths::{articles_db_path, feed_settings_db_path, sync_db_path};
 
 /// Operations that can be performed by the database worker.
 pub enum DbOp {
@@ -21,6 +21,45 @@ pub enum DbOp {
     Articles(crate::database::articles::ArticlesDbOp),
     /// Operations related to the Feed Settings database.
     Settings(Box<crate::database::settings::SettingsDbOp>),
+}
+
+pub fn spawn_sync_worker(mut rx: mpsc::Receiver<crate::database::sync::SyncDbOp>) -> Result<()> {
+    let sync_path = sync_db_path()?;
+
+    std::thread::spawn(move || {
+        loop {
+            let mut rx_ref = std::panic::AssertUnwindSafe(&mut rx);
+            let sync_path_ref = std::panic::AssertUnwindSafe(&sync_path);
+
+            let res = std::panic::catch_unwind(move || {
+                let mut sync_conn = match Connection::open(&*sync_path_ref) {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        tracing::error!("Failed to init sync db: {}", e);
+                        return;
+                    }
+                };
+
+                if let Err(e) = crate::database::sync::setup_schema(&sync_conn) {
+                    tracing::error!("Failed to setup sync db schema: {}", e);
+                    return;
+                }
+
+                while let Some(op) = rx_ref.blocking_recv() {
+                    crate::database::sync::handle_op(&mut sync_conn, op);
+                }
+            });
+
+            if let Err(err) = res {
+                tracing::error!(?err, "Sync worker panicked; restarting loop...");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            } else {
+                break;
+            }
+        }
+    });
+
+    Ok(())
 }
 
 /// Spawns a dedicated background thread to handle all database operations.
@@ -33,30 +72,45 @@ pub fn spawn_db_worker(mut rx: mpsc::Receiver<DbOp>) -> Result<()> {
     let settings_path = feed_settings_db_path()?;
 
     std::thread::spawn(move || {
-        let mut articles_conn = match init_articles_db(&articles_path) {
-            Ok(conn) => conn,
-            Err(e) => {
-                tracing::error!("Failed to init articles db: {}", e);
-                return;
-            }
-        };
+        loop {
+            let mut rx_ref = std::panic::AssertUnwindSafe(&mut rx);
+            let articles_path_ref = std::panic::AssertUnwindSafe(&articles_path);
+            let settings_path_ref = std::panic::AssertUnwindSafe(&settings_path);
 
-        let mut settings_conn = match init_settings_db(&settings_path) {
-            Ok(conn) => conn,
-            Err(e) => {
-                tracing::error!("Failed to init settings db: {}", e);
-                return;
-            }
-        };
+            let res = std::panic::catch_unwind(move || {
+                let mut articles_conn = match init_articles_db(&*articles_path_ref) {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        tracing::error!("Failed to init articles db: {}", e);
+                        return;
+                    }
+                };
 
-        while let Some(op) = rx.blocking_recv() {
-            match op {
-                DbOp::Articles(article_op) => {
-                    crate::database::articles::handle_op(&mut articles_conn, article_op);
+                let mut settings_conn = match init_settings_db(&*settings_path_ref) {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        tracing::error!("Failed to init settings db: {}", e);
+                        return;
+                    }
+                };
+
+                while let Some(op) = rx_ref.blocking_recv() {
+                    match op {
+                        DbOp::Articles(article_op) => {
+                            crate::database::articles::handle_op(&mut articles_conn, article_op);
+                        }
+                        DbOp::Settings(settings_op) => {
+                            crate::database::settings::handle_op(&mut settings_conn, *settings_op);
+                        }
+                    }
                 }
-                DbOp::Settings(settings_op) => {
-                    crate::database::settings::handle_op(&mut settings_conn, *settings_op);
-                }
+            });
+
+            if let Err(err) = res {
+                tracing::error!(?err, "Database worker panicked; restarting loop...");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            } else {
+                break;
             }
         }
     });

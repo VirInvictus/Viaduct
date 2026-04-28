@@ -47,6 +47,13 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                         <property name="icon-name">checkbox-checked-symbolic</property>
                       </object>
                     </child>
+                    <child type="start">
+                      <object class="GtkButton" id="sync_btn">
+                        <property name="icon-name">view-refresh-symbolic</property>
+                        <property name="tooltip-text">Sync Now</property>
+                        <property name="action-name">win.refresh</property>
+                      </object>
+                    </child>
                     <child type="end">
                       <object class="GtkToggleButton" id="search_btn">
                         <property name="icon-name">system-search-symbolic</property>
@@ -144,10 +151,56 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                         <property name="content">
                           <object class="GtkScrolledWindow">
                             <property name="child">
-                              <object class="GtkTextView" id="article_text_view">
-                                <property name="editable">False</property>
-                                <property name="wrap-mode">word</property>
-                                <property name="cursor-visible">False</property>
+                              <object class="AdwClamp">
+                                <property name="maximum-size">800</property>
+                                <property name="child">
+                                  <object class="GtkBox">
+                                    <property name="orientation">vertical</property>
+                                    <property name="spacing">12</property>
+                                    <property name="margin-top">32</property>
+                                    <property name="margin-bottom">32</property>
+                                    <property name="margin-start">12</property>
+                                    <property name="margin-end">12</property>
+                                    <child>
+                                      <object class="GtkLabel" id="article_title_label">
+                                        <property name="wrap">True</property>
+                                        <property name="xalign">0</property>
+                                        <property name="selectable">True</property>
+                                        <style>
+                                          <class name="title-1"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkLabel" id="article_meta_label">
+                                        <property name="wrap">True</property>
+                                        <property name="xalign">0</property>
+                                        <property name="selectable">True</property>
+                                        <style>
+                                          <class name="caption"/>
+                                          <class name="dim-label"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkSeparator">
+                                        <property name="margin-top">12</property>
+                                        <property name="margin-bottom">12</property>
+                                      </object>
+                                    </child>
+                                    <child>
+                                      <object class="GtkTextView" id="article_text_view">
+                                        <property name="editable">False</property>
+                                        <property name="wrap-mode">word-char</property>
+                                        <property name="cursor-visible">False</property>
+                                        <property name="pixels-above-lines">8</property>
+                                        <property name="pixels-below-lines">8</property>
+                                        <property name="justification">left</property>
+                                        <property name="bottom-margin">100</property>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </property>
                               </object>
                             </property>
                           </object>
