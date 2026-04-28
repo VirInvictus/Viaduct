@@ -60,9 +60,9 @@ fn main() -> glib::ExitCode {
 }
 
 fn init_tracing() {
-    let mut default_level = "info";
+    let mut default_level = "info,html5ever=error";
     if std::env::args().any(|arg| arg == "--debug") {
-        default_level = "debug,viaduct=trace";
+        default_level = "debug,viaduct=trace,html5ever=error";
         viaduct::set_debug_mode(true);
     }
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));

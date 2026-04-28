@@ -471,11 +471,12 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
         buf.clear();
     }
 
+    let resolved_icon = icon_url.map(|u| resolve_url(&u, home_page_url.as_deref().or(Some(feed_url))));
     Ok(ParsedFeed {
         title,
         home_page_url,
         feed_url: Some(feed_url.to_string()),
-        icon_url,
+        icon_url: resolved_icon,
         language,
         items,
     })
@@ -833,12 +834,13 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
         }
     }
 
+    let resolved_icon = icon_url.or(logo_url).map(|u| resolve_url(&u, home_page_url.as_deref().or(Some(feed_url))));
     Ok(ParsedFeed {
         title,
         home_page_url,
         feed_url: Some(feed_url.to_string()),
         // NNW prefers <icon> over <logo> for the channel icon.
-        icon_url: icon_url.or(logo_url),
+        icon_url: resolved_icon,
         language,
         items,
     })

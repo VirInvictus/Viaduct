@@ -142,7 +142,7 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                           <object class="AdwHeaderBar">
                             <child type="end">
                               <object class="GtkToggleButton" id="reader_btn">
-                                <property name="icon-name">view-reader-symbolic</property>
+                                <property name="icon-name">format-justify-fill-symbolic</property>
                                 <property name="tooltip-text">Reader View</property>
                               </object>
                             </child>

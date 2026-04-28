@@ -333,6 +333,12 @@ impl ViaductWindow {
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| build_empty_body_fallback(&article));
 
+            let is_stub = body.len() < 500
+                || body.contains("Read more")
+                || body.contains("Continue reading")
+                || body.contains("Continue Reading");
+            let has_url = external.is_some();
+
             // Seed the display state for the new article. `auto_reader` is
             // loaded async from FeedSettings below; until it resolves we
             // render the raw body.
@@ -384,7 +390,7 @@ impl ViaductWindow {
                     .ok()
                     .flatten()
                     .map(|s| s.reader_view_always_enabled)
-                    .unwrap_or(false);
+                    .unwrap_or(false) || (is_stub && has_url);
                 if let Some(window) = window_weak.upgrade() {
                     window.imp().article_display.borrow_mut().auto_reader = auto;
                     if auto {
