@@ -219,6 +219,7 @@ pub fn setup_sidebar_list_view(
 
     let factory = gtk::SignalListItemFactory::new();
 
+    let account_for_setup = account.clone();
     factory.connect_setup(move |_factory, list_item| {
         let item = list_item
             .downcast_ref::<gtk::ListItem>()
@@ -231,6 +232,74 @@ pub fn setup_sidebar_list_view(
         box_widget.set_margin_end(6);
         box_widget.set_margin_top(2);
         box_widget.set_margin_bottom(2);
+
+        // v2.6.0 drag-and-drop. Drag-source: feed rows expose their URL
+        // as a string; drop-target: folder rows accept a feed URL and
+        // call `Account::move_feed_to_folder`. Both controllers read
+        // the bound `SidebarItem` via the `viaduct-sidebar-item`
+        // set_data attached during `connect_bind`. Non-Feed rows
+        // suppress the drag (return None from prepare); non-Folder
+        // rows reject the drop.
+        let drag_source = gtk::DragSource::new();
+        drag_source.set_actions(gtk::gdk::DragAction::MOVE);
+        let box_for_drag = box_widget.downgrade();
+        drag_source.connect_prepare(move |_, _x, _y| {
+            let bound = box_for_drag.upgrade()?;
+            let item = unsafe { bound.data::<SidebarItem>("viaduct-sidebar-item")? };
+            // SAFETY: `viaduct-sidebar-item` is set in `connect_bind`
+            // and lives until the next bind / unbind on this widget.
+            // Reading through the pointer here is fine for the
+            // synchronous duration of `prepare`.
+            let item = unsafe { item.as_ref() };
+            match item {
+                SidebarItem::Feed(feed) => {
+                    Some(gtk::gdk::ContentProvider::for_value(&feed.url.to_value()))
+                }
+                _ => None,
+            }
+        });
+        box_widget.add_controller(drag_source);
+
+        let drop_target = gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::MOVE);
+        let box_for_drop = box_widget.downgrade();
+        let account_for_drop = account_for_setup.clone();
+        drop_target.connect_drop(move |target, value, _x, _y| {
+            let Some(bound) = box_for_drop.upgrade() else {
+                return false;
+            };
+            let item = unsafe { bound.data::<SidebarItem>("viaduct-sidebar-item") };
+            let folder_name = match item.map(|p| unsafe { p.as_ref() }) {
+                Some(SidebarItem::Folder(folder)) => folder.name.clone(),
+                _ => return false,
+            };
+            let Ok(url) = value.get::<String>() else {
+                return false;
+            };
+            let account = account_for_drop.clone();
+            let target_widget = target.widget();
+            // Run the DB op on tokio (Send-only future); deliver the
+            // result back to the GTK thread via a oneshot. The widget
+            // ref is `!Send` so it stays here in the local future.
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            crate::spawn_on_runtime(async move {
+                let _ = tx.send(account.move_feed_to_folder(&url, Some(folder_name)).await);
+            });
+            glib::spawn_future_local(async move {
+                match rx.await {
+                    Ok(Ok(_)) => {
+                        if let Some(w) = target_widget {
+                            let _ = w.activate_action("win.reload-sidebar", None);
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(?e, "drag-and-drop: move_feed_to_folder failed");
+                    }
+                    Err(_) => {}
+                }
+            });
+            true
+        });
+        box_widget.add_controller(drop_target);
 
         // Icon slot is a Stack with two pages — a symbolic GtkImage for groups
         // and folders, an AdwAvatar for feeds and smart feeds. Same row factory

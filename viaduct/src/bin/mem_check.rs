@@ -11,7 +11,7 @@
 //! `/proc/self/status` and reports pass/fail against the roadmap's 500 MB
 //! peak / 100–300 MB idle targets.
 //!
-//! Three checkpoints are reported:
+//! Four checkpoints are reported:
 //!
 //! - **post-DB peak** — exercises DB + parser + serde end-to-end.
 //! - **post-image-warmup peak** — adds 500 favicons (1 KB) + 50 images
@@ -21,6 +21,11 @@
 //!   synthesized ~100 KB article HTML 10 times sequentially to surface any
 //!   cumulative leak in the readability extractor (`html5ever` DOM allocs
 //!   plus scoring tree walks are the riskiest path for the 500 MB ceiling).
+//! - **post-background-cycle** — Phase 17: drops the in-memory image LRUs
+//!   via `ImageCache::clear_memory_now` and reports the RSS delta. The
+//!   full GUI hide-cycle (idling the WebView, compacting the timeline
+//!   `ListStore`) needs interactive QA — this validates the headless
+//!   piece that lives in `viaduct-core`.
 //!
 //! Usage:
 //!
@@ -188,6 +193,28 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("peak RSS (VmHWM): {} MB", post_reader_peak);
     println!("current RSS (VmRSS): {} MB", post_reader_rss);
+
+    // ---------- Phase 17 background-cycle checkpoint ----------
+    // Headless analog of `ViaductWindow::hide_for_background`: drop the
+    // in-memory image LRUs and observe RSS. The full GUI cycle (also
+    // idling the article-pane WebView and compacting the timeline
+    // ListStore) needs interactive QA — those are GTK-side widgets we
+    // can't construct from a headless bin. This checkpoint validates
+    // the one piece of the chain that lives in `viaduct-core`.
+    cache.clear_memory_now().await;
+    // Give the allocator a moment to release pages back to the OS.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let post_clear_peak = read_vm_hwm_mb().unwrap_or(0);
+    let post_clear_rss = read_vm_rss_mb().unwrap_or(0);
+
+    println!("-- post-background-cycle checkpoint (ImageCache cleared) --");
+    println!("peak RSS (VmHWM): {} MB", post_clear_peak);
+    println!("current RSS (VmRSS): {} MB", post_clear_rss);
+    println!(
+        "RSS delta after clear: {} MB",
+        post_warm_rss as i64 - post_clear_rss as i64,
+    );
 
     println!("== results ==");
     let mut failed = false;

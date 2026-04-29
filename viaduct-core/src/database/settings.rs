@@ -40,10 +40,19 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
             authors_json TEXT,
             folder_relationship_json TEXT,
             last_check_date INTEGER,
-            reader_view_always_enabled INTEGER NOT NULL DEFAULT 0
+            reader_view_always_enabled INTEGER NOT NULL DEFAULT 0,
+            new_article_notifications_enabled INTEGER NOT NULL DEFAULT 0
         );
         ",
     )?;
+    // v2.4.0: idempotent ALTER for DBs created before
+    // `new_article_notifications_enabled` existed. Same pattern as the
+    // `attachments` JSON column add on `articles` from v0.6.x — try the
+    // ALTER, ignore "duplicate column" errors so re-runs are no-ops.
+    let _ = conn.execute_batch(
+        "ALTER TABLE feed_settings
+           ADD COLUMN new_article_notifications_enabled INTEGER NOT NULL DEFAULT 0;",
+    );
     Ok(())
 }
 
@@ -97,6 +106,9 @@ fn fetch(conn: &mut Connection, feed_id: &str) -> Result<Option<FeedSettings>> {
                     .get::<_, Option<i64>>("last_check_date")?
                     .and_then(|t| Utc.timestamp_opt(t, 0).single()),
                 reader_view_always_enabled: row.get::<_, i64>("reader_view_always_enabled")? != 0,
+                new_article_notifications_enabled: row
+                    .get::<_, i64>("new_article_notifications_enabled")?
+                    != 0,
             })
         })
         .optional()?;
@@ -109,8 +121,9 @@ fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {
             feed_id, feed_url, home_page_url, icon_url, favicon_url,
             edited_name, content_hash, last_modified, etag,
             date_created, max_age, authors_json, folder_relationship_json,
-            last_check_date, reader_view_always_enabled
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            last_check_date, reader_view_always_enabled,
+            new_article_notifications_enabled
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(feed_id) DO UPDATE SET
             feed_url=excluded.feed_url,
             home_page_url=excluded.home_page_url,
@@ -125,7 +138,8 @@ fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {
             authors_json=excluded.authors_json,
             folder_relationship_json=excluded.folder_relationship_json,
             last_check_date=excluded.last_check_date,
-            reader_view_always_enabled=excluded.reader_view_always_enabled",
+            reader_view_always_enabled=excluded.reader_view_always_enabled,
+            new_article_notifications_enabled=excluded.new_article_notifications_enabled",
         params![
             s.feed_id,
             s.feed_url,
@@ -142,6 +156,7 @@ fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {
             s.folder_relationship_json,
             s.last_check_date.map(|d| d.timestamp()),
             s.reader_view_always_enabled as i64,
+            s.new_article_notifications_enabled as i64,
         ],
     )?;
     Ok(())

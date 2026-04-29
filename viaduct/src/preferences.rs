@@ -25,7 +25,10 @@ pub mod keys {
     pub const FONT_MONOSPACE: &str = "font-monospace";
     pub const FONT_SERIF: &str = "font-serif";
     pub const ARTICLE_THEME: &str = "article-theme";
+    pub const ARTICLE_FONT_SCALE: &str = "article-font-scale";
+    pub const ARTICLE_LINE_HEIGHT: &str = "article-line-height";
     pub const VIDEO_PLAYBACK_MODE: &str = "video-playback-mode";
+    pub const RUN_IN_BACKGROUND: &str = "run-in-background";
 }
 
 /// Open the user-visible preferences. Returns `None` when the schema isn't
@@ -179,6 +182,27 @@ pub fn refresh_interval_minutes(settings: &gio::Settings) -> i32 {
 /// the value to `[1, 365]`; clamped here regardless to keep callers honest.
 pub fn retention_days(settings: &gio::Settings) -> i64 {
     settings.int(keys::RETENTION_DAYS).clamp(1, 365) as i64
+}
+
+/// v2.5.0: whether the user has opted into running viaduct in the
+/// background after the main window is closed. Drives the
+/// hide-instead-of-quit branch in `connect_close_request` and the
+/// system-tray indicator (see `tray.rs`).
+pub fn run_in_background(settings: &gio::Settings) -> bool {
+    settings.boolean(keys::RUN_IN_BACKGROUND)
+}
+
+/// v2.3.0: article font-size multiplier as a fraction (1.0 = native).
+/// Stored as a percentage in GSettings (75–200) and converted here.
+pub fn article_font_scale(settings: &gio::Settings) -> f32 {
+    settings.int(keys::ARTICLE_FONT_SCALE).clamp(75, 200) as f32 / 100.0
+}
+
+/// v2.3.0: article body unitless `line-height`. Stored as centi-units in
+/// GSettings (100–250 = 1.0–2.5; default 150 = 1.5x); converted to a
+/// float here.
+pub fn article_line_height(settings: &gio::Settings) -> f32 {
+    settings.int(keys::ARTICLE_LINE_HEIGHT).clamp(100, 250) as f32 / 100.0
 }
 
 /// Monospace font family override for the article body. Empty string means

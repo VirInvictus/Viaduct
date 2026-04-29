@@ -23,6 +23,13 @@ pub struct FeedSettings {
     pub folder_relationship_json: Option<String>,
     pub last_check_date: Option<DateTime<Utc>>,
     pub reader_view_always_enabled: bool,
+    /// v2.4.0: per-feed opt-in for desktop notifications. When `true`,
+    /// new articles fetched from this feed during a refresh cycle
+    /// trigger a per-feed `gio::Notification` (gated by the global
+    /// `notifications-on-refresh` GSetting). Defaults to `false` so the
+    /// schema upgrade is silent — users explicitly opt in via the feed
+    /// inspector dialog.
+    pub new_article_notifications_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

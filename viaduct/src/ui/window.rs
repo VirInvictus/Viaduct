@@ -10,19 +10,13 @@ use std::sync::Arc;
 use crate::database::accounts::Account;
 use crate::network::ImageCache;
 use crate::paths::{favicon_cache_dir, image_cache_dir, video_thumb_cache_dir};
-use crate::ui::article_renderer;
-use crate::ui::sidebar::{
-    SidebarDataSource, SidebarItem, SidebarTreeControllerDelegate, selected_sidebar_item,
-    setup_sidebar_list_view,
-};
-use crate::ui::timeline::{ArticleNode, FeedNameMap, setup_timeline_list_view};
-use crate::ui::tree::TreeController;
+use crate::ui::sidebar::{SidebarItem, selected_sidebar_item};
+use crate::ui::timeline::ArticleNode;
 
 mod imp {
     use super::*;
     use std::cell::OnceCell;
     use std::cell::RefCell;
-    use std::rc::Rc;
 
     #[derive(Default, gtk::CompositeTemplate)]
     #[template(file = "window.ui")]
@@ -32,79 +26,27 @@ mod imp {
         #[template_child]
         pub inner_split_view: TemplateChild<adw::NavigationSplitView>,
         #[template_child]
-        pub sidebar_list_view: TemplateChild<gtk::ListView>,
+        pub sidebar_view: TemplateChild<crate::ui::sidebar_view::SidebarView>,
         #[template_child]
-        pub timeline_list_view: TemplateChild<gtk::ListView>,
+        pub timeline_view: TemplateChild<crate::ui::timeline_view::TimelineView>,
         #[template_child]
-        pub article_web_view: TemplateChild<webkit6::WebView>,
-        #[template_child]
-        pub url_overlay: TemplateChild<gtk::Label>,
-        #[template_child]
-        pub article_stack: TemplateChild<gtk::Stack>,
-        #[template_child]
-        pub timeline_stack: TemplateChild<gtk::Stack>,
-        #[template_child]
-        pub search_bar: TemplateChild<gtk::SearchBar>,
-        #[template_child]
-        pub search_entry: TemplateChild<gtk::SearchEntry>,
-        #[template_child]
-        pub search_btn: TemplateChild<gtk::ToggleButton>,
-        #[template_child]
-        pub scope_toggle: TemplateChild<gtk::ToggleButton>,
-        #[template_child]
-        pub reader_btn: TemplateChild<gtk::ToggleButton>,
-        #[template_child]
-        pub play_video_btn: TemplateChild<gtk::Button>,
+        pub article_pane: TemplateChild<crate::ui::article_pane_view::ArticlePaneView>,
         #[template_child]
         pub toast_overlay: TemplateChild<adw::ToastOverlay>,
-        #[template_child]
-        pub mark_all_read_btn: TemplateChild<gtk::Button>,
-        #[template_child]
-        pub primary_menu: TemplateChild<gio::Menu>,
-        #[template_child]
-        pub sync_btn_stack: TemplateChild<gtk::Stack>,
-        #[template_child]
-        pub sync_btn_spinner: TemplateChild<gtk::Spinner>,
 
         pub account: OnceCell<Arc<Account>>,
         pub image_cache: OnceCell<Arc<ImageCache>>,
-        pub timeline_store: OnceCell<gio::ListStore>,
-        pub timeline_selection: OnceCell<gtk::SingleSelection>,
-        pub sidebar_delegate: OnceCell<Rc<RefCell<SidebarTreeControllerDelegate>>>,
-        pub sidebar_data_source: OnceCell<Rc<SidebarDataSource>>,
-        pub sidebar_tree_controller: OnceCell<Rc<TreeController>>,
-        /// Map from `feed_id` → display name. Built from OPML at load time
-        /// and rebuilt on every import; the timeline factory reads through
-        /// it on each bind so rows show "Daring Fireball" instead of the URL.
-        pub feed_names: OnceCell<crate::ui::timeline::FeedNameMap>,
-        /// Pending debounced search timeout, restarted on every keystroke.
-        pub search_timeout: RefCell<Option<glib::SourceId>>,
-        /// Feed ID of the currently-selected sidebar row. Used by the search
-        /// scope toggle to restrict FTS5 queries to a single feed.
-        pub selected_feed_id: RefCell<Option<String>>,
-        /// Article-pane display state. Centralizes the four inputs to
-        /// `render_article_body` so toggle flips and async extractor
-        /// completions don't need to re-derive everything.
-        pub article_display: RefCell<ArticleDisplayState>,
         pub batch_update: crate::ui::batch::BatchUpdate,
-        /// Detected video source for the currently-rendered article, if any.
-        /// Drives `play_video_btn` visibility and the click handler.
-        pub current_video: RefCell<Option<crate::network::video_thumbs::VideoSource>>,
-        /// Right-click context-menu state (v1.7.1). Populated by the
-        /// gesture-click handlers on the sidebar / timeline list views
-        /// before the popover is shown; the `act_*_feed` and
-        /// `act_*_article` action bodies read from these cells. Refcells
-        /// rather than passing arguments because gio::Action callbacks
-        /// don't carry per-invocation data, only the action target value.
-        pub right_clicked_feed: RefCell<Option<crate::models::Feed>>,
-        pub right_clicked_folder: RefCell<Option<crate::models::Folder>>,
+        /// Right-click context-menu state for the timeline (v1.7.1). The
+        /// sidebar's equivalent right_clicked_feed/folder cells live on
+        /// `SidebarView` (v2.0.0-pre3). Window-level action bodies read
+        /// through `sidebar_view.take_right_clicked_*()` accessors.
         pub right_clicked_article: RefCell<Option<crate::models::Article>>,
-        /// Popover-menu widgets, constructed lazily via `gio::Menu` ->
-        /// `gtk::PopoverMenu::from_model` and parented to their list view.
-        /// Stored on the window so we don't rebuild the popover on every
-        /// right-click — set_pointing_to + popup() reuses the same widget.
-        pub sidebar_feed_popover: OnceCell<gtk::PopoverMenu>,
-        pub sidebar_folder_popover: OnceCell<gtk::PopoverMenu>,
+        /// Timeline right-click popover. Window-owned because the action
+        /// bodies it triggers (`win.toggle-read`, `win.toggle-star`,
+        /// `win.open-in-browser`, `win.open-enclosure`, `win.copy-url`)
+        /// are window methods that operate on the timeline selection.
+        /// `set_pointing_to` + `popup()` reuses the same widget per click.
         pub timeline_popover: OnceCell<gtk::PopoverMenu>,
         /// Periodic-refresh `glib::timeout` source ID (v1.8.0). Replaced
         /// when the user changes `refresh-interval-minutes` in
@@ -126,25 +68,6 @@ mod imp {
         pub selection_fetch_generation: std::cell::Cell<u64>,
     }
 
-    /// Captured state for whatever article is currently on-screen.
-    /// `raw_html` is the feed-provided body, `extracted_html` caches a
-    /// Reader-View extraction result. `auto_reader` is the feed's
-    /// `reader_view_always_enabled` setting; when true the reader button
-    /// is pre-toggled on article selection. Metadata fields feed the NNW
-    /// theme macros and are populated by the timeline-selection handler.
-    #[derive(Default)]
-    pub struct ArticleDisplayState {
-        pub raw_html: Option<String>,
-        pub extracted_html: Option<String>,
-        pub article_url: Option<String>,
-        pub auto_reader: bool,
-        pub title: String,
-        pub byline: String,
-        pub feed_link: String,
-        pub feed_link_title: String,
-        pub date_published: Option<chrono::DateTime<chrono::Utc>>,
-    }
-
     #[glib::object_subclass]
     impl ObjectSubclass for ViaductWindow {
         const NAME: &'static str = "ViaductWindow";
@@ -152,10 +75,16 @@ mod imp {
         type ParentType = adw::ApplicationWindow;
 
         fn class_init(klass: &mut Self::Class) {
-            // The window.ui template references `WebKitWebView` by class
-            // name. The GType must be registered before the GTK builder
-            // resolves the template, otherwise template loading fails.
+            // The window.ui template references `WebKitWebView` (used
+            // inside ArticlePaneView's own template) plus the
+            // `ViaductArticlePaneView` and `ViaductTimelineView` custom
+            // widgets by class name. Every GType must be registered
+            // before the GTK builder resolves the template, otherwise
+            // template loading fails.
             webkit6::WebView::ensure_type();
+            crate::ui::article_pane_view::ArticlePaneView::ensure_type();
+            crate::ui::timeline_view::TimelineView::ensure_type();
+            crate::ui::sidebar_view::SidebarView::ensure_type();
             klass.bind_template();
         }
 
@@ -194,6 +123,16 @@ impl ViaductWindow {
             .image_cache
             .set(Arc::new(ImageCache::new(favicons, images, video_thumbs)))
             .ok();
+        // Phase 18 (v2.0.0-pre1): the article-pane WebView lives inside
+        // the ViaductArticlePaneView custom widget now. Bootstrap it with
+        // the shared ImageCache so the `viaduct-img://` scheme resolves;
+        // this also wires the reader-button toggle, the play-video click
+        // handler, and the WebKit lockdown profile.
+        window
+            .imp()
+            .article_pane
+            .get()
+            .bootstrap(window.image_cache());
         window.wire_models();
         crate::ui::actions::install(&window, app);
 
@@ -207,18 +146,31 @@ impl ViaductWindow {
         // ordered.
         let weak_for_close = window.downgrade();
         window.connect_close_request(move |_| {
-            if let Some(window) = weak_for_close.upgrade() {
-                let imp = window.imp();
-                for popover in [
-                    imp.timeline_popover.get(),
-                    imp.sidebar_feed_popover.get(),
-                    imp.sidebar_folder_popover.get(),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    popover.unparent();
-                }
+            let Some(window) = weak_for_close.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+
+            // Phase 17 background mode: when the user has enabled
+            // run-in-background, hide the window instead of quitting so
+            // the periodic-refresh timer keeps firing. The portal grant
+            // (org.freedesktop.portal.Background) was requested when
+            // they flipped the GSetting on; without it, on Flatpak the
+            // host will eventually still terminate the process.
+            let run_in_background = crate::preferences::settings()
+                .map(|s| s.boolean("run-in-background"))
+                .unwrap_or(false);
+            if run_in_background {
+                window.hide_for_background();
+                return glib::Propagation::Stop;
+            }
+
+            let imp = window.imp();
+            // Sidebar popovers live on SidebarView (v2.0.0-pre3); the
+            // timeline popover stays on the window because its menu
+            // items hit window-level actions.
+            imp.sidebar_view.get().unparent_popovers();
+            if let Some(popover) = imp.timeline_popover.get() {
+                popover.unparent();
             }
             glib::Propagation::Proceed
         });
@@ -228,7 +180,9 @@ impl ViaductWindow {
             debug_section.append(Some("Crash (Panic)"), Some("win.debug-crash"));
             window
                 .imp()
-                .primary_menu
+                .sidebar_view
+                .get()
+                .primary_menu()
                 .append_submenu(Some("Debug"), &debug_section);
         }
 
@@ -266,139 +220,112 @@ impl ViaductWindow {
         self.refresh_specific_feeds(feeds);
     }
 
+    /// Hide the window for the run-in-background mode (Phase 17). The
+    /// process keeps running so the periodic-refresh `glib::timeout`
+    /// keeps firing; reopening via the dock icon routes through
+    /// `Application::activate` which re-presents this same window.
+    /// Sheds resident memory by dropping the ImageCache LRU, idling the
+    /// article-pane WebView, and compacting the timeline `ListStore`.
+    /// `reload_current_timeline` repopulates from the still-selected
+    /// sidebar item on re-show, so the user lands back where they left
+    /// off (and with any articles fetched while the window was hidden).
+    fn hide_for_background(&self) {
+        let imp = self.imp();
+
+        if let Some(cache) = imp.image_cache.get() {
+            cache.clear_memory();
+        }
+
+        // Article pane: idle the WebProcess (`about:blank`), drop the
+        // article body + display state, hide the play-video button.
+        imp.article_pane.get().idle_for_background();
+
+        // Compact the timeline list store. TimelineView's
+        // `connect_items_changed` flips the stack to the empty page
+        // automatically, so no explicit stack call is needed.
+        imp.timeline_view.get().clear();
+
+        self.set_visible(false);
+    }
+
     /// Read the current OPML's folder names so the Add Feed dialog can
-    /// populate its folder dropdown. Snapshot of the in-memory OPML
-    /// tree the sidebar is using — no DB or network round-trip.
+    /// populate its folder dropdown. Thin pass-through to the
+    /// `SidebarView` accessor.
     pub fn list_folder_names_public(&self) -> Vec<String> {
-        let Some(delegate) = self.imp().sidebar_delegate.get() else {
-            return Vec::new();
-        };
-        let delegate = delegate.borrow();
-        let Some(opml) = delegate.opml_file.borrow().clone() else {
-            return Vec::new();
-        };
-        opml.folders.iter().map(|f| f.name.clone()).collect()
+        self.imp().sidebar_view.get().list_folder_names()
     }
 
     fn wire_models(&self) {
-        use std::cell::RefCell;
-        use std::collections::HashMap;
-        use std::rc::Rc;
-
         let imp = self.imp();
 
-        // Lock down the article-pane WebView before any HTML can be loaded.
-        // Idempotent; settings stay applied for the window's lifetime.
-        article_renderer::apply_locked_down_settings(&imp.article_web_view.get());
-        // Link clicks must route to the system browser instead of
-        // navigating the WebView away from our rendered article.
-        article_renderer::install_link_interceptor(&imp.article_web_view.get());
-        // Register the viaduct-img:// URI scheme on the default WebContext
-        // so the article pane's CSP-locked img-src can route through our
-        // ImageCache. Process-wide; idempotent.
-        article_renderer::install_image_uri_scheme(self.image_cache());
-        // Register viaduct-font:// so themes that reference bundled
-        // fonts (e.g. Hyperlegible → Atkinson Hyperlegible) resolve
-        // even when the system doesn't have those fonts installed.
-        article_renderer::install_font_uri_scheme();
-        // Show the link URL in the article pane's bottom-left when the
-        // user hovers a link — preview where Enter / click will go.
-        article_renderer::install_hover_url_overlay(
-            &imp.article_web_view.get(),
-            &imp.url_overlay.get(),
-        );
+        // Phase 18 (v2.0.0-pre1): the WebKit lockdown, link interceptor,
+        // viaduct-img:// / viaduct-font:// scheme handlers, and hover URL
+        // overlay all moved into `ArticlePaneView::bootstrap`, called from
+        // `ViaductWindow::new` as soon as the ImageCache is available.
 
         // Re-render the article pane when:
         //   * the user changes the article-theme GSetting, or
         //   * the libadwaita color scheme flips (so "auto" mode swaps
         //     Sepia ↔ Tiqoe Dark live).
-        // No-op when no article is selected (`render_article_body`
-        // clears the pane).
-        let win_for_theme = self.downgrade();
+        // No-op when no article is selected — `refresh_render` clears the
+        // pane in that case.
+        let pane_for_theme = imp.article_pane.get().downgrade();
         if let Some(settings) = crate::preferences::settings() {
             settings.connect_changed(
                 Some(crate::preferences::keys::ARTICLE_THEME),
                 move |_, _| {
-                    if let Some(win) = win_for_theme.upgrade() {
-                        win.render_article_body();
+                    if let Some(pane) = pane_for_theme.upgrade() {
+                        pane.refresh_render();
                     }
                 },
             );
         }
-        let win_for_dark = self.downgrade();
+        let pane_for_dark = imp.article_pane.get().downgrade();
         adw::StyleManager::default().connect_dark_notify(move |_| {
-            if let Some(win) = win_for_dark.upgrade() {
-                win.render_article_body();
+            if let Some(pane) = pane_for_dark.upgrade() {
+                pane.refresh_render();
             }
         });
 
-        // Sidebar: delegate → controller → data source → list view.
-        let delegate = Rc::new(RefCell::new(SidebarTreeControllerDelegate::new()));
-        let controller = Rc::new(TreeController::new_with_generic_root(
-            Rc::downgrade(&delegate) as _,
-        ));
-        let data_source = Rc::new(SidebarDataSource::new());
-        data_source.set_tree_controller(controller.clone());
+        // Phase 18 (v2.0.0-pre3): SidebarView owns the sidebar list view,
+        // delegate / controller / data source, popovers, and the
+        // feed_names resolver. `bootstrap` builds the tree, sets up the
+        // row factory, wires the right-click context menus.
+        imp.sidebar_view
+            .get()
+            .bootstrap(self.account(), self.image_cache());
+        let sidebar_selection = imp.sidebar_view.get().selection();
+        let feed_names = imp.sidebar_view.get().feed_names();
 
-        let sidebar_selection = setup_sidebar_list_view(
-            &imp.sidebar_list_view,
-            &data_source,
+        // Phase 18 (v2.0.0-pre2): TimelineView owns the timeline list
+        // view + store + selection + search bar + scope toggle + the
+        // FTS5 debounce pipeline. `bootstrap` creates the store, sets up
+        // the row factory, wires the search-button / search-bar bind
+        // and the FTS handler.
+        imp.timeline_view.get().bootstrap(
             self.account(),
             self.image_cache(),
+            feed_names,
+            &imp.sidebar_view.get().search_btn(),
         );
-
-        // Feed-name resolver passed to the timeline factory. Empty until OPML
-        // loads; the bind closure falls back to feed_id (URL) until then.
-        let feed_names: FeedNameMap = Rc::new(RefCell::new(HashMap::new()));
-        imp.feed_names.set(feed_names.clone()).ok();
-
-        // Timeline store + selection.
-        let timeline_store = gio::ListStore::new::<ArticleNode>();
-        let timeline_selection = setup_timeline_list_view(
-            &imp.timeline_list_view,
-            &timeline_store,
-            feed_names.clone(),
-            self.image_cache(),
-        );
+        let timeline_selection = imp.timeline_view.get().selection();
 
         self.install_timeline_capture_shortcuts();
 
-        // Empty-state plumbing — keep the timeline stack page in sync
-        // with whether the store has any rows. Listens on items_changed
-        // so every populate path (sidebar selection, search, refresh)
-        // updates the visible page automatically.
-        let win_for_timeline_empty = self.downgrade();
-        timeline_store.connect_items_changed(move |store, _pos, _removed, _added| {
-            if let Some(win) = win_for_timeline_empty.upgrade() {
-                let name = if store.n_items() == 0 {
-                    "empty"
-                } else {
-                    "content"
-                };
-                win.imp().timeline_stack.set_visible_child_name(name);
-            }
-        });
-        // Initial state — empty until the first populate.
-        imp.timeline_stack.set_visible_child_name("empty");
-        // Article pane likewise starts in the empty state.
-        imp.article_stack.set_visible_child_name("empty");
-
-        // Persist references so they outlive `wire_models` and the GC.
-        imp.sidebar_delegate.set(delegate.clone()).ok();
-        imp.sidebar_tree_controller.set(controller.clone()).ok();
-        imp.sidebar_data_source.set(data_source.clone()).ok();
-        imp.timeline_store.set(timeline_store.clone()).ok();
-        imp.timeline_selection.set(timeline_selection.clone()).ok();
+        // Article pane starts in the empty state. The pane's own template
+        // defaults to its empty page; calling `clear()` here is
+        // belt-and-braces to make sure leftover state from a prior window
+        // doesn't leak through (relevant once we have multi-window
+        // support; today it's a one-line no-op).
+        imp.article_pane.get().clear();
 
         // Initial OPML load — populate the sidebar. `Account::load_opml`
         // calls `tokio::fs`, which requires a tokio runtime context — and
         // `glib::spawn_future_local` runs on the GLib main loop, NOT on tokio.
         // Hop through `spawn_on_runtime` for the read, deliver the parsed
-        // OpmlFile back through a oneshot, and apply it on the GTK thread.
+        // OpmlFile back through a oneshot, and apply it on the GTK thread
+        // via `sidebar_view.apply_opml`.
         let account = self.account();
-        let delegate_for_load = delegate.clone();
-        let controller_for_load = controller.clone();
-        let data_source_for_load = data_source.clone();
         let window_weak_for_load = self.downgrade();
         let (load_tx, load_rx) = tokio::sync::oneshot::channel();
         crate::spawn_on_runtime(async move {
@@ -408,12 +335,7 @@ impl ViaductWindow {
             match load_rx.await {
                 Ok(Ok(opml)) => {
                     if let Some(window) = window_weak_for_load.upgrade() {
-                        window.rebuild_feed_names_from(&opml);
-                    }
-                    delegate_for_load.borrow().set_opml_file(opml);
-                    controller_for_load.rebuild();
-                    data_source_for_load.refresh_root();
-                    if let Some(window) = window_weak_for_load.upgrade() {
+                        window.imp().sidebar_view.get().apply_opml(opml);
                         window.refresh_unread_counts();
                     }
                 }
@@ -424,7 +346,6 @@ impl ViaductWindow {
 
         // Sidebar selection → timeline fetch.
         let account_for_sidebar = self.account();
-        let timeline_store_for_sidebar = timeline_store.clone();
         let window_weak_for_sidebar = self.downgrade();
         sidebar_selection.connect_selection_changed(move |sel, _pos, _n| {
             let Some(item) = selected_sidebar_item(sel) else {
@@ -438,7 +359,11 @@ impl ViaductWindow {
                 } else {
                     None
                 };
-                *window.imp().selected_feed_id.borrow_mut() = feed_id;
+                window
+                    .imp()
+                    .timeline_view
+                    .get()
+                    .set_selected_feed_id(feed_id);
                 // Adaptive layout (v1.5.5): when the outer split view is
                 // collapsed (mobile-shaped window), tapping a sidebar
                 // entry must push to the timeline page or the user is
@@ -467,7 +392,6 @@ impl ViaductWindow {
             // fetches in the logs so users can tell us when their
             // selection isn't sticking.
             let account = account_for_sidebar.clone();
-            let store = timeline_store_for_sidebar.clone();
             let window_weak_for_fetch = window_weak_for_sidebar.clone();
             let item_label = sidebar_item_label(&item);
             let generation = if let Some(window) = window_weak_for_fetch.upgrade() {
@@ -515,12 +439,17 @@ impl ViaductWindow {
                 match result {
                     Ok(articles) => {
                         let count = articles.len();
+                        let Some(window) = window_weak_for_fetch.upgrade() else {
+                            return;
+                        };
+                        let timeline = window.imp().timeline_view.get();
+
                         let populate_at = std::time::Instant::now();
-                        populate_timeline(&store, articles);
+                        timeline.populate(articles);
                         let populate_ms = populate_at.elapsed().as_millis();
 
                         let status_at = std::time::Instant::now();
-                        refresh_timeline_statuses(account.clone(), store.clone());
+                        timeline.refresh_statuses(account.clone());
                         let status_ms = status_at.elapsed().as_millis();
 
                         let total_ms = click_at.elapsed().as_millis() as u64;
@@ -585,9 +514,12 @@ impl ViaductWindow {
             let title = article.title.clone().unwrap_or_else(|| "Untitled".into());
             let feed_link_title = window
                 .imp()
-                .feed_names
+                .sidebar_view
                 .get()
-                .and_then(|names| names.borrow().get(&feed_id).cloned())
+                .feed_names()
+                .borrow()
+                .get(&feed_id)
+                .cloned()
                 .unwrap_or_default();
             let byline = article
                 .authors
@@ -619,31 +551,22 @@ impl ViaductWindow {
                 || body.contains("Continue Reading");
             let has_url = external.is_some();
 
-            // Seed the display state for the new article. `auto_reader` is
-            // loaded async from FeedSettings below; until it resolves we
-            // render the raw body.
-            {
-                let mut state = window.imp().article_display.borrow_mut();
-                state.raw_html = Some(body);
-                state.extracted_html = None;
-                state.article_url = external;
-                state.auto_reader = false;
-                state.title = title;
-                state.byline = byline;
-                state.feed_link = feed_link;
-                state.feed_link_title = feed_link_title;
-                state.date_published = article.date_published;
-            }
-            // Untoggle the reader button without re-firing its handler (we
-            // want it to reflect `auto_reader` after the settings fetch).
-            window.imp().reader_btn.set_active(false);
-            // Detect a video source on this article and update the play
-            // button's visibility. The actual click handler is wired in
-            // wire_play_video_button(); here we just refresh visibility.
+            // Hand the article + metadata to the pane. ArticleRenderContext
+            // bundles every input the pane needs; the pane resets reader
+            // state, refreshes the play-video button, and re-renders.
             let detected = crate::network::video_thumbs::detect_video(&article);
-            *window.imp().current_video.borrow_mut() = detected.clone();
-            window.refresh_video_button_visibility();
-            window.render_article_body();
+            window.imp().article_pane.get().set_article(
+                crate::ui::article_pane_view::ArticleRenderContext {
+                    raw_html: body,
+                    article_url: external,
+                    title,
+                    byline,
+                    feed_link,
+                    feed_link_title,
+                    date_published: article.date_published,
+                    video: detected,
+                },
+            );
             // Adaptive layout (v1.5.5): when the inner split view is
             // collapsed, push to the article page so the user actually
             // sees the article they just selected. Without this, the
@@ -684,7 +607,10 @@ impl ViaductWindow {
                 });
             }
 
-            // Async-resolve the feed's readerViewAlwaysEnabled preference.
+            // Async-resolve the feed's readerViewAlwaysEnabled preference
+            // and push it into the pane. The pane flips the reader button
+            // on (which fires the toggle handler installed in bootstrap
+            // and kicks off the readability extraction).
             let account = account_for_article.clone();
             let window_weak = window_weak_for_article.clone();
             glib::spawn_future_local(async move {
@@ -697,33 +623,29 @@ impl ViaductWindow {
                     .unwrap_or(false)
                     || (is_stub && has_url);
                 if let Some(window) = window_weak.upgrade() {
-                    window.imp().article_display.borrow_mut().auto_reader = auto;
-                    if auto {
-                        window.imp().reader_btn.set_active(true);
-                    }
+                    window.imp().article_pane.get().set_auto_reader(auto);
                 }
             });
         });
 
-        // Reader-button toggle → re-render with extracted or raw body.
-        let window_weak_for_reader = self.downgrade();
-        imp.reader_btn.connect_toggled(move |_| {
-            if let Some(window) = window_weak_for_reader.upgrade() {
-                window.render_article_body();
-            }
-        });
-
-        // Mark-all-read button — fires the same action as Ctrl+K so click
-        // and keyboard share a code path.
+        // Mark-all-read button (lives in the sidebar header bar) — fires
+        // the same action as Ctrl+K so click and keyboard share a code
+        // path.
         let window_weak_for_mark = self.downgrade();
-        imp.mark_all_read_btn.connect_clicked(move |_| {
-            if let Some(window) = window_weak_for_mark.upgrade() {
-                window.act_mark_all_read();
-            }
-        });
+        imp.sidebar_view
+            .get()
+            .mark_all_read_btn()
+            .connect_clicked(move |_| {
+                if let Some(window) = window_weak_for_mark.upgrade() {
+                    window.act_mark_all_read();
+                }
+            });
 
-        self.wire_search(timeline_store);
-        self.wire_play_video_button();
+        // Search wiring (v1.8.0 + Phase 18) lives entirely inside
+        // TimelineView::bootstrap now — including the bidirectional
+        // search-button bind, the FTS5 debounce, and the scope-toggle
+        // re-trigger. Nothing to do at the window level.
+
         self.wire_context_menus();
         self.wire_auto_refresh();
     }
@@ -839,7 +761,7 @@ impl ViaductWindow {
 
         let timeline_popover = gtk::PopoverMenu::from_model(Some(&timeline_menu));
         timeline_popover.set_has_arrow(false);
-        timeline_popover.set_parent(&self.imp().timeline_list_view.get());
+        timeline_popover.set_parent(&self.imp().timeline_view.get().list_view());
         let _ = self.imp().timeline_popover.set(timeline_popover);
 
         let timeline_gesture = gtk::GestureClick::new();
@@ -849,7 +771,7 @@ impl ViaductWindow {
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
-            let listview = window.imp().timeline_list_view.get();
+            let listview = window.imp().timeline_view.get().list_view();
             let Some(article) = pick_article_at(listview.upcast_ref::<gtk::Widget>(), x, y) else {
                 return;
             };
@@ -859,62 +781,14 @@ impl ViaductWindow {
             window.show_timeline_popover(x, y);
         });
         self.imp()
-            .timeline_list_view
+            .timeline_view
+            .get()
+            .list_view()
             .add_controller(timeline_gesture);
 
-        // ---- Sidebar feed popover ----
-        let feed_menu = gio::Menu::new();
-        let read_section = gio::Menu::new();
-        read_section.append(Some("Mark All as Read"), Some("win.mark-feed-read"));
-        feed_menu.append_section(None, &read_section);
-        let net_section = gio::Menu::new();
-        net_section.append(Some("Refresh"), Some("win.refresh-feed"));
-        net_section.append(Some("Copy Feed URL"), Some("win.copy-feed-url"));
-        feed_menu.append_section(None, &net_section);
-        let danger_section = gio::Menu::new();
-        danger_section.append(Some("Delete Feed"), Some("win.delete-feed"));
-        feed_menu.append_section(None, &danger_section);
-
-        let feed_popover = gtk::PopoverMenu::from_model(Some(&feed_menu));
-        feed_popover.set_has_arrow(false);
-        feed_popover.set_parent(&self.imp().sidebar_list_view.get());
-        let _ = self.imp().sidebar_feed_popover.set(feed_popover);
-
-        // ---- Sidebar folder popover (smaller — just mark-read) ----
-        let folder_menu = gio::Menu::new();
-        folder_menu.append(Some("Mark All as Read"), Some("win.mark-folder-read"));
-        let folder_popover = gtk::PopoverMenu::from_model(Some(&folder_menu));
-        folder_popover.set_has_arrow(false);
-        folder_popover.set_parent(&self.imp().sidebar_list_view.get());
-        let _ = self.imp().sidebar_folder_popover.set(folder_popover);
-
-        let sidebar_gesture = gtk::GestureClick::new();
-        sidebar_gesture.set_button(gdk::BUTTON_SECONDARY);
-        let window_weak = self.downgrade();
-        sidebar_gesture.connect_pressed(move |_, _n_press, x, y| {
-            let Some(window) = window_weak.upgrade() else {
-                return;
-            };
-            let listview = window.imp().sidebar_list_view.get();
-            let Some(item) = pick_sidebar_item_at(listview.upcast_ref::<gtk::Widget>(), x, y)
-            else {
-                return;
-            };
-            match item {
-                crate::ui::sidebar::SidebarItem::Feed(feed) => {
-                    *window.imp().right_clicked_feed.borrow_mut() = Some(feed);
-                    window.show_sidebar_feed_popover(x, y);
-                }
-                crate::ui::sidebar::SidebarItem::Folder(folder) => {
-                    *window.imp().right_clicked_folder.borrow_mut() = Some(folder);
-                    window.show_sidebar_folder_popover(x, y);
-                }
-                // Smart feeds and the smart-feed group have no destructive
-                // actions to expose — skip the popover entirely.
-                _ => {}
-            }
-        });
-        self.imp().sidebar_list_view.add_controller(sidebar_gesture);
+        // The sidebar feed + folder popovers and their gesture controller
+        // are wired by `SidebarView::bootstrap` (v2.0.0-pre3) — this
+        // method now only owns the timeline-row popover.
     }
 
     /// Walk the timeline `gio::ListStore` for an article whose ID
@@ -923,12 +797,8 @@ impl ViaductWindow {
     /// at the right-clicked article. Returns true if a match was
     /// found and the selection was updated.
     fn select_timeline_article_by_id(&self, article_id: &str) -> bool {
-        let Some(store) = self.imp().timeline_store.get() else {
-            return false;
-        };
-        let Some(selection) = self.imp().timeline_selection.get() else {
-            return false;
-        };
+        let store = self.imp().timeline_view.get().store();
+        let selection = self.imp().timeline_view.get().selection();
         for i in 0..store.n_items() {
             let Some(obj) = store.item(i) else { continue };
             let Some(node) = obj.downcast_ref::<ArticleNode>() else {
@@ -943,404 +813,6 @@ impl ViaductWindow {
             }
         }
         false
-    }
-
-    /// Connect the Article-pane "▶ Play video" button to the dispatcher
-    /// in `act_play_video`. Visibility is driven by `current_video` and
-    /// the `video-playback-mode` GSetting (set in `refresh_video_button_visibility`).
-    fn wire_play_video_button(&self) {
-        let weak = self.downgrade();
-        self.imp().play_video_btn.connect_clicked(move |_| {
-            if let Some(window) = weak.upgrade() {
-                window.act_play_video();
-            }
-        });
-        // Track the GSetting so flipping playback mode in Preferences
-        // immediately hides / shows the button without waiting for the
-        // next article selection.
-        if let Some(settings) = crate::preferences::settings() {
-            let weak = self.downgrade();
-            settings.connect_changed(
-                Some(crate::preferences::keys::VIDEO_PLAYBACK_MODE),
-                move |_, _| {
-                    if let Some(window) = weak.upgrade() {
-                        window.refresh_video_button_visibility();
-                    }
-                },
-            );
-        }
-    }
-
-    /// Update the play-video button's visibility based on the current article's
-    /// detected video source AND the user's playback-mode preference.
-    pub(crate) fn refresh_video_button_visibility(&self) {
-        let imp = self.imp();
-        let has_video = imp.current_video.borrow().is_some();
-        let mode = current_video_playback_mode();
-        let visible = has_video && mode != VideoPlaybackMode::Disabled;
-        imp.play_video_btn.set_visible(visible);
-    }
-
-    /// Click handler for the play-video button. Dispatches to the in-pane
-    /// dialog or the system handler based on the GSetting.
-    pub(crate) fn act_play_video(&self) {
-        let Some(source) = self.imp().current_video.borrow().clone() else {
-            return;
-        };
-        match current_video_playback_mode() {
-            VideoPlaybackMode::InPane => self.present_video_dialog(&source),
-            VideoPlaybackMode::External => {
-                let _ = gio::AppInfo::launch_default_for_uri(
-                    &source.watch_url(),
-                    None::<&gio::AppLaunchContext>,
-                );
-            }
-            VideoPlaybackMode::Disabled => {}
-        }
-    }
-
-    /// Present a transient `AdwDialog` housing a fresh `WebKitWebView`
-    /// dedicated to the embed. The dialog's WebView is destroyed when the
-    /// dialog closes — keeps the article-pane WebView's lockdown profile
-    /// intact and lets the kernel reclaim the embed-WebView memory after
-    /// playback. JS is enabled on the playback view (required by YouTube /
-    /// Vimeo's player iframes); persistent storage and DevTools stay off.
-    fn present_video_dialog(&self, source: &crate::network::video_thumbs::VideoSource) {
-        use gtk::glib::object::ObjectExt;
-        use webkit6::prelude::*;
-
-        let dialog = adw::Dialog::new();
-        dialog.set_title("Video");
-        dialog.set_content_width(960);
-        dialog.set_content_height(560);
-
-        let toolbar = adw::ToolbarView::new();
-        let header = adw::HeaderBar::new();
-        toolbar.add_top_bar(&header);
-
-        let view = webkit6::WebView::new();
-        view.set_vexpand(true);
-        view.set_hexpand(true);
-
-        if let Some(settings) = webkit6::prelude::WebViewExt::settings(&view) {
-            // JS and storage features YouTube / Vimeo's embedded players
-            // actually need to initialize. Disabling LocalStorage was what
-            // caused YouTube error 153 ("Video player configuration error")
-            // in v1.4.0–v1.5.7 — the player JS bails when its preference
-            // store isn't writable. WebGL is needed for VP9 / AV1 hardware
-            // decode paths; without it modern YouTube falls back to
-            // software decode which often fails on the embed page.
-            //
-            // Privacy is preserved by the dialog lifecycle: the WebView is
-            // destroyed when the dialog closes (`load_uri("about:blank")` +
-            // `try_close()` in `connect_closed`), so any cookies / storage
-            // / IndexedDB the embed wrote die with it. The article-pane
-            // WebView's lockdown profile is unaffected and unrelated.
-            settings.set_enable_javascript(true);
-            settings.set_javascript_can_access_clipboard(false);
-            settings.set_javascript_can_open_windows_automatically(false);
-            settings.set_enable_webgl(true);
-            settings.set_enable_html5_database(true);
-            settings.set_enable_html5_local_storage(true);
-            settings.set_enable_offline_web_application_cache(false);
-            settings.set_enable_developer_extras(false);
-            settings.set_enable_back_forward_navigation_gestures(false);
-            settings.set_enable_fullscreen(true);
-            settings.set_media_playback_requires_user_gesture(false);
-            // Don't override the user-agent — YouTube's anti-bot heuristics
-            // throttle / refuse playback when they see a UA that doesn't
-            // match a real browser. WebKitGTK's default UA is a standard
-            // Mozilla / AppleWebKit string, accepted by every embed host.
-        }
-
-        // Load the embed inside an actual <iframe> in a host HTML
-        // document, with a synthetic `viaduct.local` base URI as the
-        // notional parent origin. YouTube's embed page is designed to
-        // run as an iframe child — its player JS checks for that
-        // context and surfaces "Error 153: Video player configuration
-        // error" when loaded as a top-level navigation. (We confirmed
-        // this against real YouTube videos in v1.5.8: enabling
-        // LocalStorage / IndexedDB / WebGL didn't help because the
-        // refusal happens *before* the player checks browser features.
-        // The bail is purely on the iframe-context check.) Vimeo's
-        // player has the same expectation.
-        let embed_url_attr = embed_url_for_iframe(&source.embed_url());
-        let html = format!(
-            "<!DOCTYPE html>\n\
-             <html>\n\
-             <head>\n\
-             <meta charset=\"utf-8\">\n\
-             <style>\n\
-             * {{ box-sizing: border-box; margin: 0; padding: 0; }}\n\
-             html, body {{ width: 100%; height: 100%; background: #000; }}\n\
-             iframe {{ width: 100%; height: 100%; border: 0; display: block; }}\n\
-             </style>\n\
-             </head>\n\
-             <body>\n\
-             <iframe src=\"{embed_url_attr}\"\n\
-                     allow=\"autoplay; encrypted-media; fullscreen; picture-in-picture\"\n\
-                     allowfullscreen\n\
-                     referrerpolicy=\"strict-origin-when-cross-origin\"></iframe>\n\
-             </body>\n\
-             </html>"
-        );
-        view.load_html(&html, Some("https://viaduct.local/embed/"));
-        toolbar.set_content(Some(&view));
-        dialog.set_child(Some(&toolbar));
-
-        // Stop playback and free the underlying WebProcess as soon as the
-        // dialog closes. Without an explicit `try_close`, the WebView lives
-        // until the parent dialog is dropped — which can take a tick after
-        // the user dismisses it, leaving audio playing during the gap.
-        //
-        // v1.5.7 — also explicitly load `about:blank` after `try_close`.
-        // `try_close` is async and the WebProcess can hang on to keyboard
-        // focus / pointer grab during teardown; loading a blank page
-        // forces an immediate input-context reset so the parent window
-        // can reclaim focus cleanly. And grab focus back to the window's
-        // main content as a belt-and-braces measure.
-        let view_for_close = view.downgrade();
-        let window_weak = self.downgrade();
-        dialog.connect_closed(move |_| {
-            if let Some(view) = view_for_close.upgrade() {
-                view.load_uri("about:blank");
-                view.try_close();
-            }
-            if let Some(window) = window_weak.upgrade() {
-                let _ = window.imp().timeline_list_view.grab_focus();
-            }
-        });
-
-        dialog.present(Some(self));
-    }
-
-    /// Re-render the article pane based on the current display state +
-    /// reader button. Handles kicking off a Reader-View extraction on
-    /// demand when the button goes active and no extracted HTML is cached.
-    pub(crate) fn render_article_body(&self) {
-        let imp = self.imp();
-        let view = imp.article_web_view.get();
-
-        // Pull display state and metadata under one borrow.
-        let state = imp.article_display.borrow();
-        let reader_mode = imp.reader_btn.is_active();
-        let raw = state.raw_html.clone();
-        let extracted = state.extracted_html.clone();
-        let url = state.article_url.clone();
-
-        // Pick which body the active reader-button mode wants. Falls back
-        // to raw HTML when extraction hasn't completed; the async kick-off
-        // sits below and re-enters this function on completion.
-        let body_html = if reader_mode {
-            extracted.clone().or_else(|| raw.clone())
-        } else {
-            raw.clone()
-        };
-        let Some(body_html) = body_html else {
-            drop(state);
-            // Nothing to render — flip the stack to the empty status page.
-            // Don't bother re-rendering the WebView since it's hidden.
-            imp.article_stack.set_visible_child_name("empty");
-            return;
-        };
-        // Article body present — make sure the stack is showing the WebView.
-        imp.article_stack.set_visible_child_name("content");
-
-        // Pick a theme: user's GSettings choice wins, "auto" pairs Sepia
-        // (light) with Tiqoe Dark (dark). v1.2.0 wired the article-theme
-        // GSetting + preferences dropdown — see preferences.rs.
-        let is_dark = adw::StyleManager::default().is_dark();
-        let theme = match crate::preferences::settings() {
-            Some(s) => crate::preferences::resolve_article_theme(&s, is_dark),
-            None => article_renderer::select_for_dark_mode(is_dark),
-        };
-
-        let subs = article_renderer::ArticleSubstitutions {
-            title: article_renderer::escape_html(&state.title),
-            body: body_html,
-            preferred_link: state.article_url.clone().unwrap_or_default(),
-            feed_link: state.feed_link.clone(),
-            feed_link_title: article_renderer::escape_html(&state.feed_link_title),
-            byline: article_renderer::escape_html(&state.byline),
-            datetime_long: state
-                .date_published
-                .map(|d| d.format("%A, %B %e, %Y at %l:%M:%S %p").to_string())
-                .unwrap_or_default(),
-            datetime_medium: state
-                .date_published
-                .map(|d| d.format("%b %e, %Y at %l:%M %p").to_string())
-                .unwrap_or_default(),
-            datetime_short: state
-                .date_published
-                .map(|d| d.format("%-m/%-d/%y, %l:%M %p").to_string())
-                .unwrap_or_default(),
-            date_long: state
-                .date_published
-                .map(|d| d.format("%A, %B %e, %Y").to_string())
-                .unwrap_or_default(),
-            date_medium: state
-                .date_published
-                .map(|d| d.format("%b %e, %Y").to_string())
-                .unwrap_or_default(),
-            date_short: state
-                .date_published
-                .map(|d| d.format("%-m/%-d/%y").to_string())
-                .unwrap_or_default(),
-            time_long: state
-                .date_published
-                .map(|d| d.format("%l:%M:%S %p").to_string())
-                .unwrap_or_default(),
-            time_medium: state
-                .date_published
-                .map(|d| d.format("%l:%M:%S %p").to_string())
-                .unwrap_or_default(),
-            time_short: state
-                .date_published
-                .map(|d| d.format("%l:%M %p").to_string())
-                .unwrap_or_default(),
-            avatar_src: String::new(),
-            external_link: String::new(),
-            external_link_label: String::new(),
-            external_link_stripped: String::new(),
-        };
-        drop(state);
-
-        article_renderer::render_themed(&view, theme, subs, url.as_deref());
-
-        // Reader-mode: if the user toggled in but extracted_html is still
-        // None, kick off the extractor. The fallback render above already
-        // showed raw body so the pane isn't blank during the wait.
-        if reader_mode && extracted.is_none() {
-            let Some(url) = url else { return };
-            let window_weak = self.downgrade();
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            crate::spawn_on_runtime(async move {
-                let result = crate::ui::reader_view::extract(&url, raw.as_deref()).await;
-                let _ = tx.send(result);
-            });
-            glib::spawn_future_local(async move {
-                match rx.await {
-                    Ok(Ok(extracted)) => {
-                        if let Some(window) = window_weak.upgrade() {
-                            window.imp().article_display.borrow_mut().extracted_html =
-                                Some(extracted);
-                            // Only re-render if the user hasn't since toggled
-                            // off or advanced to a different article.
-                            if window.imp().reader_btn.is_active() {
-                                window.render_article_body();
-                            }
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        tracing::warn!(?e, "reader view extraction failed");
-                        if let Some(window) = window_weak.upgrade() {
-                            window.imp().reader_btn.set_active(false);
-                        }
-                    }
-                    Err(_) => {
-                        // Oneshot sender dropped — extraction task panicked.
-                        tracing::warn!("reader view extraction task aborted");
-                    }
-                }
-            });
-        }
-    }
-
-    fn wire_search(&self, timeline_store: gio::ListStore) {
-        use std::time::Duration;
-
-        let imp = self.imp();
-
-        // Bind the sidebar toggle to the search bar's reveal state.
-        imp.search_btn
-            .bind_property("active", &*imp.search_bar, "search-mode-enabled")
-            .bidirectional()
-            .sync_create()
-            .build();
-
-        // GtkSearchBar must be told which entry it owns so it can route
-        // text input from `key-capture-widget` properly. Without this we
-        // get the "search bar does not have an entry connected" warning on
-        // every keystroke that hits the timeline list view.
-        imp.search_bar.connect_entry(&*imp.search_entry);
-
-        // Scope toggle: re-run the current search whenever it flips so the
-        // user doesn't have to re-type.
-        let window_weak_for_scope = self.downgrade();
-        imp.scope_toggle.connect_toggled(move |_| {
-            if let Some(window) = window_weak_for_scope.upgrade() {
-                // Re-trigger the debounced handler so scope changes apply
-                // without the user having to touch the entry again.
-                window
-                    .imp()
-                    .search_entry
-                    .get()
-                    .emit_by_name::<()>("search-changed", &[]);
-            }
-        });
-
-        // Debounce keystrokes ~150ms before running FTS5 (NNW spec). Without
-        // this every character hits SQLite — fine on small DBs, painful at 50k.
-        let account = self.account();
-        let window_weak = self.downgrade();
-        imp.search_entry.connect_search_changed(move |entry| {
-            let Some(window) = window_weak.upgrade() else {
-                return;
-            };
-            // Cancel any in-flight timeout.
-            if let Some(prev) = window.imp().search_timeout.borrow_mut().take() {
-                prev.remove();
-            }
-            let query = entry.text().to_string();
-            let store = timeline_store.clone();
-            let account = account.clone();
-            let entry_for_clear = entry.clone();
-            let window_weak_inner = window.downgrade();
-            let new_timeout = glib::timeout_add_local_once(Duration::from_millis(150), move || {
-                if query.trim().is_empty() {
-                    // Clearing the search reverts the timeline to whatever
-                    // the sidebar selection currently shows; for port-first
-                    // we just empty it. The user can re-click the sidebar.
-                    let n = store.n_items();
-                    if n > 0 {
-                        store.splice(0, n, &[] as &[ArticleNode]);
-                    }
-                    return;
-                }
-                // Wrap as a prefix MATCH so `rust*` matches `rustacean`, etc.
-                let fts_query = format!("{}*", escape_fts5(&query));
-                let store = store.clone();
-                let _entry_keepalive = entry_for_clear.clone();
-                let account = account.clone();
-
-                // Resolve the scope right when the query fires — not at
-                // debounce start — so toggling after typing works without a
-                // second keystroke.
-                let feed_filter = window_weak_inner.upgrade().and_then(|w| {
-                    let imp = w.imp();
-                    if imp.scope_toggle.is_active() {
-                        imp.selected_feed_id.borrow().clone()
-                    } else {
-                        None
-                    }
-                });
-
-                glib::spawn_future_local(async move {
-                    match account
-                        .search_articles_with_snippets(fts_query, feed_filter)
-                        .await
-                    {
-                        Ok(results) => {
-                            populate_timeline_with_snippets(&store, results);
-                            refresh_timeline_statuses(account.clone(), store.clone());
-                        }
-                        Err(e) => tracing::warn!(?e, "FTS5 search failed"),
-                    }
-                    drop(_entry_keepalive);
-                });
-            });
-            *window.imp().search_timeout.borrow_mut() = Some(new_timeout);
-        });
     }
 
     // -----------------------------------------------------------------
@@ -1376,10 +848,7 @@ impl ViaductWindow {
     #[allow(dead_code)]
     fn mark_current_read_then_advance(&self) {
         let imp = self.imp();
-        let Some(selection) = imp.timeline_selection.get() else {
-            self.advance_unread(Direction::Next);
-            return;
-        };
+        let selection = imp.timeline_view.get().selection();
         if let Some(item) = selection.selected_item()
             && let Some(node) = item.downcast_ref::<ArticleNode>()
             && !node.is_read()
@@ -1420,12 +889,8 @@ impl ViaductWindow {
     /// doesn't move — matching NNW's behavior of no-op at the boundary.
     fn advance_unread(&self, dir: Direction) {
         let imp = self.imp();
-        let Some(store) = imp.timeline_store.get() else {
-            return;
-        };
-        let Some(selection) = imp.timeline_selection.get() else {
-            return;
-        };
+        let store = imp.timeline_view.get().store();
+        let selection = imp.timeline_view.get().selection();
         let n = store.n_items();
         if n == 0 {
             return;
@@ -1451,7 +916,7 @@ impl ViaductWindow {
             {
                 selection.set_selected(i as u32);
                 // Keep the newly-selected row on screen.
-                self.imp().timeline_list_view.scroll_to(
+                self.imp().timeline_view.get().list_view().scroll_to(
                     i as u32,
                     gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT,
                     None,
@@ -1491,9 +956,7 @@ impl ViaductWindow {
     /// Matches NNW `markOlderArticlesAsRead:`.
     pub(crate) fn act_mark_older_read(&self) {
         let imp = self.imp();
-        let Some(selection) = imp.timeline_selection.get() else {
-            return;
-        };
+        let selection = imp.timeline_view.get().selection();
         let cur = selection.selected();
         if cur == gtk::INVALID_LIST_POSITION {
             return;
@@ -1507,9 +970,7 @@ impl ViaductWindow {
     where
         F: FnOnce(&ArticleNode) -> (bool, bool),
     {
-        let Some(selection) = self.imp().timeline_selection.get() else {
-            return;
-        };
+        let selection = self.imp().timeline_view.get().selection();
         let Some(item) = selection.selected_item() else {
             return;
         };
@@ -1544,9 +1005,7 @@ impl ViaductWindow {
     /// as read, in one DB batch. `end=None` means through the end of the list.
     fn mark_read_in_range(&self, start: u32, end: Option<u32>) {
         let imp = self.imp();
-        let Some(store) = imp.timeline_store.get() else {
-            return;
-        };
+        let store = imp.timeline_view.get().store();
         let n = store.n_items();
         let end = end.unwrap_or(n).min(n);
         let now = chrono::Utc::now();
@@ -1586,9 +1045,7 @@ impl ViaductWindow {
         });
     }
     pub(crate) fn act_open_in_browser(&self) {
-        let Some(selection) = self.imp().timeline_selection.get() else {
-            return;
-        };
+        let selection = self.imp().timeline_view.get().selection();
         let Some(item) = selection.selected_item() else {
             return;
         };
@@ -1612,9 +1069,7 @@ impl ViaductWindow {
     /// confirmation so the user knows it worked. Same NNW preferredLink
     /// fallback (`external_url` → `url`) as `act_open_in_browser`.
     pub(crate) fn act_copy_url(&self) {
-        let Some(selection) = self.imp().timeline_selection.get() else {
-            return;
-        };
+        let selection = self.imp().timeline_view.get().selection();
         let Some(item) = selection.selected_item() else {
             return;
         };
@@ -1640,8 +1095,17 @@ impl ViaductWindow {
     /// and out of reader mode via Ctrl+Shift+R without taking their hand
     /// off the keyboard.
     pub(crate) fn act_toggle_reader(&self) {
-        let btn = &self.imp().reader_btn;
-        btn.set_active(!btn.is_active());
+        self.imp().article_pane.get().toggle_reader();
+    }
+
+    /// v2.2.0: present the system print dialog for the current article.
+    /// Delegates to `ArticlePaneView::print`, which wraps
+    /// `webkit6::PrintOperation::run_dialog(parent)`. Bound to Ctrl+P.
+    /// No-op when no article is selected (the article pane is on its
+    /// "No article selected" empty page).
+    pub(crate) fn act_print_article(&self) {
+        let parent = self.upcast_ref::<gtk::Window>();
+        self.imp().article_pane.get().print(Some(parent));
     }
 
     /// Close the article pane in narrow / collapsed layouts so Escape
@@ -1668,13 +1132,14 @@ impl ViaductWindow {
         }
         // Always clear the article display so wide-layout users get the
         // empty status page when they hit Escape too.
-        if let Some(selection) = imp.timeline_selection.get() {
-            selection.set_selected(gtk::INVALID_LIST_POSITION);
-        }
-        imp.article_stack.set_visible_child_name("empty");
+        imp.timeline_view
+            .get()
+            .selection()
+            .set_selected(gtk::INVALID_LIST_POSITION);
+        imp.article_pane.get().clear();
         // Focus recovery — pull keyboard focus back to the timeline so
         // any stuck WebKit / dialog focus state gets released.
-        let _ = imp.timeline_list_view.grab_focus();
+        let _ = imp.timeline_view.get().list_view().grab_focus();
     }
 
     // ---------------------------------------------------------------
@@ -1688,14 +1153,14 @@ impl ViaductWindow {
     // ---------------------------------------------------------------
 
     pub(crate) fn act_refresh_clicked_feed(&self) {
-        let Some(feed) = self.imp().right_clicked_feed.borrow_mut().take() else {
+        let Some(feed) = self.imp().sidebar_view.get().take_right_clicked_feed() else {
             return;
         };
         self.refresh_specific_feeds(vec![feed]);
     }
 
     pub(crate) fn act_copy_clicked_feed_url(&self) {
-        let Some(feed) = self.imp().right_clicked_feed.borrow_mut().take() else {
+        let Some(feed) = self.imp().sidebar_view.get().take_right_clicked_feed() else {
             return;
         };
         self.clipboard().set_text(&feed.url);
@@ -1709,7 +1174,7 @@ impl ViaductWindow {
     /// cycle (we don't fire it eagerly here to keep the perceived
     /// removal latency low).
     pub(crate) fn act_delete_clicked_feed(&self) {
-        let Some(feed) = self.imp().right_clicked_feed.borrow_mut().take() else {
+        let Some(feed) = self.imp().sidebar_view.get().take_right_clicked_feed() else {
             return;
         };
         let display_name = display_name_for_feed(&feed);
@@ -1777,8 +1242,374 @@ impl ViaductWindow {
         alert.present(Some(self));
     }
 
+    /// v2.1.0: rename a feed via the right-click menu. Shows an
+    /// `AdwAlertDialog` with a single text entry pre-filled with the
+    /// feed's current display name; on save, calls `Account::rename_feed`
+    /// and reloads the sidebar. Empty input clears `edited_name` (reverts
+    /// to the parsed feed name / URL host fallback).
+    pub(crate) fn act_rename_clicked_feed(&self) {
+        let Some(feed) = self.imp().sidebar_view.get().take_right_clicked_feed() else {
+            return;
+        };
+        let current_name = display_name_for_feed(&feed);
+
+        let alert = adw::AlertDialog::new(
+            Some("Rename feed"),
+            Some("Choose a display name for this feed in the sidebar."),
+        );
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("save", "Save");
+        alert.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some("save"));
+        alert.set_close_response("cancel");
+
+        let entry = gtk::Entry::builder()
+            .text(&current_name)
+            .activates_default(true)
+            .build();
+        entry.select_region(0, -1);
+        alert.set_extra_child(Some(&entry));
+
+        let window_weak = self.downgrade();
+        let feed_url = feed.url.clone();
+        let entry_for_response = entry.clone();
+        alert.connect_response(None, move |dialog, response| {
+            if response != "save" {
+                return;
+            }
+            dialog.close();
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let new_name = entry_for_response.text().to_string();
+            let account = window.account();
+            let url = feed_url.clone();
+            let window_for_done = window.downgrade();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            crate::spawn_on_runtime(async move {
+                let _ = tx.send(account.rename_feed(&url, new_name).await);
+            });
+            glib::spawn_future_local(async move {
+                match rx.await {
+                    Ok(Ok(true)) => {
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.reload_sidebar_after_opml_change();
+                        }
+                    }
+                    Ok(Ok(false)) => { /* no-op rename — feed not found */ }
+                    Ok(Err(e)) => {
+                        tracing::warn!(?e, "rename_feed failed");
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.show_toast("Couldn't rename the feed. See the log.");
+                        }
+                    }
+                    Err(_) => {}
+                }
+            });
+        });
+
+        // Focus the entry after dialog presents so the user can type
+        // immediately. The select_region above pre-selects the existing
+        // name so they can overwrite it with one keystroke.
+        let entry_for_focus = entry.clone();
+        glib::idle_add_local_once(move || {
+            entry_for_focus.grab_focus();
+        });
+
+        alert.present(Some(self));
+    }
+
+    /// v2.1.0: prompt for a folder name and create it via
+    /// `Account::create_folder`. The folder appears in the sidebar
+    /// (empty until the user moves feeds into it via "Move to Folder…").
+    pub(crate) fn act_new_folder(&self) {
+        let alert = adw::AlertDialog::new(
+            Some("New folder"),
+            Some("Folders group related feeds in the sidebar."),
+        );
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("create", "Create");
+        alert.set_response_appearance("create", adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some("create"));
+        alert.set_close_response("cancel");
+
+        let entry = gtk::Entry::builder()
+            .placeholder_text("Folder name")
+            .activates_default(true)
+            .build();
+        alert.set_extra_child(Some(&entry));
+
+        let window_weak = self.downgrade();
+        let entry_for_response = entry.clone();
+        alert.connect_response(None, move |dialog, response| {
+            if response != "create" {
+                return;
+            }
+            dialog.close();
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let name = entry_for_response.text().to_string();
+            if name.trim().is_empty() {
+                return;
+            }
+            let account = window.account();
+            let window_for_done = window.downgrade();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            crate::spawn_on_runtime(async move {
+                let _ = tx.send(account.create_folder(name).await);
+            });
+            glib::spawn_future_local(async move {
+                match rx.await {
+                    Ok(Ok(true)) => {
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.reload_sidebar_after_opml_change();
+                        }
+                    }
+                    Ok(Ok(false)) => {
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.show_toast("A folder with that name already exists.");
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(?e, "create_folder failed");
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.show_toast("Couldn't create the folder. See the log.");
+                        }
+                    }
+                    Err(_) => {}
+                }
+            });
+        });
+
+        let entry_for_focus = entry.clone();
+        glib::idle_add_local_once(move || {
+            entry_for_focus.grab_focus();
+        });
+
+        alert.present(Some(self));
+    }
+
+    /// v2.1.0: move the right-clicked feed to a different folder (or to
+    /// the standalone list). Shows an `AdwAlertDialog` with a
+    /// `GtkDropDown` listing existing folders plus a leading
+    /// "(No folder)" option. The currently-selected entry mirrors the
+    /// feed's current location.
+    pub(crate) fn act_move_clicked_feed(&self) {
+        let Some(feed) = self.imp().sidebar_view.get().take_right_clicked_feed() else {
+            return;
+        };
+        let folders = self.imp().sidebar_view.get().list_folder_names();
+        // Build the dropdown's label list. Index 0 is always
+        // "(No folder)" → standalone; subsequent indices map 1:1 onto
+        // `folders`. Empty folder list still works — user can move any
+        // currently-foldered feed back to standalone.
+        let mut labels: Vec<&str> = vec!["(No folder)"];
+        for f in &folders {
+            labels.push(f.as_str());
+        }
+        let model = gtk::StringList::new(&labels);
+        let dropdown = gtk::DropDown::builder().model(&model).build();
+
+        // Best-effort: pre-select the feed's current folder. We don't
+        // know it from the Feed struct alone (folder membership lives
+        // in OPML), but a fresh `list_folder_names()` snapshot plus a
+        // walk of the controller children gives us the answer cheaply.
+        if let Some(controller) = self.imp().sidebar_view.get().controller() {
+            'outer: for top in controller.root_node.child_nodes() {
+                let Some(rep) = top.represented_object() else {
+                    continue;
+                };
+                let Some(item) = rep.downcast_ref::<crate::ui::sidebar::SidebarItem>() else {
+                    continue;
+                };
+                if let crate::ui::sidebar::SidebarItem::Folder(folder) = item {
+                    for child in top.child_nodes() {
+                        let Some(c_rep) = child.represented_object() else {
+                            continue;
+                        };
+                        let Some(c_item) = c_rep.downcast_ref::<crate::ui::sidebar::SidebarItem>()
+                        else {
+                            continue;
+                        };
+                        if let crate::ui::sidebar::SidebarItem::Feed(f) = c_item
+                            && f.url == feed.url
+                            && let Some(idx) = folders.iter().position(|n| n == &folder.name)
+                        {
+                            dropdown.set_selected((idx + 1) as u32);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        }
+
+        let alert = adw::AlertDialog::new(
+            Some("Move feed"),
+            Some("Choose where this feed should appear in the sidebar."),
+        );
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("move", "Move");
+        alert.set_response_appearance("move", adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some("move"));
+        alert.set_close_response("cancel");
+        alert.set_extra_child(Some(&dropdown));
+
+        let window_weak = self.downgrade();
+        let feed_url = feed.url.clone();
+        let dropdown_for_response = dropdown.clone();
+        let folders_for_response = folders.clone();
+        alert.connect_response(None, move |dialog, response| {
+            if response != "move" {
+                return;
+            }
+            dialog.close();
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let selected = dropdown_for_response.selected();
+            let target = if selected == 0 {
+                None
+            } else {
+                folders_for_response
+                    .get((selected as usize).saturating_sub(1))
+                    .cloned()
+            };
+            let account = window.account();
+            let url = feed_url.clone();
+            let window_for_done = window.downgrade();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            crate::spawn_on_runtime(async move {
+                let _ = tx.send(account.move_feed_to_folder(&url, target).await);
+            });
+            glib::spawn_future_local(async move {
+                match rx.await {
+                    Ok(Ok(true)) => {
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.reload_sidebar_after_opml_change();
+                        }
+                    }
+                    Ok(Ok(false)) => { /* no-op move — same destination */ }
+                    Ok(Err(e)) => {
+                        tracing::warn!(?e, "move_feed_to_folder failed");
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.show_toast("Couldn't move the feed. See the log.");
+                        }
+                    }
+                    Err(_) => {}
+                }
+            });
+        });
+
+        alert.present(Some(self));
+    }
+
+    /// v2.4.0: open the Feed Settings dialog for the right-clicked feed.
+    /// Two `AdwSwitchRow` toggles bound to per-feed `FeedSettings`: "New
+    /// article notifications" (the actual v2.4.0 feature) and "Always
+    /// use Reader View" (existing field, exposed in the UI for the first
+    /// time). On save: fetch the current `FeedSettings` from the DB,
+    /// mutate the two flags, upsert. The window's
+    /// `dispatch_refresh_notification` reads the flag per-feed when
+    /// dispatching after a refresh cycle.
+    pub(crate) fn act_feed_settings(&self) {
+        let Some(feed) = self.imp().sidebar_view.get().take_right_clicked_feed() else {
+            return;
+        };
+        let display_name = display_name_for_feed(&feed);
+
+        let alert = adw::AlertDialog::new(Some(&format!("Settings for “{display_name}”")), None);
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("save", "Save");
+        alert.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+        alert.set_default_response(Some("save"));
+        alert.set_close_response("cancel");
+
+        let group = adw::PreferencesGroup::new();
+        let notif_row = adw::SwitchRow::builder()
+            .title("New article notifications")
+            .subtitle("Show a desktop notification when this feed has new articles.")
+            .build();
+        let reader_row = adw::SwitchRow::builder()
+            .title("Always use Reader View")
+            .subtitle("Open every article from this feed in extracted-text mode.")
+            .build();
+        group.add(&notif_row);
+        group.add(&reader_row);
+        alert.set_extra_child(Some(&group));
+
+        // Pre-load current values so the switches reflect the existing
+        // state before the user touches them.
+        let account = self.account();
+        let feed_id_for_load = feed.id.clone();
+        let notif_for_load = notif_row.clone();
+        let reader_for_load = reader_row.clone();
+        let (load_tx, load_rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let _ = load_tx.send(account.fetch_feed_settings(feed_id_for_load).await);
+        });
+        glib::spawn_future_local(async move {
+            if let Ok(Ok(Some(s))) = load_rx.await {
+                notif_for_load.set_active(s.new_article_notifications_enabled);
+                reader_for_load.set_active(s.reader_view_always_enabled);
+            }
+        });
+
+        let window_weak = self.downgrade();
+        let feed_for_response = feed.clone();
+        let notif_for_response = notif_row.clone();
+        let reader_for_response = reader_row.clone();
+        alert.connect_response(None, move |dialog, response| {
+            if response != "save" {
+                return;
+            }
+            dialog.close();
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let account = window.account();
+            let feed = feed_for_response.clone();
+            let notif_on = notif_for_response.is_active();
+            let reader_on = reader_for_response.is_active();
+            let display_name = display_name.clone();
+
+            crate::spawn_on_runtime(async move {
+                let existing = account
+                    .fetch_feed_settings(feed.id.clone())
+                    .await
+                    .ok()
+                    .flatten();
+                let mut s = existing.unwrap_or_else(|| crate::models::FeedSettings {
+                    feed_id: feed.id.clone(),
+                    feed_url: feed.url.clone(),
+                    home_page_url: feed.home_page_url.clone(),
+                    icon_url: None,
+                    favicon_url: None,
+                    edited_name: feed.edited_name.clone(),
+                    content_hash: None,
+                    last_modified: None,
+                    etag: None,
+                    date_created: None,
+                    max_age: None,
+                    authors_json: None,
+                    folder_relationship_json: None,
+                    last_check_date: None,
+                    reader_view_always_enabled: false,
+                    new_article_notifications_enabled: false,
+                });
+                s.new_article_notifications_enabled = notif_on;
+                s.reader_view_always_enabled = reader_on;
+                if let Err(e) = account.upsert_feed_settings(s).await {
+                    tracing::warn!(?e, %display_name, "feed settings upsert failed");
+                }
+            });
+        });
+
+        alert.present(Some(self));
+    }
+
     pub(crate) fn act_mark_clicked_feed_read(&self) {
-        let Some(feed) = self.imp().right_clicked_feed.borrow_mut().take() else {
+        let Some(feed) = self.imp().sidebar_view.get().take_right_clicked_feed() else {
             return;
         };
         let account = self.account();
@@ -1816,7 +1647,7 @@ impl ViaductWindow {
     }
 
     pub(crate) fn act_mark_clicked_folder_read(&self) {
-        let Some(folder) = self.imp().right_clicked_folder.borrow_mut().take() else {
+        let Some(folder) = self.imp().sidebar_view.get().take_right_clicked_folder() else {
             return;
         };
         let account = self.account();
@@ -1866,30 +1697,8 @@ impl ViaductWindow {
         popover.popup();
     }
 
-    /// Position and present the sidebar row's context popover. The
-    /// `right_clicked_*` cells must already be populated by the caller.
-    pub(crate) fn show_sidebar_feed_popover(&self, x: f64, y: f64) {
-        let Some(popover) = self.imp().sidebar_feed_popover.get() else {
-            return;
-        };
-        let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-        popover.set_pointing_to(Some(&rect));
-        popover.popup();
-    }
-
-    pub(crate) fn show_sidebar_folder_popover(&self, x: f64, y: f64) {
-        let Some(popover) = self.imp().sidebar_folder_popover.get() else {
-            return;
-        };
-        let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-        popover.set_pointing_to(Some(&rect));
-        popover.popup();
-    }
-
     pub(crate) fn act_open_enclosure(&self) {
-        let Some(selection) = self.imp().timeline_selection.get() else {
-            return;
-        };
+        let selection = self.imp().timeline_view.get().selection();
         let Some(item) = selection.selected_item() else {
             return;
         };
@@ -1957,8 +1766,8 @@ impl ViaductWindow {
                 return;
             };
             if let Some(window) = window_weak.upgrade() {
-                window.dispatch_refresh_notification(tally.new_articles);
-                window.show_refresh_toast(tally);
+                window.dispatch_refresh_notification(&tally);
+                window.show_refresh_toast(&tally);
                 window.refresh_unread_counts();
                 // Re-fetch the timeline for the currently-selected sidebar
                 // item so newly-fetched articles appear without the user
@@ -1980,14 +1789,10 @@ impl ViaductWindow {
     /// double the network load and produce mismatched batch_update
     /// start/end pairs).
     pub(crate) fn set_refresh_in_progress(&self, on: bool) {
-        let imp = self.imp();
-        if on {
-            imp.sync_btn_spinner.start();
-            imp.sync_btn_stack.set_visible_child_name("spinner");
-        } else {
-            imp.sync_btn_spinner.stop();
-            imp.sync_btn_stack.set_visible_child_name("icon");
-        }
+        // Sync-button visual state (spinner ↔ icon) lives on SidebarView.
+        // The action-disable path stays here because the gio action
+        // group does too.
+        self.imp().sidebar_view.get().set_refresh_in_progress(on);
         if let Some(action) = self.lookup_action("refresh")
             && let Some(simple) = action.downcast_ref::<gio::SimpleAction>()
         {
@@ -1995,10 +1800,11 @@ impl ViaductWindow {
         }
     }
 
-    fn show_refresh_toast(&self, tally: RefreshTally) {
+    fn show_refresh_toast(&self, tally: &RefreshTally) {
+        let total = tally.total_new_articles();
         let msg = if tally.feeds_attempted == 0 {
             "No feeds in subscription list.".to_string()
-        } else if tally.new_articles == 0 {
+        } else if total == 0 {
             format!(
                 "Refreshed {} feed{} — no new articles.",
                 tally.feeds_attempted,
@@ -2009,18 +1815,23 @@ impl ViaductWindow {
                 "Refreshed {} feed{} — {} new article{}.",
                 tally.feeds_attempted,
                 if tally.feeds_attempted == 1 { "" } else { "s" },
-                tally.new_articles,
-                if tally.new_articles == 1 { "" } else { "s" },
+                total,
+                if total == 1 { "" } else { "s" },
             )
         };
         self.imp().toast_overlay.add_toast(adw::Toast::new(&msg));
     }
 
-    /// Show a desktop notification summarizing a refresh cycle, gated by the
-    /// `notifications-on-refresh` GSetting. Silent when total == 0 or the
-    /// pref is off.
-    fn dispatch_refresh_notification(&self, new_total: usize) {
-        if new_total == 0 {
+    /// Show desktop notifications for a refresh cycle's new articles,
+    /// **per-feed** (v2.4.0). Walks `tally.per_feed_new`; for each feed
+    /// with new articles, fetches its `FeedSettings` and fires a
+    /// `gio::Notification` titled with the feed's display name **only
+    /// when both** the global `notifications-on-refresh` GSetting is on
+    /// **and** that feed's per-feed `new_article_notifications_enabled`
+    /// flag is set. Silent when either gate is off, when no feeds had
+    /// new articles, or when the feed couldn't be resolved.
+    fn dispatch_refresh_notification(&self, tally: &RefreshTally) {
+        if tally.per_feed_new.is_empty() {
             return;
         }
         let Some(settings) = crate::preferences::settings() else {
@@ -2032,21 +1843,51 @@ impl ViaductWindow {
         let Some(app) = self.application() else {
             return;
         };
-        let body = if new_total == 1 {
-            "1 new article".to_string()
-        } else {
-            format!("{new_total} new articles")
-        };
-        let notif = gio::Notification::new("viaduct");
-        notif.set_body(Some(&body));
-        notif.set_priority(gio::NotificationPriority::Normal);
-        app.send_notification(Some("viaduct.refresh"), &notif);
+        let account = self.account();
+        let feed_names = self.imp().sidebar_view.get().feed_names();
+        let app = app.clone();
+        let entries: Vec<(String, usize)> = tally
+            .per_feed_new
+            .iter()
+            .filter(|(_, count)| **count > 0)
+            .map(|(id, count)| (id.clone(), *count))
+            .collect();
+        glib::spawn_future_local(async move {
+            for (feed_id, count) in entries {
+                let s = match account.fetch_feed_settings(feed_id.clone()).await {
+                    Ok(Some(s)) => s,
+                    _ => continue,
+                };
+                if !s.new_article_notifications_enabled {
+                    continue;
+                }
+                let display_name = feed_names
+                    .borrow()
+                    .get(&feed_id)
+                    .cloned()
+                    .unwrap_or_else(|| s.feed_url.clone());
+                let body = if count == 1 {
+                    "1 new article".to_string()
+                } else {
+                    format!("{count} new articles")
+                };
+                let notif = gio::Notification::new(&display_name);
+                notif.set_body(Some(&body));
+                notif.set_priority(gio::NotificationPriority::Normal);
+                // Per-feed `id` so the notification daemon coalesces
+                // repeated refreshes of the same feed instead of
+                // stacking N notifications when a user refreshes
+                // several times in quick succession.
+                let id = format!("viaduct.refresh.{}", feed_id);
+                app.send_notification(Some(&id), &notif);
+            }
+        });
     }
 
     pub(crate) fn act_focus_search(&self) {
         let imp = self.imp();
-        imp.search_btn.set_active(true);
-        imp.search_entry.get().grab_focus();
+        imp.sidebar_view.get().search_btn().set_active(true);
+        imp.timeline_view.get().focus_search_entry();
     }
 
     /// Toggles the outer split view between uncollapsed (both panes visible)
@@ -2235,16 +2076,6 @@ impl ViaductWindow {
     /// Re-emit OPML into the sidebar tree after import. Same tokio-context
     /// hop as the startup load — `Account::load_opml` uses `tokio::fs`.
     pub(crate) fn reload_sidebar_after_opml_change(&self) {
-        let imp = self.imp();
-        let Some(delegate) = imp.sidebar_delegate.get().cloned() else {
-            return;
-        };
-        let Some(controller) = imp.sidebar_tree_controller.get().cloned() else {
-            return;
-        };
-        let Some(data_source) = imp.sidebar_data_source.get().cloned() else {
-            return;
-        };
         let account = self.account();
         let (tx, rx) = tokio::sync::oneshot::channel();
         crate::spawn_on_runtime(async move {
@@ -2255,12 +2086,7 @@ impl ViaductWindow {
             match rx.await {
                 Ok(Ok(opml)) => {
                     if let Some(window) = window_weak.upgrade() {
-                        window.rebuild_feed_names_from(&opml);
-                    }
-                    delegate.borrow().set_opml_file(opml);
-                    controller.rebuild();
-                    data_source.refresh_root();
-                    if let Some(window) = window_weak.upgrade() {
+                        window.imp().sidebar_view.get().apply_opml(opml);
                         window.refresh_unread_counts();
                     }
                 }
@@ -2281,10 +2107,11 @@ impl ViaductWindow {
     /// Re-fetch + re-populate the timeline pane for whatever sidebar item
     /// is currently selected. Called after a refresh cycle so newly-fetched
     /// articles appear without the user needing to click around the sidebar.
-    /// No-op when nothing is selected.
-    pub(crate) fn reload_current_timeline(&self) {
+    /// No-op when nothing is selected. Public so `main.rs build_ui` can
+    /// repopulate after re-summoning the window from background mode.
+    pub fn reload_current_timeline(&self) {
         let imp = self.imp();
-        let Some(model) = imp.sidebar_list_view.model() else {
+        let Some(model) = imp.sidebar_view.get().list_view().model() else {
             return;
         };
         let Some(sel) = model.downcast_ref::<gtk::SingleSelection>() else {
@@ -2293,10 +2120,8 @@ impl ViaductWindow {
         let Some(item) = selected_sidebar_item(sel) else {
             return;
         };
-        let Some(store) = imp.timeline_store.get().cloned() else {
-            return;
-        };
         let account = self.account();
+        let weak_window = self.downgrade();
         glib::spawn_future_local(async move {
             let result: crate::error::Result<Vec<_>> = match item {
                 SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id).await,
@@ -2311,8 +2136,11 @@ impl ViaductWindow {
             };
             match result {
                 Ok(articles) => {
-                    populate_timeline(&store, articles);
-                    refresh_timeline_statuses(account.clone(), store.clone());
+                    if let Some(window) = weak_window.upgrade() {
+                        let timeline = window.imp().timeline_view.get();
+                        timeline.populate(articles);
+                        timeline.refresh_statuses(account.clone());
+                    }
                 }
                 Err(e) => tracing::warn!(?e, "reload_current_timeline failed"),
             }
@@ -2320,109 +2148,10 @@ impl ViaductWindow {
     }
 
     pub(crate) fn refresh_unread_counts(&self) {
-        let Some(controller) = self.imp().sidebar_tree_controller.get().cloned() else {
-            return;
-        };
-        let account = self.account();
-        glib::spawn_future_local(async move {
-            let per_feed = match account.unread_counts_by_feed().await {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::debug!(?e, "unread_counts_by_feed failed");
-                    return;
-                }
-            };
-            let smart = account.smart_feed_counts().await.ok();
-
-            let to_u32 = |n: i64| n.max(0).min(u32::MAX as i64) as u32;
-            let count_for_feed = |id: &str| to_u32(per_feed.get(id).copied().unwrap_or(0));
-
-            for top in controller.root_node.child_nodes() {
-                let Some(rep) = top.represented_object() else {
-                    continue;
-                };
-                let Some(item) = rep.downcast_ref::<crate::ui::sidebar::SidebarItem>() else {
-                    continue;
-                };
-                match item {
-                    crate::ui::sidebar::SidebarItem::SmartFeedGroup => {
-                        let mut group_total: u32 = 0;
-                        for child in top.child_nodes() {
-                            let Some(c_rep) = child.represented_object() else {
-                                continue;
-                            };
-                            let Some(c_item) =
-                                c_rep.downcast_ref::<crate::ui::sidebar::SidebarItem>()
-                            else {
-                                continue;
-                            };
-                            if let crate::ui::sidebar::SidebarItem::SmartFeed(name) = c_item {
-                                let count = match (name.as_str(), smart) {
-                                    ("Today", Some(s)) => to_u32(s.today_unread),
-                                    ("All Unread", Some(s)) => to_u32(s.all_unread),
-                                    ("Starred", Some(s)) => to_u32(s.starred_unread),
-                                    _ => 0,
-                                };
-                                child.set_unread_count(count);
-                                group_total = group_total.saturating_add(count);
-                            }
-                        }
-                        top.set_unread_count(group_total);
-                    }
-                    crate::ui::sidebar::SidebarItem::Folder(_) => {
-                        let mut folder_total: u32 = 0;
-                        for child in top.child_nodes() {
-                            let Some(c_rep) = child.represented_object() else {
-                                continue;
-                            };
-                            let Some(c_item) =
-                                c_rep.downcast_ref::<crate::ui::sidebar::SidebarItem>()
-                            else {
-                                continue;
-                            };
-                            if let crate::ui::sidebar::SidebarItem::Feed(feed) = c_item {
-                                let count = count_for_feed(&feed.id);
-                                child.set_unread_count(count);
-                                folder_total = folder_total.saturating_add(count);
-                            }
-                        }
-                        top.set_unread_count(folder_total);
-                    }
-                    crate::ui::sidebar::SidebarItem::Feed(feed) => {
-                        top.set_unread_count(count_for_feed(&feed.id));
-                    }
-                    crate::ui::sidebar::SidebarItem::SmartFeed(_) => {}
-                }
-            }
-        });
-    }
-
-    /// Walk an `OpmlFile` and (re)populate the feed-name resolver. Same name
-    /// preference order as the sidebar: `edited_name` → `name` → URL host →
-    /// raw URL. After repopulating, kick `items_changed` on the timeline
-    /// store so already-bound rows pick up the new names.
-    fn rebuild_feed_names_from(&self, opml: &crate::database::opml::OpmlFile) {
-        let Some(map_rc) = self.imp().feed_names.get() else {
-            return;
-        };
-        {
-            let mut map = map_rc.borrow_mut();
-            map.clear();
-            for feed in &opml.standalone_feeds {
-                map.insert(feed.id.clone(), display_name_for_feed(feed));
-            }
-            for folder in &opml.folders {
-                for feed in &folder.feeds {
-                    map.insert(feed.id.clone(), display_name_for_feed(feed));
-                }
-            }
-        }
-        if let Some(store) = self.imp().timeline_store.get() {
-            let n = store.n_items();
-            if n > 0 {
-                store.items_changed(0, n, n);
-            }
-        }
+        self.imp()
+            .sidebar_view
+            .get()
+            .refresh_unread_counts(self.account());
     }
 
     /// Capture-phase shortcut controller scoped to the timeline `ListView`.
@@ -2471,7 +2200,11 @@ impl ViaductWindow {
             controller.add_shortcut(shortcut);
         }
 
-        self.imp().timeline_list_view.add_controller(controller);
+        self.imp()
+            .timeline_view
+            .get()
+            .list_view()
+            .add_controller(controller);
     }
 
     fn refresh_specific_feeds(&self, feeds: Vec<crate::models::Feed>) {
@@ -2495,7 +2228,7 @@ impl ViaductWindow {
                 return;
             };
             if let Some(window) = window_weak.upgrade() {
-                window.dispatch_refresh_notification(tally.new_articles);
+                window.dispatch_refresh_notification(&tally);
                 window.refresh_unread_counts();
                 window.reload_current_timeline();
                 window.set_refresh_in_progress(false);
@@ -2533,6 +2266,7 @@ async fn pair_feeds_with_settings(
                 folder_relationship_json: None,
                 last_check_date: None,
                 reader_view_always_enabled: false,
+                new_article_notifications_enabled: false,
             });
         paired.push((feed, settings));
     }
@@ -2546,10 +2280,22 @@ async fn pair_feeds_with_settings(
 /// for the per-feed prune.
 /// Result of a refresh cycle, broken out so the UI can render a toast or
 /// a desktop notification with both numbers.
-#[derive(Debug, Default, Clone, Copy)]
+///
+/// **v2.4.0**: now tracks new-article counts **per feed** (`per_feed_new`)
+/// in addition to the feed-attempt count, so `dispatch_refresh_notification`
+/// can fire one `gio::Notification` per feed with `new_article_notifications_enabled`
+/// set in `FeedSettings`. The `total_new_articles()` accessor sums the
+/// values for the existing toast / global-summary callers.
+#[derive(Debug, Default, Clone)]
 pub(crate) struct RefreshTally {
     pub feeds_attempted: usize,
-    pub new_articles: usize,
+    pub per_feed_new: std::collections::HashMap<String, usize>,
+}
+
+impl RefreshTally {
+    pub fn total_new_articles(&self) -> usize {
+        self.per_feed_new.values().sum()
+    }
 }
 
 async fn run_refresh_with_tally(
@@ -2562,11 +2308,14 @@ async fn run_refresh_with_tally(
     let (changes_tx, mut changes_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::models::ArticleChanges>();
     let drain = tokio::spawn(async move {
-        let mut total: usize = 0;
+        let mut per_feed: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         while let Some(changes) = changes_rx.recv().await {
-            total = total.saturating_add(changes.new_articles.len());
+            for article in &changes.new_articles {
+                *per_feed.entry(article.feed_id.clone()).or_insert(0) += 1;
+            }
         }
-        total
+        per_feed
     });
     let refresher = crate::network::AccountRefresher::new(account, changes_tx, retention_days);
     if force {
@@ -2575,10 +2324,10 @@ async fn run_refresh_with_tally(
         refresher.refresh_feeds(paired).await;
     }
     drop(refresher);
-    let new_articles = drain.await.unwrap_or(0);
+    let per_feed_new = drain.await.unwrap_or_default();
     RefreshTally {
         feeds_attempted,
-        new_articles,
+        per_feed_new,
     }
 }
 
@@ -2596,27 +2345,6 @@ fn current_retention_days() -> i64 {
 enum Direction {
     Next,
     Prev,
-}
-
-fn populate_timeline_with_snippets(
-    store: &gio::ListStore,
-    results: Vec<(crate::models::Article, String)>,
-) {
-    let n_existing = store.n_items();
-    let nodes: Vec<ArticleNode> = results
-        .into_iter()
-        .map(|(article, snippet)| ArticleNode::with_snippet(article, snippet))
-        .collect();
-    store.splice(0, n_existing, &nodes);
-}
-
-/// Escape FTS5 special characters so user input is treated as a literal token.
-/// FTS5 reserves `"` for phrase quoting and treats unbalanced quotes as a
-/// syntax error; wrapping the term in double quotes after escaping is the
-/// minimum safe transform.
-fn escape_fts5(term: &str) -> String {
-    let escaped = term.replace('"', "\"\"");
-    format!("\"{}\"", escaped)
 }
 
 /// Synthesize a minimal HTML body for articles whose feed shipped no
@@ -2678,36 +2406,6 @@ fn html_escape(s: &str) -> String {
     out
 }
 
-/// User preference for how to play YouTube / Vimeo videos detected in
-/// articles. Mirrored from the `video-playback-mode` GSetting.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum VideoPlaybackMode {
-    InPane,
-    External,
-    Disabled,
-}
-
-/// HTML-escape an embed URL for safe insertion into an `<iframe src="…">`
-/// attribute. The embed URLs we generate carry query strings with `&`,
-/// `=`, and the four other characters that need escaping in HTML attribute
-/// context. Without this, `&rel=0&modestbranding=1` is interpreted by the
-/// HTML parser as `&rel`-something + `&mod`-something entity references,
-/// silently corrupting the URL the iframe actually loads.
-fn embed_url_for_iframe(url: &str) -> String {
-    let mut out = String::with_capacity(url.len() + 8);
-    for c in url.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
 /// Walk a list view's child widget tree from the click coordinates up
 /// to the first ancestor that has `viaduct-article` data attached. The
 /// data is set during the timeline row factory's `connect_bind`. Used
@@ -2730,27 +2428,6 @@ fn pick_article_at(listview: &gtk::Widget, x: f64, y: f64) -> Option<crate::mode
     None
 }
 
-/// Same pattern as `pick_article_at` but walking for a sidebar
-/// `SidebarItem`. Sidebar row factory attaches `viaduct-sidebar-item`
-/// data to the row's content during `connect_bind`.
-fn pick_sidebar_item_at(
-    listview: &gtk::Widget,
-    x: f64,
-    y: f64,
-) -> Option<crate::ui::sidebar::SidebarItem> {
-    let leaf = listview.pick(x, y, gtk::PickFlags::DEFAULT)?;
-    let mut walker: Option<gtk::Widget> = Some(leaf);
-    while let Some(w) = walker {
-        unsafe {
-            if let Some(ptr) = w.data::<crate::ui::sidebar::SidebarItem>("viaduct-sidebar-item") {
-                return Some(ptr.as_ref().clone());
-            }
-        }
-        walker = w.parent();
-    }
-    None
-}
-
 /// Short, human-readable label for a `SidebarItem`. Used in the
 /// timing-info log lines from the v1.9.0 instrumentation so users can
 /// see which feed / folder / smart feed they were on when slow
@@ -2763,63 +2440,6 @@ fn sidebar_item_label(item: &SidebarItem) -> String {
         SidebarItem::SmartFeed(name) => format!("Smart: {name}"),
         SidebarItem::SmartFeedGroup => "Smart Feeds (group)".to_string(),
     }
-}
-
-fn current_video_playback_mode() -> VideoPlaybackMode {
-    let Some(settings) = crate::preferences::settings() else {
-        return VideoPlaybackMode::InPane;
-    };
-    match settings
-        .string(crate::preferences::keys::VIDEO_PLAYBACK_MODE)
-        .as_str()
-    {
-        "external" => VideoPlaybackMode::External,
-        "disabled" => VideoPlaybackMode::Disabled,
-        _ => VideoPlaybackMode::InPane,
-    }
-}
-
-fn populate_timeline(store: &gio::ListStore, articles: Vec<crate::models::Article>) {
-    let n_existing = store.n_items();
-    let nodes: Vec<ArticleNode> = articles.into_iter().map(ArticleNode::new).collect();
-    store.splice(0, n_existing, &nodes);
-}
-
-/// Bulk-fetch statuses for every `ArticleNode` currently in the timeline
-/// store and copy them onto the nodes. Runs after every timeline repopulate.
-fn refresh_timeline_statuses(account: Arc<Account>, store: gio::ListStore) {
-    let mut ids: Vec<String> = Vec::with_capacity(store.n_items() as usize);
-    let mut nodes: Vec<ArticleNode> = Vec::with_capacity(ids.capacity());
-    for i in 0..store.n_items() {
-        let Some(obj) = store.item(i) else { continue };
-        let Some(node) = obj.downcast_ref::<ArticleNode>() else {
-            continue;
-        };
-        let Some(article) = node.article() else {
-            continue;
-        };
-        ids.push(article.article_id);
-        nodes.push(node.clone());
-    }
-    if ids.is_empty() {
-        return;
-    }
-    glib::spawn_future_local(async move {
-        match account.fetch_statuses_by_ids(ids).await {
-            Ok(map) => {
-                for node in nodes {
-                    if let Some(article) = node.article() {
-                        let (read, starred) = map
-                            .get(&article.article_id)
-                            .copied()
-                            .unwrap_or((false, false));
-                        node.set_status(read, starred);
-                    }
-                }
-            }
-            Err(e) => tracing::debug!(?e, "bulk status fetch failed"),
-        }
-    });
 }
 
 /// Port of NNW's folder-as-article-source behavior: a folder row in the
@@ -2848,44 +2468,4 @@ async fn fetch_folder_articles(
     // cross-chunk merge.
     merged.sort_by_key(|a| std::cmp::Reverse(a.date_published));
     Ok(merged)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn embed_url_for_iframe_escapes_query_separators() {
-        // The default YouTube embed URL has three '&' separators in the
-        // query. Without escaping, the HTML parser interprets them as
-        // entity references and silently corrupts the URL the iframe
-        // actually loads.
-        let raw = "https://www.youtube-nocookie.com/embed/abc?autoplay=1&rel=0&modestbranding=1";
-        let escaped = embed_url_for_iframe(raw);
-        assert_eq!(
-            escaped,
-            "https://www.youtube-nocookie.com/embed/abc?autoplay=1&amp;rel=0&amp;modestbranding=1"
-        );
-    }
-
-    #[test]
-    fn embed_url_for_iframe_escapes_attribute_breakers() {
-        // Quote marks would close the src attribute early; angle brackets
-        // would break the iframe tag entirely. Escape them too.
-        let raw = "https://x.test/?q=<script>&v=\"1'2\"";
-        let escaped = embed_url_for_iframe(raw);
-        assert!(!escaped.contains('"'));
-        assert!(!escaped.contains('<'));
-        assert!(!escaped.contains('>'));
-        assert!(escaped.contains("&quot;"));
-        assert!(escaped.contains("&lt;"));
-        assert!(escaped.contains("&gt;"));
-    }
-
-    #[test]
-    fn embed_url_for_iframe_passes_safe_chars_through() {
-        let raw = "https://example.com/path?id=abc-123_def&x=1";
-        let escaped = embed_url_for_iframe(raw);
-        assert_eq!(escaped, "https://example.com/path?id=abc-123_def&amp;x=1");
-    }
 }

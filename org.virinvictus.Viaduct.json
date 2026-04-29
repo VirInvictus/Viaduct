@@ -13,7 +13,8 @@
         "--socket=wayland",
         "--device=dri",
         "--share=network",
-        "--talk-name=org.freedesktop.secrets"
+        "--talk-name=org.freedesktop.secrets",
+        "--talk-name=org.freedesktop.portal.Background"
     ],
     "build-options": {
         "append-path": "/usr/lib/sdk/rust-stable/bin",

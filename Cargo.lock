@@ -1583,6 +1583,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ksni"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7ca513d0be42df5edb485af9f44a12b2cb85af773d91c27dc796d1c58b78edc"
+dependencies = [
+ "futures-util",
+ "pastey",
+ "serde",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2082,6 +2095,12 @@ dependencies = [
  "smallvec",
  "windows-link",
 ]
+
+[[package]]
+name = "pastey"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5a797f0e07bdf071d15742978fc3128ec6c22891c31a3a931513263904c982a"
 
 [[package]]
 name = "pbkdf2"
@@ -3477,7 +3496,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viaduct"
-version = "1.9.1"
+version = "2.6.2"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -3485,6 +3504,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "gtk4",
+ "ksni",
  "libadwaita",
  "lru",
  "md-5",
@@ -3504,7 +3524,7 @@ dependencies = [
 
 [[package]]
 name = "viaduct-core"
-version = "1.9.1"
+version = "2.6.2"
 dependencies = [
  "ammonia",
  "anyhow",

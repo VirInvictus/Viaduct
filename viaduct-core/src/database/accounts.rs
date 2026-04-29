@@ -459,6 +459,135 @@ impl Account {
         Ok(removed)
     }
 
+    /// v2.1.0: set the user-visible display name for a feed. Stored as
+    /// `edited_name` on the OPML entry. The sidebar's display-name
+    /// resolver uses the existing fallback chain `edited_name → name →
+    /// URL host → raw URL`, so an empty `new_name` reverts to whatever
+    /// the parsed feed reported. Saves the OPML; returns true if a feed
+    /// was found and updated.
+    pub async fn rename_feed(&self, feed_url: &str, new_name: String) -> Result<bool> {
+        let mut opml = self.load_opml().await?;
+        let trimmed = new_name.trim().to_string();
+        let edited = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        };
+        let mut changed = false;
+
+        for feed in opml.standalone_feeds.iter_mut() {
+            if feed.url == feed_url {
+                feed.edited_name = edited.clone();
+                changed = true;
+            }
+        }
+        for folder in opml.folders.iter_mut() {
+            for feed in folder.feeds.iter_mut() {
+                if feed.url == feed_url {
+                    feed.edited_name = edited.clone();
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            self.save_opml(opml).await?;
+        }
+        Ok(changed)
+    }
+
+    /// v2.1.0: create an empty folder. No-ops + returns false when a
+    /// folder with the same name already exists. Empty `name` (after
+    /// trim) is rejected. Saves the OPML.
+    pub async fn create_folder(&self, name: String) -> Result<bool> {
+        let trimmed = name.trim().to_string();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+        let mut opml = self.load_opml().await?;
+        if opml.folders.iter().any(|f| f.name == trimmed) {
+            return Ok(false);
+        }
+        opml.folders.push(Folder {
+            name: trimmed,
+            feeds: Vec::new(),
+        });
+        self.save_opml(opml).await?;
+        Ok(true)
+    }
+
+    /// v2.1.0: relocate a feed between standalone-list and folders.
+    /// `target_folder = None` moves to the standalone list; `Some(name)`
+    /// moves into that folder, creating it if it doesn't exist. Sweeps
+    /// every existing location for the feed first so the move is
+    /// destination-only (no duplicates). Saves the OPML; returns true
+    /// when the feed was found and the move actually changed something.
+    pub async fn move_feed_to_folder(
+        &self,
+        feed_url: &str,
+        target_folder: Option<String>,
+    ) -> Result<bool> {
+        let mut opml = self.load_opml().await?;
+
+        // Locate + remove from current home, capturing the Feed value so
+        // we can reinsert it at the destination.
+        let mut current: Option<Feed> = None;
+        let mut current_was_standalone = false;
+        let mut current_folder: Option<String> = None;
+
+        if let Some(idx) = opml.standalone_feeds.iter().position(|f| f.url == feed_url) {
+            current = Some(opml.standalone_feeds.remove(idx));
+            current_was_standalone = true;
+        } else {
+            for folder in opml.folders.iter_mut() {
+                if let Some(idx) = folder.feeds.iter().position(|f| f.url == feed_url) {
+                    current = Some(folder.feeds.remove(idx));
+                    current_folder = Some(folder.name.clone());
+                    break;
+                }
+            }
+        }
+        let Some(feed) = current else {
+            return Ok(false);
+        };
+
+        // Detect a no-op: same destination as current location.
+        let same_destination = match (&target_folder, &current_folder, current_was_standalone) {
+            (None, _, true) => true,
+            (Some(target), Some(current_name), false) => target == current_name,
+            _ => false,
+        };
+        if same_destination {
+            // Reinsert without saving.
+            match target_folder {
+                Some(ref name) => {
+                    if let Some(folder) = opml.folders.iter_mut().find(|f| &f.name == name) {
+                        folder.feeds.push(feed);
+                    }
+                }
+                None => opml.standalone_feeds.push(feed),
+            }
+            return Ok(false);
+        }
+
+        match target_folder {
+            None => opml.standalone_feeds.push(feed),
+            Some(target) => {
+                if let Some(folder) = opml.folders.iter_mut().find(|f| f.name == target) {
+                    folder.feeds.push(feed);
+                } else {
+                    opml.folders.push(Folder {
+                        name: target,
+                        feeds: vec![feed],
+                    });
+                }
+            }
+        }
+
+        self.save_opml(opml).await?;
+        Ok(true)
+    }
+
     pub async fn cleanup_orphaned_settings(&self) -> Result<()> {
         let opml = self.load_opml().await?;
         let valid_urls: Vec<String> = opml_feed_urls(&opml);

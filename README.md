@@ -117,6 +117,8 @@ This project would not exist without **[Brent Simmons](https://inessential.com/)
 
 If you want a great RSS reader on **macOS or iOS**, please install [NetNewsWire](https://netnewswire.com/) — it is and remains the gold standard. Viaduct is what NetNewsWire would feel like if it ran on Linux.
 
+We also want to give a huge thanks to **[NewsFlash](https://gitlab.com/news-flash/news_flash_gtk)**, the only other RSS reader worth using on Linux. Reviewing their codebase against ours directly informed Viaduct's v2.0 architectural plan (`two-plans.md`, see `roadmap.md` Phase 18). The modular widget decomposition (`SidebarView` / `TimelineView` / `ArticlePaneView`), the dedicated `ArticleRenderer` GObject, and the expanded reactive-property coverage are concepts NewsFlash demonstrates beautifully in pure GTK4 idiom — and we're adopting the parts that compose with our "port don't invent" constraint. Their broader actor-model approach and Blueprint-based UI we ultimately did not adopt (we stay anchored to NetNewsWire's structure for porting traceability), but their work is phenomenal and forced us to ask the right questions about where Viaduct could be more idiomatically GTK without losing fidelity.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

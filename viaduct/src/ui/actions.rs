@@ -47,6 +47,8 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     register(window, "copy-url", |w| w.act_copy_url());
     register(window, "toggle-reader", |w| w.act_toggle_reader());
     register(window, "close-article", |w| w.act_close_article());
+    // v2.2.0
+    register(window, "print-article", |w| w.act_print_article());
 
     // App chrome
     register(window, "refresh", |w| w.act_refresh());
@@ -67,6 +69,17 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     register(window, "mark-feed-read", |w| w.act_mark_clicked_feed_read());
     register(window, "mark-folder-read", |w| {
         w.act_mark_clicked_folder_read()
+    });
+    // v2.1.0 sidebar editing
+    register(window, "rename-feed", |w| w.act_rename_clicked_feed());
+    register(window, "move-feed", |w| w.act_move_clicked_feed());
+    register(window, "new-folder", |w| w.act_new_folder());
+    // v2.4.0 per-feed settings
+    register(window, "feed-settings", |w| w.act_feed_settings());
+    // v2.6.0: drag-and-drop sidebar reorder fires this action after a
+    // successful drop to repopulate the tree.
+    register(window, "reload-sidebar", |w| {
+        w.reload_sidebar_after_opml_change()
     });
 
     // OPML import/export — menu only, no accelerators (NNW does the same).
@@ -104,6 +117,7 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     app.set_accels_for_action("win.copy-url", &["<Ctrl><Shift>c"]);
     app.set_accels_for_action("win.toggle-reader", &["<Ctrl><Shift>r"]);
     app.set_accels_for_action("win.close-article", &["Escape"]);
+    app.set_accels_for_action("win.print-article", &["<Ctrl>p"]);
     app.set_accels_for_action("win.add-feed", &["<Ctrl>n"]);
     app.set_accels_for_action("win.refresh", &["<Ctrl>r"]);
     app.set_accels_for_action("win.focus-search", &["<Ctrl>f"]);

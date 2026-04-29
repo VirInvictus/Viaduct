@@ -64,20 +64,53 @@ html, body {\n\
   overflow: auto !important;\n\
   height: auto !important;\n\
 }\n\
+/* v2.0.0-pre6: thinner scrollbar driven by `currentColor` so the\n\
+ * thumb adopts the page's text color (which respects\n\
+ * `prefers-color-scheme` already) — closer to libadwaita's overlay\n\
+ * scrollbar feel than the v1.x hard-coded gray. The `width` jumps\n\
+ * from 6 px to 10 px on hover so the target stays grabbable. */\n\
 ::-webkit-scrollbar {\n\
   display: initial !important;\n\
-  width: 8px;\n\
-  height: 8px;\n\
+  width: 6px;\n\
+  height: 6px;\n\
+  transition: width 120ms ease, height 120ms ease;\n\
+}\n\
+::-webkit-scrollbar:hover {\n\
+  width: 10px;\n\
+  height: 10px;\n\
 }\n\
 ::-webkit-scrollbar-thumb {\n\
-  background-color: rgba(128, 128, 128, 0.45);\n\
-  border-radius: 4px;\n\
+  background-color: color-mix(in srgb, currentColor 30%, transparent);\n\
+  border-radius: 999px;\n\
+  transition: background-color 120ms ease;\n\
 }\n\
 ::-webkit-scrollbar-thumb:hover {\n\
-  background-color: rgba(128, 128, 128, 0.7);\n\
+  background-color: color-mix(in srgb, currentColor 55%, transparent);\n\
 }\n\
 ::-webkit-scrollbar-track {\n\
   background: transparent;\n\
+}\n\
+/* v2.0.0-pre6: 150 ms article-to-article fade-in. Matches the\n\
+ * outer `article_stack` content/empty crossfade so within-content\n\
+ * swaps no longer feel like an instant jump-cut. The animation\n\
+ * runs on every `WebKitWebView::load_html` since each load is a\n\
+ * fresh page render. */\n\
+@keyframes viaduct-fade-in {\n\
+  from { opacity: 0; }\n\
+  to   { opacity: 1; }\n\
+}\n\
+body {\n\
+  animation: viaduct-fade-in 150ms ease-out;\n\
+}\n\
+/* v2.3.0: user-controlled font scale + line height. The font\n\
+ * scale ratio is multiplied against the body's base font-size so\n\
+ * theme rules expressed in em/rem scale proportionally. The\n\
+ * line-height variable is unitless and used directly — the\n\
+ * GSettings default of 1.5 matches most NNW themes' native\n\
+ * value, and `inherit` covers descendants automatically. */\n\
+body {\n\
+  font-size: calc(1em * var(--article-font-scale, 1));\n\
+  line-height: var(--article-line-height, 1.5);\n\
 }\n\
 ";
 
@@ -883,11 +916,11 @@ pub fn sanitize_and_rewrite_image_srcs(html: &str) -> String {
 /// `font_face_css()` resolve through our bundled TTFs. Sync handler
 /// (font bytes are baked into the binary via `include_bytes!` so no
 /// async work is needed). Idempotent.
-pub fn install_font_uri_scheme() {
-    let Some(ctx) = webkit6::WebContext::default() else {
-        tracing::warn!("article_renderer: no default WebContext — viaduct-font:// disabled");
-        return;
-    };
+/// Register the `viaduct-font://` scheme on the supplied `WebContext`.
+/// v2.0.0-pre4: was previously hard-wired to `WebContext::default()`;
+/// the new `ArticleRenderer` GObject creates its own per-renderer context
+/// so the scheme can't leak between hypothetical future windows.
+pub fn install_font_uri_scheme(ctx: &webkit6::WebContext) {
     ctx.register_uri_scheme(VIADUCT_FONT_SCHEME, |request| {
         let uri = request.uri().map(|s| s.to_string()).unwrap_or_default();
         match lookup_bundled_font(&uri) {
@@ -908,11 +941,9 @@ pub fn install_font_uri_scheme() {
     });
 }
 
-pub fn install_image_uri_scheme(image_cache: Arc<ImageCache>) {
-    let Some(ctx) = webkit6::WebContext::default() else {
-        tracing::warn!("article_renderer: no default WebContext — viaduct-img:// disabled");
-        return;
-    };
+/// Register the `viaduct-img://` scheme on the supplied `WebContext`.
+/// Same per-renderer rationale as `install_font_uri_scheme`.
+pub fn install_image_uri_scheme(ctx: &webkit6::WebContext, image_cache: Arc<ImageCache>) {
     ctx.register_uri_scheme(VIADUCT_IMG_SCHEME, move |request| {
         // The URISchemeRequest is a !Send GObject; clone the Rc-style
         // reference so we can keep it alive across the async fetch and
@@ -982,23 +1013,57 @@ pub fn render_themed(
 
     let mut outer_subs: HashMap<&'static str, String> = HashMap::with_capacity(4);
     outer_subs.insert("title", title_for_outer);
-    // Style cascade: bundled @font-face rules (so themes can reference
-    // 'Atkinson Hyperlegible' etc.) → byte-perfect NNW theme stylesheet
-    // → optional dark-mode adaptation overlay (per-theme, hand-tuned
-    // prefers-color-scheme block that activates when the system color
-    // scheme is dark) → viaduct GTK-pane override (last so it wins).
-    // Themes that adapt to dark mode internally (Adwaita) or are
-    // dark-only (Tiqoe Dark) carry None for the overlay slot.
+
+    // v2.0.0-pre6: effective accent — themes with a hard-coded
+    // `accent_hex` (Sepia / Biblioteca / etc.) keep theirs; themes
+    // with `accent_hex: None` (Adwaita) pick up the libadwaita
+    // system accent (GNOME 47+ gnome-control-center setting).
+    //
+    // v2.3.0: also inject the user's article-font-scale and
+    // article-line-height multipliers (read from GSettings, clamped
+    // to schema range, expressed as fractions). The override stylesheet
+    // applies them via `font-size: calc(1em * var(--article-font-scale))`
+    // and `line-height: var(--article-line-height)` so theme rules
+    // expressed in `em` / `rem` scale proportionally.
+    let effective_accent = theme
+        .accent_hex
+        .map(|s| s.to_string())
+        .or_else(system_accent_hex);
+    let (font_scale, line_height) = match crate::preferences::settings() {
+        Some(s) => (
+            crate::preferences::article_font_scale(&s),
+            crate::preferences::article_line_height(&s),
+        ),
+        None => (1.0, 1.0),
+    };
+    let mut root_decls = String::new();
+    if let Some(hex) = effective_accent {
+        root_decls.push_str(&format!("--accent-color: {};", hex));
+    }
+    root_decls.push_str(&format!(" --article-font-scale: {:.3};", font_scale));
+    root_decls.push_str(&format!(" --article-line-height: {:.3};", line_height));
+    let accent_root_css = format!(":root {{{} }}\n", root_decls);
+
+    // Style cascade: accent custom property → bundled @font-face
+    // rules (so themes can reference 'Atkinson Hyperlegible' etc.) →
+    // byte-perfect NNW theme stylesheet → optional dark-mode
+    // adaptation overlay (per-theme, hand-tuned prefers-color-scheme
+    // block that activates when the system color scheme is dark) →
+    // viaduct GTK-pane override (last so it wins). Themes that adapt
+    // to dark mode internally (Adwaita) or are dark-only (Tiqoe Dark)
+    // carry None for the overlay slot.
     let style = match theme.dark_overlay {
         Some(overlay) => format!(
-            "{}\n{}\n{}\n{}",
+            "{}{}\n{}\n{}\n{}",
+            accent_root_css,
             font_face_css(),
             theme.stylesheet,
             overlay,
             VIADUCT_PANE_OVERRIDE_CSS,
         ),
         None => format!(
-            "{}\n{}\n{}",
+            "{}{}\n{}\n{}",
+            accent_root_css,
             font_face_css(),
             theme.stylesheet,
             VIADUCT_PANE_OVERRIDE_CSS,
@@ -1020,6 +1085,24 @@ pub fn render_themed(
 #[allow(dead_code)]
 pub fn render(view: &webkit6::WebView, html: &str, base_uri: Option<&str>) {
     view.load_html(html, base_uri);
+}
+
+/// v2.0.0-pre6: read the libadwaita system accent and format it as a
+/// `#RRGGBB` hex string suitable for a CSS custom property. Returns
+/// `None` when the running libadwaita doesn't expose accent colors
+/// (pre-1.6 builds — `to_standalone_rgba` was added in 1.6 and the
+/// system-accent integration in GNOME 47+). Used by `render_themed`
+/// to fall back to the system accent when the active theme has
+/// `accent_hex: None` (Adwaita).
+fn system_accent_hex() -> Option<String> {
+    let manager = adw::StyleManager::default();
+    let accent = manager.accent_color();
+    let is_dark = manager.is_dark();
+    let rgba = accent.to_standalone_rgba(is_dark);
+    let r = (rgba.red() * 255.0).clamp(0.0, 255.0) as u8;
+    let g = (rgba.green() * 255.0).clamp(0.0, 255.0) as u8;
+    let b = (rgba.blue() * 255.0).clamp(0.0, 255.0) as u8;
+    Some(format!("#{:02X}{:02X}{:02X}", r, g, b))
 }
 
 #[cfg(test)]

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.16"/>
+  <requires lib="libadwaita" version="1.7"/>
+  <menu id="primary_menu">
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">Add Feed…</attribute>
+        <attribute name="action">win.add-feed</attribute>
+        <attribute name="accel">&lt;Primary&gt;n</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">New Folder…</attribute>
+        <attribute name="action">win.new-folder</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">Import OPML…</attribute>
+        <attribute name="action">win.import-opml</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Export OPML…</attribute>
+        <attribute name="action">win.export-opml</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Print Article…</attribute>
+        <attribute name="action">win.print-article</attribute>
+        <attribute name="accel">&lt;Primary&gt;p</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">Preferences</attribute>
+        <attribute name="action">win.preferences</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Keyboard Shortcuts</attribute>
+        <attribute name="action">win.shortcuts</attribute>
+      </item>
+    </section>
+  </menu>
+  <template class="ViaductSidebarView" parent="AdwBin">
+    <child>
+      <object class="AdwToolbarView">
+        <child type="top">
+          <object class="AdwHeaderBar">
+            <child type="start">
+              <object class="GtkButton" id="mark_all_read_btn">
+                <property name="icon-name">checkbox-checked-symbolic</property>
+                <property name="tooltip-text">Mark all as read</property>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="sync_btn">
+                <property name="tooltip-text">Sync Now</property>
+                <property name="action-name">win.refresh</property>
+                <property name="child">
+                  <object class="GtkStack" id="sync_btn_stack">
+                    <property name="transition-type">crossfade</property>
+                    <property name="transition-duration">120</property>
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">icon</property>
+                        <property name="child">
+                          <object class="GtkImage">
+                            <property name="icon-name">view-refresh-symbolic</property>
+                            <property name="pixel-size">16</property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkStackPage">
+                        <property name="name">spinner</property>
+                        <property name="child">
+                          <object class="GtkSpinner" id="sync_btn_spinner">
+                            <property name="width-request">16</property>
+                            <property name="height-request">16</property>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkToggleButton" id="search_btn">
+                <property name="icon-name">system-search-symbolic</property>
+                <property name="tooltip-text">Search articles</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkMenuButton" id="menu_btn">
+                <property name="icon-name">open-menu-symbolic</property>
+                <property name="menu-model">primary_menu</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <property name="content">
+          <object class="GtkScrolledWindow">
+            <property name="child">
+              <object class="GtkListView" id="sidebar_list_view"/>
+            </property>
+          </object>
+        </property>
+        <child type="bottom">
+          <object class="GtkActionBar" id="bottom_action_bar">
+            <property name="revealed">False</property>
+          </object>
+        </child>
+      </object>
+    </child>
+  </template>
+</interface>

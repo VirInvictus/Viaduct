@@ -62,8 +62,20 @@
       <description>
         How often viaduct kicks off a refresh cycle while the application
         is running. 0 disables periodic refresh. Wired through a glib
-        timeout in the main window; a separate background daemon for
-        when the window is closed is tracked under Phase 17.
+        timeout in the main window; pair with run-in-background to keep
+        the timer firing while the main window is closed.
+      </description>
+    </key>
+
+    <key name="run-in-background" type="b">
+      <default>false</default>
+      <summary>Keep refreshing feeds after the window is closed</summary>
+      <description>
+        When enabled, viaduct hides the main window on close instead of
+        quitting, and continues to run scheduled refresh cycles in the
+        background. The first time you enable this, viaduct will ask the
+        desktop for permission to run in the background via the
+        org.freedesktop.portal.Background API.
       </description>
     </key>
 
@@ -105,6 +117,34 @@
         the system default handler (xdg-open). "disabled" hides the play button
         entirely. The article-pane WebView's lockdown profile is unchanged in
         every mode — playback is opt-in and isolated.
+      </description>
+    </key>
+
+    <key name="article-font-scale" type="i">
+      <default>100</default>
+      <range min="75" max="200"/>
+      <summary>Article reading font scale (percentage of base size)</summary>
+      <description>
+        Multiplier applied to the article body's base font size, expressed
+        as a percentage. 100 = native theme size; 75 = 75% (smaller); 200
+        = double size (largest). Plumbed into the page wrapper as the
+        `--article-font-scale` CSS custom property; the override stylesheet
+        applies it via `font-size: calc(1em * var(--article-font-scale))`
+        so theme rules expressed in `em` / `rem` scale proportionally.
+      </description>
+    </key>
+
+    <key name="article-line-height" type="i">
+      <default>150</default>
+      <range min="100" max="250"/>
+      <summary>Article reading line spacing (centi-units; 150 = 1.5)</summary>
+      <description>
+        Unitless CSS line-height for the article body, expressed as
+        centi-units (150 = 1.5, 200 = 2.0 = double-spacing). Default 150
+        roughly matches most NNW themes' native line-height. Stored as
+        an integer for the schema's `range` declaration; converted to a
+        float and injected into the page wrapper's
+        `--article-line-height` custom property.
       </description>
     </key>
 

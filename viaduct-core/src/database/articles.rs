@@ -627,19 +627,43 @@ fn fetch_missing_article_ids(conn: &mut Connection) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+/// Unix seconds for **local midnight today**, expressed in UTC. The
+/// only correct way to ask "is this UTC-stored timestamp on the user's
+/// local 'today'?" — naïvely calling `.and_utc()` on a local naïve
+/// date gives midnight-UTC instead of midnight-local-converted-to-UTC,
+/// which skews the boundary by the local offset (4 h on EDT, 5 h on
+/// EST, etc.). Pre-v2.6.1 `smart_feed_counts` had that bug while
+/// `fetch_today` was correct, so the Today badge count and the
+/// fetch-on-click list disagreed by exactly the local offset's worth
+/// of articles arriving in the boundary hours. Funneling both through
+/// this helper prevents the drift.
+///
+/// Returns 0 if the local TZ DB lookup fails (DST gap on midnight,
+/// extremely unlikely; standard transitions happen at 02:00 local).
+fn local_midnight_utc_seconds() -> i64 {
+    use chrono::TimeZone;
+    let local_today = chrono::Local::now().date_naive();
+    let Some(local_midnight) = local_today.and_hms_opt(0, 0, 0) else {
+        return 0;
+    };
+    match chrono::Local.from_local_datetime(&local_midnight) {
+        chrono::LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc).timestamp(),
+        // Ambiguous: pick the earlier instance — DST fall-back at
+        // midnight is vanishingly rare but let the boundary be
+        // permissive in that case rather than dropping articles.
+        chrono::LocalResult::Ambiguous(early, _) => early.with_timezone(&chrono::Utc).timestamp(),
+        // Gap: spring-forward at midnight isn't a real-world scenario
+        // (transitions happen at 02:00) but guard anyway.
+        chrono::LocalResult::None => 0,
+    }
+}
+
 fn fetch_today(conn: &mut Connection) -> Result<Vec<Article>> {
-    let today_start = chrono::Local::now()
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_local_timezone(chrono::Local)
-        .unwrap()
-        .to_utc()
-        .timestamp();
+    let today_start = local_midnight_utc_seconds();
     let mut stmt = conn.prepare(
-        "SELECT a.* FROM articles a 
-         INNER JOIN statuses s ON a.article_id = s.article_id 
-         WHERE s.date_arrived >= ? OR a.date_published >= ? 
+        "SELECT a.* FROM articles a
+         INNER JOIN statuses s ON a.article_id = s.article_id
+         WHERE s.date_arrived >= ? OR a.date_published >= ?
          ORDER BY a.date_published DESC, a.rowid DESC",
     )?;
     let rows = stmt.query_map([today_start, today_start], row_to_article)?;
@@ -647,6 +671,17 @@ fn fetch_today(conn: &mut Connection) -> Result<Vec<Article>> {
     for row in rows {
         articles.push(row?);
     }
+    // v2.6.1: log the window + result count so a user reporting "Today
+    // doesn't show today's articles" can confirm what `today_start`
+    // actually resolved to. Run with `RUST_LOG=viaduct=debug` to surface.
+    tracing::debug!(
+        today_start_unix_seconds = today_start,
+        today_start_local = %chrono::DateTime::from_timestamp(today_start, 0)
+            .map(|d| d.with_timezone(&chrono::Local).to_rfc3339())
+            .unwrap_or_default(),
+        result_count = articles.len(),
+        "fetch_today"
+    );
     Ok(articles)
 }
 
@@ -774,12 +809,11 @@ fn unread_counts_by_feed(conn: &mut Connection) -> Result<HashMap<String, i64>> 
 /// existing `fetch_today` / `fetch_unread` queries; Starred narrows to
 /// starred AND unread to match NNW's `BuiltinSmartFeed.unreadCount`.
 fn smart_feed_counts(conn: &mut Connection) -> Result<SmartFeedCounts> {
-    let today_start = chrono::Local::now()
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_utc()
-        .timestamp();
+    // v2.6.1: was previously `.and_utc()` here while `fetch_today` did
+    // the correct local→UTC conversion — the badge count spanned a
+    // window starting 4–5 hours before the actual local midnight, so
+    // the count and the click-result disagreed.
+    let today_start = local_midnight_utc_seconds();
 
     let today_unread: i64 = conn.query_row(
         "SELECT COUNT(*)
@@ -791,13 +825,29 @@ fn smart_feed_counts(conn: &mut Connection) -> Result<SmartFeedCounts> {
         |row| row.get(0),
     )?;
 
-    let all_unread: i64 =
-        conn.query_row("SELECT COUNT(*) FROM statuses WHERE read = 0", [], |row| {
-            row.get(0)
-        })?;
+    // v2.6.2: INNER JOIN against articles so **orphan status rows**
+    // (status preserved when an article is deleted by retention or a
+    // feed-removal sweep — NNW behaviour, see `articles_ad_lookup`
+    // trigger comment) don't bloat the count. `fetch_unread` /
+    // `fetch_starred` join the same way, so the badge count matches
+    // the click result. Pre-v2.6.2 the bare `COUNT(*) FROM statuses`
+    // counted orphans, producing the user-visible bug "Mark All as
+    // Read leaves the All Unread badge at 1" when an orphan
+    // unread-status existed.
+    let all_unread: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM articles a
+         INNER JOIN statuses s ON a.article_id = s.article_id
+         WHERE s.read = 0",
+        [],
+        |row| row.get(0),
+    )?;
 
     let starred_unread: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM statuses WHERE starred = 1 AND read = 0",
+        "SELECT COUNT(*)
+         FROM articles a
+         INNER JOIN statuses s ON a.article_id = s.article_id
+         WHERE s.starred = 1 AND s.read = 0",
         [],
         |row| row.get(0),
     )?;
@@ -1030,6 +1080,36 @@ mod tests {
         conn
     }
 
+    /// `local_midnight_utc_seconds()` must agree with a manual
+    /// `Local::now()` → midnight → to_utc round-trip. The pre-v2.6.1
+    /// `smart_feed_counts` had `.and_utc()` here which silently used
+    /// midnight-UTC instead of midnight-local-converted-to-UTC; this
+    /// test locks the helper to the correct semantic so a regression
+    /// would fail loudly.
+    #[test]
+    fn local_midnight_helper_matches_explicit_local_midnight() {
+        use chrono::{Local, NaiveDate, TimeZone};
+        let helper = local_midnight_utc_seconds();
+        let today_local: NaiveDate = Local::now().date_naive();
+        let expected = match Local.from_local_datetime(
+            &today_local
+                .and_hms_opt(0, 0, 0)
+                .expect("midnight is always representable"),
+        ) {
+            chrono::LocalResult::Single(dt) => dt.with_timezone(&chrono::Utc).timestamp(),
+            chrono::LocalResult::Ambiguous(early, _) => {
+                early.with_timezone(&chrono::Utc).timestamp()
+            }
+            chrono::LocalResult::None => 0,
+        };
+        assert_eq!(helper, expected);
+
+        // Sanity: the helper's value matches the local clock — at any
+        // moment of the day, the local clock should be on or after
+        // local midnight, so `Local::now().timestamp() >= helper`.
+        assert!(Local::now().timestamp() >= helper);
+    }
+
     fn item(id: &str, title: &str, body: &str) -> ParsedItem {
         ParsedItem {
             id: id.to_string(),
@@ -1054,6 +1134,74 @@ mod tests {
         let b = article_id_for("https://example.com/feed", "guid-1");
         assert_eq!(a, b);
         assert_eq!(a.len(), 32);
+    }
+
+    /// v2.6.2 regression: orphan status rows (status row exists, no
+    /// matching article) must NOT count toward the All Unread / Starred
+    /// smart-feed badges. Pre-v2.6.2 the bare `COUNT(*) FROM statuses`
+    /// included them, so "Mark All as Read" left the All Unread badge
+    /// stuck at 1 because the orphan was unmarkable from the visible
+    /// timeline.
+    #[test]
+    fn smart_feed_counts_excludes_orphan_statuses() {
+        let mut conn = in_memory();
+
+        // One real article + status (read=0).
+        let feed_id = "https://example.com/feed";
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![item("guid-1", "Real article", "real body")],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .expect("update_feed");
+
+        // Orphan status: a status row whose article was deleted (mirrors
+        // what happens when a feed is removed but the status outlives
+        // the article via the `articles_ad_lookup` cascade-skip).
+        conn.execute(
+            "INSERT INTO statuses (article_id, read, starred, date_arrived) VALUES (?, 0, 0, ?)",
+            params![
+                "orphan-status-id-with-no-matching-article",
+                Utc::now().timestamp(),
+            ],
+        )
+        .expect("insert orphan status");
+
+        // Sanity: bare statuses count includes the orphan…
+        let bare: i64 = conn
+            .query_row("SELECT COUNT(*) FROM statuses WHERE read = 0", [], |r| {
+                r.get(0)
+            })
+            .expect("bare count");
+        assert_eq!(
+            bare, 2,
+            "raw statuses table has 2 unread rows (real + orphan)"
+        );
+
+        // …but the smart-feed count doesn't.
+        let counts = smart_feed_counts(&mut conn).expect("smart_feed_counts");
+        assert_eq!(
+            counts.all_unread, 1,
+            "all_unread must INNER JOIN articles to exclude orphans"
+        );
+
+        // Also covers `starred_unread`: orphan with starred=1 must
+        // similarly not count.
+        conn.execute(
+            "INSERT INTO statuses (article_id, read, starred, date_arrived) VALUES (?, 0, 1, ?)",
+            params![
+                "orphan-starred-id-with-no-matching-article",
+                Utc::now().timestamp(),
+            ],
+        )
+        .expect("insert orphan starred status");
+        let counts = smart_feed_counts(&mut conn).expect("smart_feed_counts re-run");
+        assert_eq!(
+            counts.starred_unread, 0,
+            "starred_unread must INNER JOIN articles too"
+        );
     }
 
     #[test]

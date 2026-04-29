@@ -65,6 +65,14 @@ fn main() -> glib::ExitCode {
     let account_for_activate = account.clone();
     app.connect_activate(move |app| build_ui(app, account_for_activate.clone()));
 
+    // v2.5.0: wire the system-tray indicator. Starts an SNI service when
+    // the `run-in-background` GSetting is on so the user always has a
+    // visible "viaduct is running" cue + a Quit menu item, regardless
+    // of window-visibility state. Listens for GSetting changes too —
+    // flipping the toggle on / off in Preferences immediately
+    // shows / hides the icon. No-op when the schema isn't installed.
+    viaduct::tray::wire(&app);
+
     // Strip our own `--debug` flag from argv before handing it to GTK —
     // GApplication parses argv itself and bails on unknown options.
     // `init_tracing` already pulled the flag's intent into the global
@@ -150,6 +158,25 @@ fn ensure_schema_dir() {
 }
 
 fn build_ui(app: &adw::Application, account: Arc<Account>) {
+    // Phase 17 D-Bus re-summon: if a window already exists for this
+    // application (run-in-background mode, hidden after close, then
+    // re-activated via the dock icon or `gtk-launch`), present it
+    // instead of building a second one. Without this branch, opening
+    // viaduct while it's hidden silently spawns a second window and
+    // the user ends up with two of them.
+    if let Some(existing) = app
+        .windows()
+        .into_iter()
+        .find_map(|w| w.downcast::<ui::window::ViaductWindow>().ok())
+    {
+        existing.present();
+        // Repopulate from the still-selected sidebar item so the user
+        // lands back on the feed they were reading, plus any articles
+        // that arrived while the window was hidden.
+        existing.reload_current_timeline();
+        return;
+    }
+
     if let Some(settings) = viaduct::preferences::settings() {
         viaduct::preferences::apply_color_scheme(&settings);
         viaduct::preferences::apply_fonts(&settings);

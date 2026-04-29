@@ -70,6 +70,29 @@ impl ImageCache {
         self.inner.lock().await.client.clone()
     }
 
+    /// Drop every in-memory LRU entry across all three kinds. Disk cache is
+    /// untouched — re-loads after this point go disk → texture instead of
+    /// memory → texture, but skip the network round-trip. Used by the
+    /// Phase 17 run-in-background mode: when the window hides we shed the
+    /// cached image bytes so the resident set drops below the budget.
+    /// Fire-and-forget — runs the actual clear on the global runtime.
+    pub fn clear_memory(&self) {
+        let cache = self.clone();
+        crate::spawn_on_runtime(async move {
+            cache.clear_memory_now().await;
+        });
+    }
+
+    /// Same as `clear_memory` but await-able, so callers (notably the
+    /// `mem_check` harness) can observe RSS after the clear completes
+    /// deterministically rather than racing a `sleep`.
+    pub async fn clear_memory_now(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.favicons.clear();
+        inner.images.clear();
+        inner.video_thumbs.clear();
+    }
+
     /// Fetch a favicon by URL. Memory hit → disk hit → network fetch → cache.
     /// Returns `None` on any failure; callers should fall back to `adw::Avatar`.
     pub async fn favicon(&self, url: &str) -> Option<Vec<u8>> {

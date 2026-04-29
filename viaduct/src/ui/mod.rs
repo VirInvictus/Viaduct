@@ -5,14 +5,18 @@
 // UI layer for GTK4/Libadwaita
 pub mod actions;
 pub mod add_feed_dialog;
+pub mod article_pane_view;
 pub mod article_renderer;
+pub mod article_renderer_widget;
 pub mod batch;
 pub mod coalescing_queue;
 pub mod fetch_queue;
 pub mod preferences_dialog;
 pub mod reader_view;
 pub mod sidebar;
+pub mod sidebar_view;
 pub mod timeline;
+pub mod timeline_view;
 pub mod tree;
 pub mod window;
 

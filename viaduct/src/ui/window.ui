@@ -5,35 +5,6 @@ Copyright (c) 2026 Brandon LaRocque
 Licensed under the MIT License. See LICENSE in the project root for details.
 -->
 <interface>
-  <menu id="primary_menu">
-    <section>
-      <item>
-        <attribute name="label" translatable="yes">Add Feed…</attribute>
-        <attribute name="action">win.add-feed</attribute>
-        <attribute name="accel">&lt;Primary&gt;n</attribute>
-      </item>
-    </section>
-    <section>
-      <item>
-        <attribute name="label" translatable="yes">Import OPML…</attribute>
-        <attribute name="action">win.import-opml</attribute>
-      </item>
-      <item>
-        <attribute name="label" translatable="yes">Export OPML…</attribute>
-        <attribute name="action">win.export-opml</attribute>
-      </item>
-    </section>
-    <section>
-      <item>
-        <attribute name="label" translatable="yes">Preferences</attribute>
-        <attribute name="action">win.preferences</attribute>
-      </item>
-      <item>
-        <attribute name="label" translatable="yes">Keyboard Shortcuts</attribute>
-        <attribute name="action">win.shortcuts</attribute>
-      </item>
-    </section>
-  </menu>
   <template class="ViaductWindow" parent="AdwApplicationWindow">
     <property name="title">viaduct</property>
     <property name="default-width">1200</property>
@@ -49,74 +20,7 @@ Licensed under the MIT License. See LICENSE in the project root for details.
           <object class="AdwNavigationPage" id="sidebar_page">
             <property name="title">Feeds</property>
             <property name="child">
-              <object class="AdwToolbarView">
-                <child type="top">
-                  <object class="AdwHeaderBar">
-                    <child type="start">
-                      <object class="GtkButton" id="mark_all_read_btn">
-                        <property name="icon-name">checkbox-checked-symbolic</property>
-                      </object>
-                    </child>
-                    <child type="start">
-                      <object class="GtkButton" id="sync_btn">
-                        <property name="tooltip-text">Sync Now</property>
-                        <property name="action-name">win.refresh</property>
-                        <property name="child">
-                          <object class="GtkStack" id="sync_btn_stack">
-                            <property name="transition-type">crossfade</property>
-                            <property name="transition-duration">120</property>
-                            <child>
-                              <object class="GtkStackPage">
-                                <property name="name">icon</property>
-                                <property name="child">
-                                  <object class="GtkImage">
-                                    <property name="icon-name">view-refresh-symbolic</property>
-                                    <property name="pixel-size">16</property>
-                                  </object>
-                                </property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkStackPage">
-                                <property name="name">spinner</property>
-                                <property name="child">
-                                  <object class="GtkSpinner" id="sync_btn_spinner">
-                                    <property name="width-request">16</property>
-                                    <property name="height-request">16</property>
-                                  </object>
-                                </property>
-                              </object>
-                            </child>
-                          </object>
-                        </property>
-                      </object>
-                    </child>
-                    <child type="end">
-                      <object class="GtkToggleButton" id="search_btn">
-                        <property name="icon-name">system-search-symbolic</property>
-                      </object>
-                    </child>
-                    <child type="end">
-                      <object class="GtkMenuButton" id="menu_btn">
-                        <property name="icon-name">open-menu-symbolic</property>
-                        <property name="menu-model">primary_menu</property>
-                      </object>
-                    </child>
-                  </object>
-                </child>
-                <property name="content">
-                  <object class="GtkScrolledWindow">
-                    <property name="child">
-                      <object class="GtkListView" id="sidebar_list_view"/>
-                    </property>
-                  </object>
-                </property>
-                <child type="bottom">
-                  <object class="GtkActionBar" id="bottom_action_bar">
-                    <property name="revealed">False</property>
-                  </object>
-                </child>
-              </object>
+              <object class="ViaductSidebarView" id="sidebar_view"/>
             </property>
           </object>
         </property>
@@ -132,72 +36,7 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                   <object class="AdwNavigationPage" id="timeline_page">
                     <property name="title">Timeline</property>
                     <property name="child">
-                      <object class="AdwToolbarView">
-                        <child type="top">
-                          <object class="AdwHeaderBar">
-                            <!-- Show sidebar toggle only on narrow screens? -->
-                          </object>
-                        </child>
-                        <child type="top">
-                          <object class="GtkSearchBar" id="search_bar">
-                            <property name="key-capture-widget">timeline_list_view</property>
-                            <property name="child">
-                              <object class="GtkBox">
-                                <property name="orientation">horizontal</property>
-                                <property name="spacing">6</property>
-                                <property name="hexpand">True</property>
-                                <child>
-                                  <object class="GtkSearchEntry" id="search_entry">
-                                    <property name="placeholder-text">Search articles…</property>
-                                    <property name="hexpand">True</property>
-                                  </object>
-                                </child>
-                                <child>
-                                  <object class="GtkToggleButton" id="scope_toggle">
-                                    <property name="label">This feed</property>
-                                    <property name="tooltip-text">Restrict search to the currently-selected feed</property>
-                                  </object>
-                                </child>
-                              </object>
-                            </property>
-                          </object>
-                        </child>
-                        <property name="content">
-                          <object class="GtkStack" id="timeline_stack">
-                            <property name="transition-type">crossfade</property>
-                            <property name="transition-duration">150</property>
-                            <child>
-                              <object class="GtkStackPage">
-                                <property name="name">content</property>
-                                <property name="child">
-                                  <object class="GtkScrolledWindow">
-                                    <property name="hscrollbar-policy">never</property>
-                                    <property name="propagate-natural-width">False</property>
-                                    <property name="hexpand">True</property>
-                                    <property name="child">
-                                      <object class="GtkListView" id="timeline_list_view">
-                                        <property name="hexpand">True</property>
-                                      </object>
-                                    </property>
-                                  </object>
-                                </property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkStackPage">
-                                <property name="name">empty</property>
-                                <property name="child">
-                                  <object class="AdwStatusPage" id="timeline_empty_status">
-                                    <property name="icon-name">document-open-recent-symbolic</property>
-                                    <property name="title">No articles</property>
-                                    <property name="description">Select a feed in the sidebar to view its articles, or hit Refresh to fetch new ones.</property>
-                                  </object>
-                                </property>
-                              </object>
-                            </child>
-                          </object>
-                        </property>
-                      </object>
+                      <object class="ViaductTimelineView" id="timeline_view"/>
                     </property>
                   </object>
                 </property>
@@ -205,79 +44,7 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                   <object class="AdwNavigationPage" id="article_page">
                     <property name="title">Article</property>
                     <property name="child">
-                      <object class="AdwToolbarView">
-                        <child type="top">
-                          <object class="AdwHeaderBar">
-                            <child type="end">
-                              <object class="GtkToggleButton" id="reader_btn">
-                                <property name="icon-name">format-justify-fill-symbolic</property>
-                                <property name="tooltip-text">Reader View</property>
-                              </object>
-                            </child>
-                            <child type="end">
-                              <object class="GtkButton" id="play_video_btn">
-                                <property name="icon-name">media-playback-start-symbolic</property>
-                                <property name="tooltip-text">Play video</property>
-                                <property name="visible">False</property>
-                                <style>
-                                  <class name="suggested-action"/>
-                                </style>
-                              </object>
-                            </child>
-                          </object>
-                        </child>
-                        <property name="content">
-                          <object class="GtkStack" id="article_stack">
-                            <property name="transition-type">crossfade</property>
-                            <property name="transition-duration">150</property>
-                            <child>
-                              <object class="GtkStackPage">
-                                <property name="name">content</property>
-                                <property name="child">
-                                  <object class="GtkOverlay">
-                                    <property name="child">
-                                      <object class="WebKitWebView" id="article_web_view">
-                                        <property name="vexpand">True</property>
-                                        <property name="hexpand">True</property>
-                                      </object>
-                                    </property>
-                                    <child type="overlay">
-                                      <object class="GtkLabel" id="url_overlay">
-                                        <property name="halign">start</property>
-                                        <property name="valign">end</property>
-                                        <property name="margin-start">12</property>
-                                        <property name="margin-end">12</property>
-                                        <property name="margin-top">12</property>
-                                        <property name="margin-bottom">12</property>
-                                        <property name="visible">False</property>
-                                        <property name="ellipsize">middle</property>
-                                        <property name="max-width-chars">80</property>
-                                        <property name="can-target">False</property>
-                                        <style>
-                                          <class name="caption"/>
-                                          <class name="osd"/>
-                                        </style>
-                                      </object>
-                                    </child>
-                                  </object>
-                                </property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="GtkStackPage">
-                                <property name="name">empty</property>
-                                <property name="child">
-                                  <object class="AdwStatusPage" id="article_empty_status">
-                                    <property name="icon-name">view-paged-symbolic</property>
-                                    <property name="title">No article selected</property>
-                                    <property name="description">Pick an article from the timeline to start reading.</property>
-                                  </object>
-                                </property>
-                              </object>
-                            </child>
-                          </object>
-                        </property>
-                      </object>
+                      <object class="ViaductArticlePaneView" id="article_pane"/>
                     </property>
                   </object>
                 </property>

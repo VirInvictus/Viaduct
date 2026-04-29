@@ -32,9 +32,23 @@ pub mod imp {
         /// Unread count exposed as a glib property so the sidebar row factory
         /// can subscribe to `notify::unread-count` and update badges in
         /// place when counts change (status flips, refresh completion).
+        ///
+        /// **v2.0.0-pre5**: parents auto-aggregate from their children.
+        /// `set_child_nodes` connects `notify::unread-count` on each new
+        /// child to recompute self = sum(children); the cascade then
+        /// propagates upward via the parent's own `notify::unread-count`.
+        /// Callers should only set this directly on **leaf** nodes
+        /// (`SidebarItem::Feed` / `SidebarItem::SmartFeed`); folder and
+        /// smart-feed-group totals derive automatically.
         #[property(get, set)]
         pub unread_count: Cell<u32>,
         pub child_nodes: RefCell<Vec<super::TreeNode>>,
+        /// `(child_weak, handler_id)` pairs for the per-child
+        /// `notify::unread-count` subscriptions installed in
+        /// `set_child_nodes`. Re-set on every `set_child_nodes` call so a
+        /// rebuild doesn't leak handlers from the old children.
+        pub child_unread_handlers:
+            RefCell<Vec<(glib::WeakRef<super::TreeNode>, glib::SignalHandlerId)>>,
         pub parent: RefCell<Option<glib::WeakRef<super::TreeNode>>>,
         // The list store exposed to GTK for this node's children
         pub list_store: RefCell<Option<gio::ListStore>>,
@@ -104,7 +118,50 @@ impl TreeNode {
     }
 
     pub fn set_child_nodes(&self, new_nodes: Vec<TreeNode>) {
+        // Disconnect any existing notify::unread-count subscriptions
+        // from the previous child set. Idempotent: weak refs that fail
+        // to upgrade (children already finalized) are silently skipped.
+        {
+            let mut handlers = self.imp().child_unread_handlers.borrow_mut();
+            for (weak, id) in handlers.drain(..) {
+                if let Some(child) = weak.upgrade() {
+                    child.disconnect(id);
+                }
+            }
+            // Wire fresh subscriptions for the new child set.
+            let weak_self = self.downgrade();
+            for child in &new_nodes {
+                let cb_self = weak_self.clone();
+                let id = child.connect_notify_local(Some("unread-count"), move |_, _| {
+                    if let Some(this) = cb_self.upgrade() {
+                        this.recompute_aggregate_unread();
+                    }
+                });
+                handlers.push((child.downgrade(), id));
+            }
+        }
         *self.imp().child_nodes.borrow_mut() = new_nodes;
+        // Compute the initial total so the parent's badge reflects the
+        // current children even before any of them changes.
+        self.recompute_aggregate_unread();
+    }
+
+    /// Recompute `unread_count` as the sum of children's `unread_count`.
+    /// Called from `set_child_nodes` (initial sum) and from each child's
+    /// `notify::unread-count` handler (incremental update). The cascade
+    /// to grandparents happens naturally through `set_unread_count`'s own
+    /// `notify::unread-count` emission.
+    fn recompute_aggregate_unread(&self) {
+        let total: u32 = self
+            .imp()
+            .child_nodes
+            .borrow()
+            .iter()
+            .map(|c| c.unread_count())
+            .sum();
+        if self.unread_count() != total {
+            self.set_unread_count(total);
+        }
     }
 
     pub fn number_of_child_nodes(&self) -> usize {

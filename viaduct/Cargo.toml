@@ -29,3 +29,4 @@ lru.workspace = true
 readability.workspace = true
 oo7.workspace = true
 ashpd.workspace = true
+ksni = "0.3"

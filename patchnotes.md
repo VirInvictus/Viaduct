@@ -1,5 +1,527 @@
 # viaduct — Patch Notes
 
+## v2.6.2 — Mark All Read leaves badge stuck at 1 (orphan status rows)
+
+User report: "After hitting mark all as read, the All Unread stays with a 1 in the badge." Investigation found the same count-vs-fetch-disagreement bug pattern v2.6.1 fixed for Today, but in a different location.
+
+### Root cause
+
+Three queries converge on "how many unread articles":
+
+| Query | Source table | Orphan-immune? |
+|---|---|---|
+| `fetch_unread` (the click result) | `articles INNER JOIN statuses` | ✓ |
+| `unread_counts_by_feed` (per-feed badge) | `articles LEFT JOIN statuses` | ✓ |
+| `smart_feed_counts.today_unread` | `articles INNER JOIN statuses` | ✓ |
+| `smart_feed_counts.all_unread` (the All Unread badge) | bare `statuses` | ✗ |
+| `smart_feed_counts.starred_unread` | bare `statuses` | ✗ |
+
+The two outliers ran straight against the `statuses` table without joining articles, so **orphan status rows** counted toward the badge. Orphans are an intentional viaduct (and NetNewsWire) behaviour: when an article is deleted by retention or by a feed-removal sweep, its status row is preserved so a re-fetch later restores the user's old read/starred state. The `articles_ad_lookup` cascade trigger explicitly skips status-row cleanup for that reason. So orphans are normal; they just shouldn't pollute the badge.
+
+The user-visible symptom: an unread orphan exists → the All Unread badge says 1 → user clicks Mark All as Read → only the visible articles get marked → orphan stays at read=0 → badge stays at 1, no clickable article to remedy. Stuck state.
+
+### Fix
+
+`smart_feed_counts.all_unread` and `smart_feed_counts.starred_unread` now `INNER JOIN articles ON s.article_id = a.article_id` like every other count + fetch query in the system. New regression test `smart_feed_counts_excludes_orphan_statuses` plants a real article + a real status + an orphan status (and a starred orphan), confirms the bare `COUNT(*) FROM statuses` returns 2 and the smart-feed counts return 1 / 0. Drift back to the broken behaviour will fail this test loudly.
+
+### Test status
+
+23 viaduct + **73** viaduct-core (was 72 — added the regression test) + 1 integration = 97 tests pass. fmt + clippy clean.
+
+## v2.6.1 — Today smart feed timezone fix + diagnostic logging
+
+User report: "the today smartfeed doesn't actually show today's entries." Investigation surfaced one provable bug — the badge count and the click-result spanned different windows on any non-UTC system.
+
+### Root cause
+
+`fetch_today` (the click-result query) and `smart_feed_counts.today_unread` (the badge count) both computed `today_start` independently:
+
+- `fetch_today` — `Local::now().date_naive().and_hms_opt(0, 0, 0).and_local_timezone(Local).to_utc().timestamp()` → unix seconds for **local** midnight, expressed as UTC. Correct.
+- `smart_feed_counts` — `Local::now().date_naive().and_hms_opt(0, 0, 0).and_utc().timestamp()` → unix seconds for **UTC** midnight on the local calendar date. **Wrong** — interprets the naive datetime as already-in-UTC instead of converting from local.
+
+On EDT (UTC-4) the buggy count's window starts 4 hours earlier than the click-result's window. Exactly the local-offset's worth of articles arriving in those hours appeared in the badge but vanished on click — and articles arriving in the equivalent window the next morning showed up in the click result but had already been counted yesterday. Mostly invisible at low article volume; visible as "the count doesn't match what shows" at higher volume.
+
+### Fix
+
+Both call sites now go through one helper: `local_midnight_utc_seconds()`. The helper handles DST edge cases (gap → 0 fallback; ambiguous → pick earlier instance — neither matters in practice since DST transitions happen at 02:00 local, never midnight, but the guards mean a future regulator change can't brick the smart feed). New unit test `local_midnight_helper_matches_explicit_local_midnight` locks the semantic against future drift.
+
+### Diagnostic logging
+
+`fetch_today` now emits a `tracing::debug` line on every invocation showing the resolved `today_start` (as both unix seconds and an RFC3339 local timestamp) plus the result count. Run with `RUST_LOG=viaduct=debug` to surface. If the smart feed still shows the wrong articles after v2.6.1 the log line will identify whether the boundary or the article data is wrong.
+
+### Test status
+
+23 viaduct + **72** viaduct-core (was 71 — added the new helper-semantic test) + 1 integration = 96 tests pass. fmt + clippy clean.
+
+### If this doesn't fix what you're seeing
+
+The Today smart feed shows articles where **`status.date_arrived >= local_midnight_today`** OR **`article.date_published >= local_midnight_today`**. Cases that intentionally don't show:
+
+- An article published yesterday that you haven't read yet — it's in **All Unread**, not Today. "Today" filters by date, not by read state.
+- Stale articles re-fetched today (the parser flags articles older than 6 months as already-read on insert; their `date_arrived` is still set to `now`, so they DO appear in Today even if pre-marked-read).
+
+If you're seeing zero results when you expect entries, run with `RUST_LOG=viaduct=debug` and check the `fetch_today` log line — the `today_start_local` field shows the boundary the query is using.
+
+## v2.6.0 — Drag-and-drop sidebar reorder
+
+The "Move to Folder…" right-click action shipped in v2.1.0 covered the functional case (relocating a feed between folders / standalone), but a real reader wants to grab a feed and toss it into a folder. v2.6.0 wires that up.
+
+### How it works
+
+Two GTK4 controllers attached to every sidebar row in `setup_sidebar_list_view`'s `connect_setup`:
+
+- **`gtk::DragSource`** — `connect_prepare` reads the bound `SidebarItem` via the existing `viaduct-sidebar-item` `set_data` attached during `connect_bind` (same path the v1.7.1 right-click gesture handler uses to recover the clicked item). For `Feed` items, returns a `gdk::ContentProvider::for_value(&feed.url.to_value())`. For non-Feed rows (folders, smart feeds, the smart-feed group), returns `None` to suppress the drag — only feeds drag.
+- **`gtk::DropTarget`** — accepts `String::static_type()` content with `DragAction::MOVE`. `connect_drop` reads the bound `SidebarItem`; only `Folder` rows accept the drop. On drop, fires `Account::move_feed_to_folder(url, Some(folder.name))` on the tokio runtime, awaits the result via a `tokio::sync::oneshot`, then activates `win.reload-sidebar` from the GTK thread to repopulate the tree.
+- **Coexistence with right-click "Move to Folder…"** — the dialog path stays. It's still the only way to move a feed back to **standalone** (no top-level drop target — there's no single root row to drop onto, and adding a margin-area drop zone would overload the listview's hit-testing).
+
+### Why use a `oneshot` channel here
+
+GTK widgets are `!Send`. The drop callback captures the dropped-on widget so it can `activate_action` on it after the move succeeds. But `Account::move_feed_to_folder` is an `async fn` we want to spawn on tokio (which requires `Send` futures). Splitting the work — DB op on tokio, action activation on the local glib executor with the widget reference held there — and bridging via `tokio::sync::oneshot` is the standard pattern.
+
+### About `viaduct-sidebar-item`'s `set_data`
+
+The `unsafe` block reading the bound item is the same pattern the v1.7.1 right-click gesture handler uses; the data lives until the next `connect_bind` overwrites it, which is fine for the synchronous duration of `prepare` / `drop`.
+
+### What this leaves open
+
+- **Drop on the root area for standalone** — would need a top-level drop target with hit-testing. Right-click "Move to Folder… → (No folder)" covers the same outcome.
+- **Reorder feeds within a folder** — NetNewsWire allows this; we don't yet. OPML doesn't preserve order across save/reload semantically (the parser preserves `<outline>` order, but mutations re-emit in iteration order). Would need adding explicit `index` tracking in the OPML representation. Deferred until anyone asks.
+
+### Test status
+
+23 viaduct + 71 viaduct-core + 1 integration = 95 tests pass; fmt clean; clippy `--workspace --all-targets -- -D warnings` clean. Smoke launch confirms the binary runs at v2.6.0. Drag-and-drop dispatch is interactive QA — visible behavior requires a feed and a folder side by side.
+
+## v2.5.0 — System tray indicator for run-in-background
+
+The Phase 17 background daemon (v1.10.0) explicitly deferred a tray indicator with the rationale "wait for explicit user demand." That demand arrived: closing the window with run-in-background on used to make the app vanish invisibly — no way to tell it was still alive, no way to kill it short of `pkill viaduct`. v2.5.0 fixes that.
+
+### What ships
+
+A new `ksni`-backed StatusNotifierItem that lives whenever `run-in-background` is on:
+
+- **Icon** — `org.virinvictus.Viaduct` resolved against the system icon theme. Resolves correctly on Flatpak / Meson-installed builds; dev builds fall back to the SNI host's default placeholder.
+- **Left-click** — re-summons the existing window via `Application::activate()` (same path the dock icon uses; goes through `main.rs build_ui`'s present-existing-window branch from Phase 17 D-Bus re-summon).
+- **Right-click menu** — "Show viaduct" + "Quit viaduct". Quit goes through `gio::Application::quit()` which bypasses `connect_close_request`'s hide-instead-of-quit branch — exactly the kill-switch the user asked for.
+
+### Lifecycle
+
+Tray service starts/stops based on the `run-in-background` GSetting:
+- App launch with the GSetting on → tray spawned in `viaduct::tray::wire(app)` from `main.rs`
+- User flips the toggle on in Preferences → `connect_changed` listener spawns the service
+- User flips off → `handle.shutdown()` clears the icon
+- App exit → `Quit` action calls `stop_service()` first to clean up the SNI registration, then `app.quit()`
+
+The tray runs whenever the feature is enabled, regardless of window-visibility state — that's the simpler mental model and matches "I have viaduct configured to run in background; here's where to find it." When the window IS visible, the tray icon is harmless duplication.
+
+### About the "K" in ksni
+
+The crate name is historical (KDE wrote the StatusNotifierItem spec). SNI is the de-facto cross-desktop tray protocol today — natively hosted by KDE Plasma, XFCE 4.14+, Cinnamon, MATE, Pantheon, Budgie. On GNOME the icon shows up via the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/) (most-installed GNOME extension; preinstalled on Fedora's GNOME-with-extensions sessions and on Ubuntu). The marginal dependency cost is small — `zbus` is already in our transitive tree from Phase 17 (`ashpd` → `zbus` for the Background portal); ksni reuses it. New crates added: ksni 0.3.4 + pastey 0.2.2 (its macro helper). No new C dependencies.
+
+### Communication
+
+Tray menu callbacks fire on `ksni`'s tokio worker thread; deliver `TrayAction` enum variants over a `tokio::sync::mpsc::unbounded_channel` to a `glib::spawn_future_local` task on the GTK main thread. `app.activate()` / `app.quit()` are the actual GTK calls. Standard cross-thread bridge.
+
+### Test status
+
+23 viaduct + 71 viaduct-core + 1 integration = 95 tests pass; fmt clean; clippy `--workspace --all-targets -- -D warnings` clean. Smoke launch confirms the binary runs at v2.5.0 — at-exit memory peak: 282 MB / 500 MB budget. SNI dispatch + tray-icon visibility are interactive QA on a desktop that hosts a tray.
+
+### What's still open
+
+- **Drag-and-drop sidebar reorder** — coming in v2.6.0.
+
+## v2.4.0 — Per-feed notifications
+
+The last NetNewsWire-parity gap I called out after v2.0 ships. The v0.8.0 patchnotes explicitly noted that NNW's per-feed `newArticleNotificationsEnabled` toggle was deferred because it needed a feed-inspector pane viaduct didn't have. v2.4.0 builds the inspector and wires the toggle through.
+
+### What ships
+
+- **Feed Settings dialog** — new entry on the sidebar feed right-click menu. Opens an `AdwAlertDialog` with two `AdwSwitchRow`s: **New article notifications** (the v2.4.0 feature) and **Always use Reader View** (existing `reader_view_always_enabled` field, exposed in a UI for the first time). Pre-loads the current values from `FeedSettings`; on save, `fetch_feed_settings → mutate → upsert_feed_settings` round-trips through the DB worker.
+- **Per-feed notification dispatch** — `RefreshTally` switched from a single `new_articles: usize` to `per_feed_new: HashMap<feed_id, count>`. The drain task in `run_refresh_with_tally` groups `ArticleChanges.new_articles` by `Article.feed_id`. `dispatch_refresh_notification` now walks the map: for each feed with new articles, fetches its `FeedSettings`, and fires a `gio::Notification` titled with the feed's display name **only when** the global `notifications-on-refresh` GSetting **and** the per-feed `new_article_notifications_enabled` flag are both on.
+- **Notification coalescence** — each per-feed notification uses an `id` of `viaduct.refresh.<feed_id>` so the desktop notification daemon (`xdg-desktop-portal-gnome` etc.) coalesces repeated refreshes of the same feed instead of stacking N notifications when the user mashes Ctrl+R.
+- **Toast preserves the global summary** — the after-refresh `AdwToast` still says "Refreshed 50 feeds — 8 new articles" using the new `RefreshTally::total_new_articles()` accessor. Only the desktop-notification path is per-feed.
+
+### Schema migration
+
+`feed_settings` table picks up `new_article_notifications_enabled INTEGER NOT NULL DEFAULT 0`. Default is `0` (off) to match NNW — users opt in explicitly via the dialog. The migration is an idempotent `ALTER TABLE … ADD COLUMN … DEFAULT 0` so existing databases pick up the column on next startup; freshly-created DBs get it from the `CREATE TABLE` statement directly.
+
+### What this completes
+
+The audit I gave after v2.0 listed five user-visible NetNewsWire-parity gaps:
+
+1. ✅ Sidebar editing (rename / new folder / move) — **v2.1.0**
+2. ✅ Print article — **v2.2.0**
+3. ✅ Article appearance popover (font scale / line height) — **v2.3.0**
+4. ✅ Per-feed notifications — **v2.4.0**
+5. **Drag-and-drop sidebar reorder** — deferred indefinitely (right-click + dropdown is sufficient for the common case)
+
+Plus multi-window and system tray, both flagged as nice-to-haves with no concrete demand. All five "users will notice" gaps are now closed.
+
+### Test status
+
+23 viaduct + 71 viaduct-core + 1 integration = 95 tests pass. fmt clean, clippy `--workspace --all-targets -- -D warnings` clean. Smoke launch confirms the binary runs at v2.4.0 and the schema migration runs cleanly on the existing DB. Per-feed notification dispatch is interactive QA — visible behavior requires a feed actually delivering new articles.
+
+## v2.3.0 — Article Appearance popover
+
+Closes the "Article Settings Popover" item that's been called out as a Future UX addition in `roadmap.md` since the original v1.0 plan. NetNewsWire has live text-size adjustment in the Mac UI; viaduct now has the same plus a line-spacing slider, both attached to a small `font-x-generic-symbolic` button in the article-pane toolbar.
+
+### What ships
+
+- New article-pane header-bar button (between play-video and reader-view). Clicking it pops a `gtk::Popover` containing an `AdwPreferencesGroup` with two `AdwSpinRow`s: **Text Size** (75 – 200 % of theme default, step 5; default 100 = no scaling) and **Line Spacing** (centi-units, 100 – 250; default 150 = `line-height: 1.5`, matching most NNW themes' native value). A "Reset to Defaults" `AdwActionRow` puts both back.
+- Two new GSettings keys under `org.virinvictus.Viaduct`: `article-font-scale` (i, 75–200, default 100) and `article-line-height` (i, 100–250, default 150). The spin rows bind bidirectionally via `gio::Settings::bind` so external flips (dconf-editor, future Preferences page) sync the popover automatically.
+- CSS plumbing via the existing `:root { … }` injection in `article_renderer::render_themed`. Two new custom properties — `--article-font-scale` and `--article-line-height` — are appended to the same `:root` block that already carries `--accent-color` (v2.0.0-pre6). The `VIADUCT_PANE_OVERRIDE_CSS` cascade applies them via `body { font-size: calc(1em * var(--article-font-scale, 1)); line-height: var(--article-line-height, 1.5); }` so theme rules expressed in `em`/`rem` scale proportionally.
+- Live re-render: `ArticlePaneView::bootstrap` now subscribes to `notify::article-font-scale` and `notify::article-line-height`. Slider drags fire a `refresh_render()` so the new values take effect without re-selecting the article.
+
+### Trade-off worth noting
+
+Because we don't (yet) parse each theme's native line-height to multiply against, default 150 = `line-height: 1.5` overrides whatever the theme set even when the slider is at "100 %" (the default). For most NNW themes that's already what they do; the visible effect is small. A user who dislikes 1.5 can drop the slider to 110 (= 1.1) or wherever — the schema range is `[100, 250]`. The Reset button puts it back to 150.
+
+### Test status
+
+23 viaduct + 71 viaduct-core + 1 integration = 95 tests pass. fmt clean, clippy `--workspace --all-targets -- -D warnings` clean. Smoke launch confirms the binary runs at v2.3.0.
+
+### What's still open
+
+- **Per-feed notification toggle** — the last NetNewsWire-parity gap. Touches `feed_settings` schema (ALTER TABLE), the refresh tally, and the dispatch path. Planned for v2.4.0.
+
+## v2.2.0 — Print Article (Ctrl+P)
+
+Closes the second of the post-v2.0 NetNewsWire-parity gaps. The article currently rendered in the WebKit pane can now be sent to a printer (or exported as PDF, depending on the GTK print backend's offered destinations) via `Ctrl+P` or the primary menu's "Print Article…" entry.
+
+### How it's wired
+
+- `ArticleRenderer::print(parent: Option<&gtk::Window>)` wraps `webkit6::PrintOperation::run_dialog(parent)`. The `PrintOperation` is constructed against the renderer's owned `WebKitWebView`, so the printed output is exactly what the pane currently displays — theme + macros + locked-down CSP intact.
+- `ArticlePaneView::print` delegates to the renderer.
+- `ViaductWindow::act_print_article` upcasts `self` to `gtk::Window` and calls into the article pane.
+- New `win.print-article` action with a `Ctrl+P` accelerator. New "Print Article…" entry in the primary menu (between Export OPML and Preferences). When no article is selected, the dialog presents but prints an empty about-blank page — minor cosmetic limitation we can gate later if it bites.
+
+### What's still on the gap list
+
+- **Per-feed notification toggle** — touches the schema (`feed_settings` ALTER TABLE), the refresh tally, and the dispatch path. Planned for v2.3.0 or v2.4.0.
+- **Article appearance popover** (font scale + line height) — needs new GSettings keys, a popover UI in the article-pane header bar, and CSS-variable injection through the renderer. Planned for v2.3.0.
+
+### Test status
+
+23 viaduct + 71 viaduct-core + 1 integration = 95 tests pass. fmt clean, clippy `--workspace --all-targets -- -D warnings` clean. Smoke launch confirms the binary builds and reports `version="2.2.0"`. Print-dialog round-trip is interactive QA — the dialog itself is system-managed.
+
+## v2.1.0 — Sidebar editing: Rename, New Folder, Move to Folder
+
+First of the gap-filling polish releases following the v2.0 architectural refactor. Closes the most user-visible NetNewsWire-parity gap: the inability to edit the sidebar from inside the app. Pre-v2.1.0 you had to hand-edit OPML to rename a feed, create a folder, or move a feed between folders.
+
+### What ships
+
+Three new actions wired through the existing right-click + primary-menu plumbing:
+
+- **Rename Feed…** (right-click → context menu): `AdwAlertDialog` with a `GtkEntry` pre-filled with the current display name (selected so a single keystroke overwrites). On save, sets `edited_name` on the feed via the new `Account::rename_feed`. Empty input clears `edited_name` and reverts to the parsed-feed-name → URL-host fallback chain. Bound to the existing `display_name_for_feed` resolver so the sidebar updates immediately.
+- **Move to Folder…** (right-click → context menu): `AdwAlertDialog` with a `GtkDropDown` listing existing folders plus a leading "(No folder)" entry. The dropdown's initial selection mirrors the feed's current location (resolved by walking the controller tree). On save, calls `Account::move_feed_to_folder`, which sweeps the feed out of its current home and reinserts it at the destination — creating the destination folder if needed.
+- **New Folder…** (primary menu, between Add Feed and Import OPML): `AdwAlertDialog` with a `GtkEntry`. On create, appends an empty folder via `Account::create_folder`. Empty input is rejected; a folder with the same name is rejected with a toast.
+
+### viaduct-core API additions
+
+Three new helpers on `Account`, each following the existing `add_feed` / `remove_feed` `load_opml → mutate → save_opml` pattern:
+
+- `rename_feed(feed_url: &str, new_name: String) -> Result<bool>`
+- `create_folder(name: String) -> Result<bool>`
+- `move_feed_to_folder(feed_url: &str, target_folder: Option<String>) -> Result<bool>`
+
+Each returns `true` when a real change was made. `move_feed_to_folder` short-circuits when source and destination are the same (re-inserts without re-saving). All three save the OPML on success — the existing 500 ms debounced writer + `reload_sidebar_after_opml_change` covers the GTK-side refresh.
+
+### What's still on the gap list
+
+- **Per-feed notification toggle** — needs a Feed Settings dialog. Planned for v2.2.0.
+- **Article appearance popover** (font scale, line height) — planned for v2.3.0.
+- **Print article** — also v2.3.0.
+- **Drag-and-drop sidebar reorder** — would supersede "Move to Folder…"; deferred indefinitely (right-click + dropdown is sufficient for the common case).
+
+### Test status
+
+23 viaduct + 71 viaduct-core + 1 integration = 95 tests pass. fmt clean, clippy `--workspace --all-targets -- -D warnings` clean. Smoke launch confirms the new menu entries appear, the dialogs present, and OPML mutations round-trip through the sidebar refresh.
+
+## v2.0.0 — Phase 18 ships: god-object decomposition + architectural refinement
+
+The v2.0 release. No new code over -pre6 — this is the version banner that collects the six pre-releases into a single tag. The arc went:
+
+- **-pre1 — `ArticlePaneView` extraction.** First pane lifted out of `ViaductWindow`. Locked-down WebKit + reader/play-video buttons + macro substitution + in-pane video dialog now live in a real custom widget. `window.rs`: 2900 → 2358.
+- **-pre2 — `TimelineView` extraction.** Timeline list view + `gio::ListStore` + selection + search bar + scope toggle + FTS5 debounce out of the window. `window.rs`: 2358 → 2306.
+- **-pre3 — `SidebarView` extraction.** The biggest cross-cutting concern: sidebar tree (`SidebarTreeControllerDelegate` / `TreeController` / `SidebarDataSource`), `feed_names` resolver, header bar buttons (`mark_all_read_btn` / `sync_btn` / `search_btn` / `menu_btn` + `primary_menu`), right-click feed/folder popovers, the unread-count tree walk. `window.rs`: 2306 → 2043 (cumulative −857 / −30 % vs the pre-Phase-18 baseline).
+- **-pre4 — `ArticleRenderer` GObject promotion.** The encapsulated WebView wrapper. Per-renderer `WebContext` so `viaduct-img://` + `viaduct-font://` scheme handlers no longer leak onto the global default context (and into the video-dialog WebView).
+- **-pre5 — Derived unread-count aggregation.** `TreeNode::set_child_nodes` now wires `notify::unread-count` subscriptions on each child; folder + smart-feed-group totals auto-derive from leaves. `SidebarView::refresh_unread_counts` shrank from ~80 to ~50 lines.
+- **-pre6 — WebKit ↔ GTK CSS polish.** Thinner `currentColor`-driven scrollbars, 150 ms article-to-article fade-in, `--accent-color` CSS custom property propagation that picks up the libadwaita system accent for the Adwaita theme.
+
+### What ships in v2.0.0
+
+The whole stack post-Phase-18:
+
+- **Three custom widget panes** (`SidebarView` / `TimelineView` / `ArticlePaneView`) plus the `ArticleRenderer` GObject inside the article pane. NetNewsWire's `MainWindowController` / `SidebarViewController` / `TimelineViewController` / `DetailViewController` structure ported to GTK4 + libadwaita 1.7.
+- **`window.rs` slimmed to 2043 lines** (from a 2900-line baseline) and now squarely the cross-pane plumbing role: action group, refresh orchestration, keyboard shortcut installation, `connect_close_request`, the timeline-row right-click popover (the only popover whose actions are window-level), and the cross-pane signal handlers (sidebar-selection → timeline fetch, timeline-selection → article render, status mutations → unread-count refresh).
+- **Per-renderer `WebContext`** scoping `viaduct-img://` + `viaduct-font://` to the article pane, leaving the video-dialog WebView's default context clean.
+- **Property-driven unread-count aggregation** in `TreeNode` so adding nested folders later (currently disallowed by NNW normalization) just works.
+- **Visual polish**: libadwaita-feel scrollbar inside the WebKit pane, smooth article-to-article fade-in, system accent → `--accent-color` for theme stylesheets that opt in via `var(--accent-color)`.
+
+### What's still open for the 1.0 milestone
+
+(Phase 17 + Phase 18 cleanup is in-tree. The v1.0 release is a **separate** milestone that ships the local-account-only feature set under the Flathub badge.)
+
+- Tag `1.0.0` and submit to Flathub — blocked on the user (Flathub onboarding credentials, not code).
+- The four polish concerns the v2.0 series picked up are also "free" for any v1.x Flathub release — no breaking changes; the GSettings schema, OPML format, DBs are all forward-compatible.
+
+### Test status
+
+23 viaduct + 71 viaduct-core + 1 integration = 95 tests pass. fmt clean, clippy `--workspace --all-targets -- -D warnings` clean. Smoke launch through every release confirmed real OPML loads + sidebar→timeline→article render at single-digit milliseconds.
+
+## v2.0.0-pre6 — Phase 18: WebKit ↔ GTK CSS bridge polish
+
+The last polish release before v2.0.0 ships. Three small visual / typography refinements that build on the v1.2.0 accent system + v1.1.0 page-wrapper architecture, all delivered through the existing `VIADUCT_PANE_OVERRIDE_CSS` cascade so the byte-perfect NNW theme stylesheets stay untouched.
+
+### Scrollbar parity
+
+The article pane's WebKit scrollbar used to be a hard-coded 8 px gray thumb that didn't match libadwaita's overlay-scrollbar feel. New treatment:
+
+- **Thinner**: 6 px idle, 10 px on hover (smooth `transition: width 120ms ease`). The hover expansion keeps the target grabbable without making it visually heavy at rest.
+- **`currentColor`-driven**: thumb uses `color-mix(in srgb, currentColor 30%, transparent)` (55 % on hover), so it adopts the page's text color automatically — light themes get a soft gray, dark themes get a soft off-white, theme-tinted themes (Sepia / Biblioteca) get the matching tint. No GTK→WebKit color-querying needed.
+- **Pill-shaped** (`border-radius: 999px`) to match the v1.2.0 sidebar unread badges' visual language.
+
+### Article fade-in transition
+
+Within-content article-to-article swaps used to be instant cuts. Now the page wrapper carries a `@keyframes viaduct-fade-in` 150 ms ease-out animation on `body`, replayed on every `WebKitWebView::load_html`. Matches the existing 150 ms `article_stack` content/empty crossfade duration so the rhythm stays consistent across selection states.
+
+### System accent → WebKit pane
+
+Themes already had a static `accent_hex: Option<&str>` for the GTK chrome accent (driven by `apply_app_accent` in v1.2.0). On the article body itself, that accent was either baked into the theme stylesheet (Sepia's cinnamon, Biblioteca's deep blue) or absent (Adwaita).
+
+This release introduces a `:root { --accent-color: <hex>; }` CSS custom property at the top of every render's style cascade:
+
+- **Themes with hard-coded accent**: keep theirs (Sepia / Biblioteca / Tiqoe Dark / etc.). `--accent-color` matches the chrome.
+- **Themes with `accent_hex: None`** (Adwaita): pick up the libadwaita system accent via `adw::StyleManager::default().accent_color().to_standalone_rgba(is_dark)` (GNOME 47+ system-accent integration). Theme stylesheets can opt in by referencing `var(--accent-color)` for link colors, blockquote borders, etc. — the infrastructure is now there even though the bundled NNW theme CSSes don't yet consume it.
+
+### Test status
+
+23 viaduct + 71 viaduct-core + 1 integration = 95 tests pass; fmt clean; clippy `--workspace --all-targets -- -D warnings` clean. Smoke launch confirms the app starts and renders articles through the new style cascade.
+
+### What's next
+
+- **v2.0.0** — final tag.
+
+## v2.0.0-pre5 — Phase 18: derived unread-count aggregation
+
+`refresh_unread_counts` used to walk every top-level sidebar node, set leaves *and* sum folder/group totals manually, and call `set_unread_count` on every node along the way. This release shifts the aggregation into `TreeNode` itself so the parents derive from their children automatically — the imperative walk only needs to touch leaves.
+
+### What changed
+
+- **`TreeNode::set_child_nodes`** now disconnects any previous child `notify::unread-count` subscriptions, connects new ones for each incoming child, and computes the initial sum. Each subscription's handler calls `recompute_aggregate_unread` on the parent, which sums the children's counts and (if changed) calls `set_unread_count` on self. That `set_unread_count` itself fires `notify::unread-count`, so the cascade naturally propagates upward through the tree — grandparent → great-grandparent works for free.
+- **`TreeNode` imp** gains `child_unread_handlers: RefCell<Vec<(WeakRef<TreeNode>, SignalHandlerId)>>` so the handlers get cleaned up properly across `set_child_nodes` calls (relevant when the controller rebuilds after OPML import).
+- **`SidebarView::refresh_unread_counts`** loses the `folder_total` / `group_total` accumulators and the `top.set_unread_count(total)` calls. The new flow: walk top-level; for `Feed` standalones, set the count; for `Folder` / `SmartFeedGroup` containers, walk one level down and set the leaf counts; everything aggregates up. Method body shrank from ~80 lines to ~50.
+
+### Why this is good
+
+The pre-pre5 walk had a duplication-of-truth problem: the sum logic in `refresh_unread_counts` had to stay in lockstep with the tree shape. Adding nested folders (currently disallowed by NNW's normalization, but possible if we ever extended it) would have meant rewriting the walk; with auto-aggregation, depth-N trees just work.
+
+### Test status
+
+23 viaduct + 71 viaduct-core + 1 integration = 95 tests pass; fmt clean; clippy `--workspace --all-targets -- -D warnings` clean. Smoke launch confirms sidebar unread badges still update when reading articles (notify::unread-count fires on the leaf → folder badge re-renders).
+
+### What's next
+
+- **v2.0.0-pre6** — WebKit ↔ GTK CSS bridge polish (scrollbar parity, article fade-in, GNOME 47+ system accent → WebKit pane)
+- **v2.0.0** — final tag
+
+## v2.0.0-pre4 — Phase 18: ArticleRenderer GObject promotion
+
+The first of the polish releases that build on the three-pane decomposition. `ArticlePaneView` used to reach directly into a `WebKitWebView` template_child and call into a sprawling `article_renderer.rs` module of free functions. This release wraps that whole concern in a real GObject — `ViaductArticleRenderer` — so the article pane stops touching WebKit internals and the URI-scheme handlers stop leaking onto the global `WebContext::default()`.
+
+### What moved
+
+A new `ViaductArticleRenderer` custom widget (in `viaduct/src/ui/article_renderer_widget.rs` + `article_renderer_widget.ui`) now owns:
+
+- The `WebKitWebView`. Constructed in `bootstrap()` against a per-renderer `WebContext` (not the global default — that's the architectural improvement) and parented as the main child of an internal `GtkOverlay`.
+- The `viaduct-img://` + `viaduct-font://` URI scheme handlers. Registered against the renderer's *own* context, so they no longer leak into the video-playback dialog's WebView (which uses the default context for YouTube / Vimeo embeds and doesn't need our schemes anyway).
+- The hover URL `GtkLabel` (overlay child) and its `mouse-target-changed` wiring.
+- The locked-down `WebKitSettings` profile (JS/WebGL/WebRTC/storage/dev-tools all OFF) and the `decide-policy` link interceptor that routes link clicks to `xdg-open`.
+- Public surface: `bootstrap(image_cache)`, `render_themed(theme, substitutions, base_uri)`, `idle()`, `web_view()` (read-only escape hatch for future preview / printing paths).
+
+`ArticlePaneView` keeps the orchestration layer: per-article `ArticleDisplayState`, the reader-view button + extraction kick-off, the play-video button + video-source detection, the in-pane embed dialog, and the macro substitution + theme resolution that produces the inputs `render_themed` consumes. The article pane now talks to one method (`article_renderer.render_themed(...)`) instead of reaching into a WebView template_child.
+
+### What stayed in `article_renderer.rs`
+
+The pure helpers — they're stateless and consumed by *both* the GObject and the (now-tiny) call sites in `ArticlePaneView`:
+
+- `Theme` struct + `THEMES` const + `theme_by_id` / `select_for_dark_mode`
+- `ArticleSubstitutions` struct + `escape_html`
+- `render_themed` / `render` / `render_with_macros` (the macro engine)
+- `sanitize_and_rewrite_image_srcs` / `encode_image_url` / `decode_image_url`
+- `apply_locked_down_settings` / `install_link_interceptor` / `install_hover_url_overlay` (now called only from `ArticleRenderer::bootstrap`)
+- `install_image_uri_scheme` / `install_font_uri_scheme` — refactored to take a `&webkit6::WebContext` parameter (was hard-wired to `WebContext::default()`); ArticleRenderer passes its own context
+- `apply_app_accent` (the GTK chrome accent CSS provider — orthogonal to the renderer)
+- `BUNDLED_FONTS` registry + `font_face_css`
+
+### Numbers
+
+`ArticlePaneView` shrank from 559 lines (pre3) to 540 (−19 — modest because the WebKit setup it offloaded was already tightly factored). The new `article_renderer_widget.rs` is 155 lines + a 29-line `.ui` template. `article_renderer.rs` stays at ~1140 lines (the helpers; small signature change on the two install_*_uri_scheme fns to accept a `&WebContext`). Tests: 23 viaduct + 71 viaduct-core + 1 integration = 95, no count change.
+
+### Test status
+
+fmt clean, clippy `--workspace --all-targets -- -D warnings` clean, all 95 tests pass. Smoke launch confirms real OPML loads, sidebar click → timeline populate → article render through the new renderer at 2 ms total. `viaduct-img://` resources still resolve (favicons + inline article images still display), `viaduct-font://` still serves Atkinson Hyperlegible for the Hyperlegible theme.
+
+### What's next
+
+- **v2.0.0-pre5** — `glib::derived_properties` expansion (kill `refresh_unread_counts` walks via `gtk::ClosureExpression` on `TreeNode.unread_count`)
+- **v2.0.0-pre6** — WebKit ↔ GTK CSS bridge polish (scrollbar parity, article transitions, GNOME 47+ system accent → WebKit pane)
+- **v2.0.0** — final tag
+
+## v2.0.0-pre3 — Phase 18: SidebarView extraction
+
+Final piece of the three-pane decomposition. The article pane went out in -pre1, the timeline in -pre2; this release lifts the sidebar — the most cross-cutting of the three — out of `ViaductWindow`. With this, the god-object refactor is structurally complete: every widget in the three-pane layout now lives inside its own custom widget subclass, and `window.rs` is essentially the cross-pane plumbing role NetNewsWire gives `MainWindowController`.
+
+### What moved
+
+A new `ViaductSidebarView` custom widget (in `viaduct/src/ui/sidebar_view.rs` + `sidebar_view.ui`) now owns:
+
+- The entire sidebar `AdwToolbarView` — header bar with `mark_all_read_btn`, `sync_btn` (with its `sync_btn_stack` + `sync_btn_spinner` for the in-progress flip), `search_btn`, `menu_btn` — plus the `GtkScrolledWindow → GtkListView`, the `bottom_action_bar`, and the `primary_menu` GMenu (Add Feed / Import OPML / Export OPML / Preferences / Keyboard Shortcuts)
+- `sidebar_delegate` (`Rc<RefCell<SidebarTreeControllerDelegate>>`), `sidebar_tree_controller` (`Rc<TreeController>`), `sidebar_data_source` (`Rc<SidebarDataSource>`), and the `gtk::SingleSelection` returned by `setup_sidebar_list_view`
+- `feed_names: FeedNameMap` — the per-feed display-name resolver consumed by the timeline factory. Now a SidebarView accessor; the window queries it during `wire_models` and threads it into `TimelineView::bootstrap`
+- `sidebar_feed_popover` + `sidebar_folder_popover` (right-click menus) and the gesture controller that resolves the clicked row to a `SidebarItem`
+- `right_clicked_feed` / `right_clicked_folder` cells, plus `take_right_clicked_*` accessors that read-and-clear so a stale value can't bleed into a later keyboard activation
+- `bootstrap(account, image_cache)` runs once from `ViaductWindow::wire_models` and does all the construction
+- `apply_opml(OpmlFile)` — fully applies a freshly-loaded OPML: rebuilds the feed-name resolver, pushes the file into the delegate, kicks the controller to rebuild, refreshes the data-source root. Used by both the initial load path and the post-import / post-delete reload
+- `refresh_unread_counts(account)` — the tree walk that applies per-feed unread totals + Today/All-Unread/Starred smart-feed totals + folder/group sums. Lifted byte-for-byte from the window-side body
+- `set_refresh_in_progress(on)` — flips the sync button's `GtkStack` between `icon` and `spinner`
+- `unparent_popovers()` — called from the window's `connect_close_request` quit branch so the listview doesn't whine about dangling children at finalize time
+- Public surface: `list_view()`, `selection()`, `search_btn()`, `mark_all_read_btn()`, `sync_btn()`, `primary_menu()`, `feed_names()`, `controller()`, `delegate()`, `data_source()`, `list_folder_names()`, `take_right_clicked_feed/folder()`, `apply_opml`, `refresh_unread_counts`, `set_refresh_in_progress`, `unparent_popovers`. File-private `display_name_for_feed` + `pick_sidebar_item_at` helpers
+
+### What stayed on `ViaductWindow`
+
+The cross-pane orchestration that's not specific to any one pane:
+
+- The action group and every `act_*` body (including `act_*_clicked_feed/folder`, which now read context via `sidebar_view.take_right_clicked_*()`)
+- The sidebar-selection handler: still queries `selected_sidebar_item(sel)`, fetches articles, calls `timeline_view.populate(articles)` + `refresh_statuses(account)`. The cancel-stale-fetch generation counter and the `viaduct::perf` timing instrumentation stay window-level
+- Refresh orchestration: `act_refresh`, `pair_feeds_with_settings`, `run_refresh_with_tally`, refresh notifications, the periodic-refresh `glib::timeout`
+- `hide_for_background` / `connect_close_request` / `reload_current_timeline` / `set_refresh_in_progress` (now thin delegates to SidebarView)
+- The timeline-row right-click popover (`timeline_popover`) and its gesture handler — the menu items hit window-level actions, so the popover stays alongside its handlers
+
+### Numbers
+
+`window.rs` shrank from 2306 lines (pre2) to 2043 lines (−263). Cumulative across Phase 18: 2900 → 2043 = **−857 lines (−30%)**. The new `sidebar_view.rs` is 470 lines + a 108-line `.ui` template. Tests: 23 viaduct + 71 viaduct-core + 1 integration = 95, no count change. Smoke launch: app starts cleanly, OPML loads, sidebar click → timeline populate at 6 ms.
+
+### Test status
+
+fmt clean, clippy `--workspace --all-targets -- -D warnings` clean, all 95 tests pass. Real OPML loads (sidebar populates and feed-name resolution works), feed-clicking routes through TimelineView, right-click context menus on sidebar rows still surface (now wired in `SidebarView::bootstrap` instead of `wire_context_menus`), unread counts refresh after status mutations.
+
+### What's next
+
+Phase 18 decomposition (the three-pane lift-out) is **complete**. The remaining adopted items are the architectural polish that becomes possible *because* the panes are now real components:
+
+- **v2.0.0-pre4** — Promote `article_renderer.rs` into a dedicated `ArticleRenderer` GObject (lives inside `ArticlePaneView`)
+- **v2.0.0-pre5** — `glib::derived_properties` expansion (kill `refresh_unread_counts` walks via `gtk::ClosureExpression` on `TreeNode.unread_count`)
+- **v2.0.0-pre6** — WebKit ↔ GTK CSS bridge polish (scrollbar parity, article transitions, GNOME 47+ system accent → WebKit pane)
+- **v2.0.0** — final tag
+
+## v2.0.0-pre2 — Phase 18: TimelineView extraction
+
+Second piece of the Phase 18 decomposition. The article pane went out in -pre1; this release lifts the timeline pane out the same way.
+
+### What moved
+
+A new `ViaductTimelineView` custom widget (in `viaduct/src/ui/timeline_view.rs` + `timeline_view.ui`) now owns:
+
+- The timeline `GtkListView`, its `gio::ListStore`, and the `gtk::SingleSelection` that drives article rendering and keyboard navigation
+- The `GtkSearchBar` + `GtkSearchEntry` + scope toggle (per-feed vs all-feeds)
+- The `GtkStack` that flips between the populated `GtkScrolledWindow` content page and the "No articles" `AdwStatusPage` empty state
+- `selected_feed_id: RefCell<Option<String>>` (search-scope target)
+- `search_timeout: RefCell<Option<glib::SourceId>>` (FTS5 debounce cancel)
+- `bootstrap(account, image_cache, feed_names, search_btn)` — runs once from `ViaductWindow::wire_models`. Builds the row factory via `setup_timeline_list_view`, hooks `connect_items_changed` to flip the stack between content/empty atomically per splice, and sets up the search wiring (bidirectional `search_btn` ↔ `search_bar` bind, scope toggle re-trigger, 150 ms debounce → `account.search_articles_with_snippets` → `populate_with_snippets` → `refresh_statuses`)
+- Public surface: `list_view()`, `store()`, `selection()`, `selected_feed_id()`, `set_selected_feed_id()`, `current_article_node()`, `populate(Vec<Article>)`, `populate_with_snippets(Vec<(Article, String)>)`, `clear()`, `refresh_statuses(account)`, `search_active()`, `focus_search_entry()`
+- `escape_fts5` (file-private) plus a unit test locking the wrap-and-double-quotes invariant
+
+### What stayed on `ViaductWindow`
+
+The cross-pane orchestration: the sidebar-selection handler that calls `timeline_view.populate(articles)` after fetching, the timeline-selection handler that builds the article render context + auto-mark-reads + refreshes sidebar unread totals, and the `act_*` methods that mutate read/star status (they read the current node via `timeline_view.selection()` then update the DB and trigger sidebar refresh). `search_btn` itself stays in the sidebar's `AdwHeaderBar` — that's a v2.0.0-pre3 concern when `SidebarView` extracts.
+
+### Why this is more port-faithful, not less
+
+Same argument as the article-pane extraction. NetNewsWire's `Mac/MainWindow/Timeline/TimelineViewController.swift` is the structural counterpart; having the boundary as a real Rust widget subclass instead of a comment in the god-object brings the architecture closer to the source we're translating.
+
+### Numbers
+
+`window.rs` shrank from 2358 lines (v2.0.0-pre1) to 2306 lines (−52 lines vs pre1; −594 vs the pre-pre1 baseline of 2900). The new `timeline_view.rs` is 348 lines + a 77-line `.ui` template. Net code at this point is ~+90 lines, mostly new public API surface and the `bootstrap` boilerplate. Tests: 23 viaduct + 71 viaduct-core + 1 integration = 95 (was 94 — added the `escape_fts5_wraps_and_doubles_quotes` test that came along with its function). Smoke launch from a release build: app starts cleanly, sidebar click → `TimelineView::populate` → perf log shows healthy 8 ms total.
+
+### Test status
+
+fmt clean, clippy `--workspace --all-targets -- -D warnings` clean, all 95 tests pass. Real OPML loads, sidebar feeds clickable, articles populate the timeline, search bar still binds via the sidebar's search button (now from inside `TimelineView::bootstrap` instead of `wire_search` on the window).
+
+### What's next
+
+- **v2.0.0-pre3** — `SidebarView` extraction (sidebar list view + `feed_names` map + unread-count walks + right-click feed/folder context menus + `act_*_feed` and `act_*_folder` methods)
+- **v2.0.0-pre4** — Promote `article_renderer.rs` into a dedicated `ArticleRenderer` GObject (lives inside `ArticlePaneView`)
+- **v2.0.0-pre5** — `glib::derived_properties` expansion (kill `refresh_unread_counts` walks)
+- **v2.0.0-pre6** — WebKit ↔ GTK CSS bridge polish
+- **v2.0.0** — final tag
+
+## v2.0.0-pre1 — Phase 18: ArticlePaneView extraction
+
+First step in the v2.0 architectural refinement. `ViaductWindow` was a 2900-line god object owning everything from the sidebar tree controller to the WebKit lockdown profile. NetNewsWire splits the equivalent into `SidebarViewController` / `TimelineViewController` / `DetailViewController`; we're catching up. This release peels the article pane off — the most self-contained chunk — to establish the pattern. TimelineView and SidebarView follow in -pre2 / -pre3.
+
+### What moved
+
+A new `ViaductArticlePaneView` custom widget (in `viaduct/src/ui/article_pane_view.rs` + `article_pane_view.ui`) now owns:
+
+- The locked-down `WebKitWebView` plus the `viaduct-img://` / `viaduct-font://` scheme handlers, the link interceptor, the hover-URL overlay
+- The reader-view + play-video buttons in the article pane's `AdwHeaderBar`
+- The article-stack (content / "No article selected" empty page)
+- `ArticleDisplayState` (raw HTML / extracted HTML / metadata for the NNW theme macros)
+- The detected `VideoSource` for the active article
+- `render_article_body` (private), `set_article` / `set_auto_reader` / `clear` / `idle_for_background` / `refresh_render` / `toggle_reader` / `play_video` / `current_article_url` (public), plus the in-pane `present_video_dialog`
+- The `VideoPlaybackMode` enum + `current_video_playback_mode` + `embed_url_for_iframe` helpers (and their three unit tests)
+
+### What stayed on `ViaductWindow`
+
+Cross-pane plumbing: the toast overlay, the action group, the sidebar / timeline / split-view widgets, `Arc<LocalAccount>` + `Arc<ImageCache>`, the feed-name map, refresh orchestration, OPML import/export, hide-for-background, Phase 17's `connect_close_request`, and the timeline-selection handler (which now builds an `ArticleRenderContext` and calls `article_pane.set_article(ctx)` instead of mutating `imp.article_display` directly). Plus `act_open_in_browser` / `act_copy_url` (which read URLs through the timeline selection) and `act_toggle_reader` (now a one-line delegate to `article_pane.toggle_reader()`).
+
+### Why this is more port-faithful, not less
+
+Section 4 of `CLAUDE.md` is "Port. Don't invent." Decomposing `ViaductWindow` could read like an architectural deviation, but NetNewsWire already does this — `Mac/MainWindow/Detail/DetailViewController.swift` is the article-pane equivalent. Having that boundary as a Rust widget subclass instead of a comment in a 2900-line file just makes the porting reference clearer.
+
+### Numbers
+
+`window.rs` shrank from 2900 lines to 2358 lines (−542). The new `article_pane_view.rs` is 552 lines + a 79-line `.ui` template. Net code is ~+90 lines, mostly the new public API surface and per-pane wiring boilerplate. Tests: 22 viaduct + 71 viaduct-core + 1 integration = 94, no count change (the three `embed_url_for_iframe` tests came along with their function). Smoke test from a release build: app launches cleanly, sidebar selections route through the new pane, perf log shows healthy 23–24 ms total per click.
+
+### Test status
+
+fmt clean, clippy `--workspace --all-targets -- -D warnings` clean, all 94 tests pass. Manual smoke: real OPML loads, sidebar feeds clickable, articles render, hover URLs preview, theme/dark-mode switches still re-render the pane (via the new `pane.refresh_render()` path).
+
+### What's next
+
+- **v2.0.0-pre2** — `TimelineView` extraction (timeline list + search bar + timeline-mutating `act_*` methods)
+- **v2.0.0-pre3** — `SidebarView` extraction
+- **v2.0.0-pre4** — Promote `article_renderer.rs` into a dedicated `ArticleRenderer` GObject (lives inside `ArticlePaneView`)
+- **v2.0.0-pre5** — `glib::derived_properties` expansion (kill `refresh_unread_counts` walks)
+- **v2.0.0-pre6** — WebKit ↔ GTK CSS bridge polish
+- **v2.0.0** — final tag
+
+## v1.10.0 — Refresh while the window is closed (Phase 17 background daemon)
+
+The last unchecked Phase 13 entry. NetNewsWire's macOS analog (`NSBackgroundActivityScheduler`) has no Linux equivalent without a portal client, so the architecture had been written up in `docs/background-service-plan.md` but never wired. This release wires it.
+
+### What ships
+
+A new **Keep refreshing after the window is closed** switch in Preferences → Sync. When on, closing the main window hides it instead of quitting; the periodic-refresh `glib::timeout` keeps firing (so notifications keep arriving if `notifications-on-refresh` is enabled), and clicking the dock icon re-summons the same window — not a second instance — with the timeline repopulated for whatever feed you'd left selected. Default is off, so first-run users aren't surprised by an app that refuses to quit.
+
+### How it works
+
+- **`run-in-background` GSetting** (boolean, default false) added to `org.virinvictus.Viaduct.gschema.xml`. The Preferences row binds bidirectionally; flip-to-true triggers the portal flow.
+- **xdg-desktop-portal Background API** via the existing `viaduct_core::network::background::request_background_permission` helper (`ashpd` was already a dep). Fired on flip-to-true; the result rides a `tokio::sync::oneshot` back to the GTK thread through `glib::spawn_future_local`. On portal denial the GSetting flips back to false (the bind syncs the switch off automatically) and the parent window toasts an explanation. On non-Flatpak installs the portal grant is a no-op and the toggle just works.
+- **Window-hide-on-close**: `connect_close_request` consults the GSetting and calls `hide_for_background` instead of running the popover-cleanup quit path. Returns `glib::Propagation::Stop` so the default close handler (which would tear down the application) doesn't run.
+- **D-Bus activation re-summon**: `main.rs build_ui` first scans `app.windows()` for an existing `ViaductWindow` and `present`s it instead of constructing a second one. Without this, opening viaduct while it's hidden silently launches a duplicate. After re-presenting it calls `reload_current_timeline` so the user lands back where they were with whatever articles arrived in the meantime.
+- **Idle memory drop on hide**: `hide_for_background` clears the `ImageCache` LRU (disk cache retained — re-loads go disk → texture, skipping the network), loads `about:blank` in the article-pane WebView so the WebProcess goes idle (releases DOM, JS heap, image surfaces), resets `article_display` / `current_video`, hides the play-video button, `remove_all`s the timeline `gio::ListStore`, and flips both stacks to their empty pages before `set_visible(false)`. The ImageCache gained `clear_memory()` (fire-and-forget) and `clear_memory_now()` (awaitable, used by the harness).
+- **Flatpak manifest**: `--talk-name=org.freedesktop.portal.Background` added to `org.virinvictus.Viaduct.json` `finish-args`. Notifications portal accessible by default — no explicit talk-name needed (v0.8.0 notifications already worked).
+- **`mem_check` background-cycle checkpoint**: fourth checkpoint added that calls `clear_memory_now()` after the warmup + reader-view phases and reports the RSS delta. The full GUI hide cycle (WebView idle, ListStore compact) needs interactive QA — those widgets can't be constructed from a headless bin. Headless number on the synthetic 500-favicon + 50-image corpus: ~−4 MB after clear.
+
+### What this leaves for the 1.0 tag
+
+Phase 17's only remaining bullet is "tag 1.0.0 and submit to Flathub" — blocked on Flathub onboarding, not code. Everything else for the 1.0 milestone is in tree.
+
+### Test status
+
+22 viaduct + 71 viaduct-core + 1 integration tests passing (no test count change — Phase 17 is wiring, not new logic surface). fmt + clippy clean.
+
 ## v1.9.1 — The Digital Antiquarian fix (Pango shaping + URL scan caps)
 
 The v1.9.0 instrumentation paid off immediately. Brandon's logs:

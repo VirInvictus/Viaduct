@@ -14,11 +14,12 @@ use gtk::gio;
 use gtk::glib;
 
 use crate::preferences::keys;
+use crate::ui::window::ViaductWindow;
 
 /// Build and present the preferences dialog. When the schema isn't installed
 /// (dev environment without `glib-compile-schemas` having run), the dialog
 /// renders a single explanatory row and the toggles remain inert.
-pub fn present(parent: &impl IsA<gtk::Widget>) {
+pub fn present(parent: &ViaductWindow) {
     let dialog = adw::PreferencesDialog::builder()
         .title("Preferences")
         .build();
@@ -33,7 +34,7 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
     let sync = adw::PreferencesGroup::new();
     sync.set_title("Sync");
     sync.set_description(Some(
-        "Automatic refresh while viaduct is running. A background daemon for refreshing while the window is closed is tracked separately.",
+        "Automatic refresh on startup, on a periodic schedule, and optionally while the window is closed.",
     ));
     page.add(&sync);
 
@@ -50,6 +51,7 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
         appearance.add(&article_theme_row(&settings));
         sync.add(&refresh_on_startup_row(&settings));
         sync.add(&refresh_interval_row(&settings));
+        sync.add(&run_in_background_row(&settings, parent));
         notifications.add(&notifications_row(&settings));
         playback.add(&video_playback_row(&settings));
     } else {
@@ -312,6 +314,77 @@ fn refresh_interval_row(settings: &gio::Settings) -> adw::ComboRow {
             move |s, _| {
                 row.set_selected(refresh_interval_to_index(
                     s.int(keys::REFRESH_INTERVAL_MINUTES),
+                ));
+            }
+        ),
+    );
+
+    row
+}
+
+/// Switch row for `run-in-background`. The bind itself is straightforward;
+/// the wrinkle is that on flip-to-true we need to ask the desktop for the
+/// `org.freedesktop.portal.Background` grant. On portal denial we flip the
+/// switch back off and toast the parent window so the user understands why.
+/// On non-Flatpak installs the portal call is a no-op and always returns
+/// `true`, so the toggle just works.
+fn run_in_background_row(settings: &gio::Settings, parent: &ViaductWindow) -> adw::SwitchRow {
+    let row = adw::SwitchRow::builder()
+        .title("Keep refreshing after the window is closed")
+        .subtitle(
+            "viaduct hides the window on close instead of quitting, so periodic refresh keeps running. The first time you enable this, the desktop will ask for permission.",
+        )
+        .build();
+    settings
+        .bind(keys::RUN_IN_BACKGROUND, &row, "active")
+        .build();
+
+    // Fire the portal request when the GSetting flips to true, regardless
+    // of whether the change came from this switch or from elsewhere
+    // (dconf-editor, another viaduct window). On denial we set the
+    // GSetting back to false; the bind syncs the switch off automatically
+    // and connect_changed re-fires with `false` (no-op for us).
+    settings.connect_changed(
+        Some(keys::RUN_IN_BACKGROUND),
+        glib::clone!(
+            #[weak]
+            parent,
+            move |s, _| {
+                if !s.boolean(keys::RUN_IN_BACKGROUND) {
+                    return;
+                }
+                let settings_for_response = s.clone();
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                crate::spawn_on_runtime(async move {
+                    let result =
+                        crate::network::background::request_background_permission().await;
+                    let _ = tx.send(result);
+                });
+                glib::spawn_future_local(glib::clone!(
+                    #[weak]
+                    parent,
+                    async move {
+                        let response = rx.await;
+                        let granted = matches!(response, Ok(Ok(true)));
+                        if granted {
+                            return;
+                        }
+                        if let Err(e) = settings_for_response.set_boolean(
+                            keys::RUN_IN_BACKGROUND,
+                            false,
+                        ) {
+                            tracing::warn!(?e, "failed to clear run-in-background after portal denial");
+                        }
+                        let message = match response {
+                            Ok(Ok(false)) => {
+                                "Background permission denied. Enable it in your system settings to run viaduct in the background."
+                            }
+                            _ => {
+                                "Could not request background permission. Disabled."
+                            }
+                        };
+                        parent.show_toast_public(message);
+                    }
                 ));
             }
         ),
