@@ -356,8 +356,15 @@ impl ViaductWindow {
                 // stuck on the feed list with no way to read anything.
                 // The split view back-pops naturally via system Back; the
                 // forward push has to be explicit.
+                //
+                // v1.5.7 — only push when the state actually needs to
+                // change. Calling set_show_content(true) while it's
+                // already true (e.g. during an in-flight transition
+                // animation) confuses the SplitView's state machine
+                // and leaves the navigation stack stuck — symptom is
+                // "back / close button doesn't respond until Escape."
                 let outer = &window.imp().outer_split_view;
-                if outer.is_collapsed() {
+                if outer.is_collapsed() && !outer.shows_content() {
                     outer.set_show_content(true);
                 }
             }
@@ -476,8 +483,11 @@ impl ViaductWindow {
             // user taps an article in the timeline and the screen
             // doesn't change — the article stays hidden behind the
             // collapsed nav stack.
+            //
+            // v1.5.7 — only push when state needs to change. See
+            // matching note on the sidebar handler above.
             let inner = &window.imp().inner_split_view;
-            if inner.is_collapsed() {
+            if inner.is_collapsed() && !inner.shows_content() {
                 inner.set_show_content(true);
             }
 
@@ -649,10 +659,22 @@ impl ViaductWindow {
         // dialog closes. Without an explicit `try_close`, the WebView lives
         // until the parent dialog is dropped — which can take a tick after
         // the user dismisses it, leaving audio playing during the gap.
+        //
+        // v1.5.7 — also explicitly load `about:blank` after `try_close`.
+        // `try_close` is async and the WebProcess can hang on to keyboard
+        // focus / pointer grab during teardown; loading a blank page
+        // forces an immediate input-context reset so the parent window
+        // can reclaim focus cleanly. And grab focus back to the window's
+        // main content as a belt-and-braces measure.
         let view_for_close = view.downgrade();
+        let window_weak = self.downgrade();
         dialog.connect_closed(move |_| {
             if let Some(view) = view_for_close.upgrade() {
+                view.load_uri("about:blank");
                 view.try_close();
+            }
+            if let Some(window) = window_weak.upgrade() {
+                let _ = window.imp().timeline_list_view.grab_focus();
             }
         });
 
@@ -1194,11 +1216,21 @@ impl ViaductWindow {
     /// stays mounted (collapsing it would jolt the chrome), but the
     /// timeline selection is cleared so the article pane shows the
     /// "No article selected" empty state.
+    ///
+    /// v1.5.7 — also explicitly grab focus on the timeline list view
+    /// after the pop. This is a defensive recovery path: if the
+    /// WebKitWebView in the article pane held keyboard focus and the
+    /// nav-stack pop didn't release it cleanly, the focus stays
+    /// orphaned on a hidden widget and subsequent key events go
+    /// nowhere. Brandon noted that pressing Esc occasionally unstuck
+    /// the back / close buttons — that's what this is fixing.
     pub(crate) fn act_close_article(&self) {
         let imp = self.imp();
-        if imp.inner_split_view.is_collapsed() {
+        if imp.inner_split_view.is_collapsed() && imp.inner_split_view.shows_content() {
             // In collapsed (mobile-shaped) mode AdwNavigationSplitView
-            // exposes a back stack — pop it.
+            // exposes a back stack — pop it. Skip when already at the
+            // sidebar page, otherwise we briefly trigger an animation
+            // that nobody asked for.
             imp.inner_split_view.set_show_content(false);
         }
         // Always clear the article display so wide-layout users get the
@@ -1207,6 +1239,9 @@ impl ViaductWindow {
             selection.set_selected(gtk::INVALID_LIST_POSITION);
         }
         imp.article_stack.set_visible_child_name("empty");
+        // Focus recovery — pull keyboard focus back to the timeline so
+        // any stuck WebKit / dialog focus state gets released.
+        let _ = imp.timeline_list_view.grab_focus();
     }
 
     pub(crate) fn act_open_enclosure(&self) {

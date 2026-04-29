@@ -1,5 +1,39 @@
 # viaduct — Patch Notes
 
+## v1.5.7 — Three responsiveness bugs in the adaptive layout
+
+After the v1.5.6 Vimeo panic fix, Brandon kept testing the adaptive layout and surfaced three more issues. None of them were panics, all of them were visible in normal use:
+
+### 1. Back / close buttons stuck until Escape
+
+The `AdwHeaderBar` back button (and the window-manager X button) sometimes wouldn't respond after navigating in collapsed adaptive mode. Pressing **Escape** unstuck them.
+
+Root cause: v1.5.5's forward-push code called `set_show_content(true)` *unconditionally* when our handlers fired, even if the SplitView was already showing content. During an in-flight transition animation (which AdwNavigationSplitView treats as state-mutating), calling `set_show_content` again from selection-change handlers confused the state machine. The result was the SplitView's nav stack ending up half-popped — visually showing the article but treating itself as if it had already popped, so the back button's pop call was a no-op. Escape worked because our `act_close_article` did its own state cleanup that re-aligned things.
+
+Fix: every call to `set_show_content(true | false)` now checks `is_collapsed() && !shows_content()` (or its inverse) first. Calling it with the desired state already in effect was the bug — guarding it makes the calls idempotent.
+
+### 2. Focus stuck on the WebKit article view
+
+Same symptom class — keyboard focus would stay on the article-pane WebKitWebView even after navigating back via Esc, leaving the user unable to interact with anything until they clicked something. WebKit on Wayland is notorious for holding keyboard focus aggressively.
+
+Fix: `act_close_article` now explicitly calls `timeline_list_view.grab_focus()` after popping the nav stack and clearing the selection. Same fix applied to `present_video_dialog`'s `connect_closed` — when the playback dialog dismisses, we explicitly re-focus the timeline list view AND load `about:blank` on the embed WebView before `try_close()`. Loading `about:blank` forces WebKit to reset its input context, releasing whatever focus / pointer grab it held during playback. Defense in depth.
+
+### 3. Touchpad scroll juddered through video-heavy timelines
+
+Two-finger touchpad scrolling stalled or skipped frames when scrolling through feeds with many YouTube / Vimeo articles.
+
+Root cause: every row recycle in `connect_bind` called `spawn_video_thumbnail_fetch`, which immediately spawned a tokio task. During fast scrolls, rows recycle 30+ times per second; the cumulative `cache.client().await` Mutex acquisition on every recycle stalled the GTK main thread enough to drop scroll frames. The recycled-row stale-guard correctly threw away the result, but the task spawn + Mutex round-trip happened anyway.
+
+Fix: the fetch is now wrapped in a 220 ms `glib::timeout_add_local_once` debounce. If the row recycles to a different article (or the picture widget gets dropped) before the timer fires, we bail without spawning the runtime task. Rows scrolled past in less than a quarter-second never trigger a fetch; rows the user actually lingers on still get their thumbnail.
+
+### What's not fixed
+
+The single-pane (≤600sp width) layout still has noticeable transition cost compared to two-pane and three-pane. That's `AdwNavigationSplitView`'s collapsed-mode page-transition animation — CSS-transform-driven, runs on the compositor, costs frame budget proportional to the widget tree being animated. We've reduced the per-row work that competes with it (the debounce above), but we can't eliminate the transition cost itself without forking AdwNavigationSplitView. If it stays bothersome, the workaround is to use the app at the wide breakpoint where the splits stay mounted.
+
+### Test status
+
+74 unit + 1 integration tests passing. fmt + clippy clean.
+
 ## v1.5.6 — Vimeo thumbnail panic fix (and the AdwNavigationSplitView freeze it caused)
 
 **Critical fix.** v1.3.0 introduced a tokio-reactor regression in the Vimeo path of `spawn_video_thumbnail_fetch`, but it stayed dormant because most users have YouTube-heavy timelines. Brandon hit it testing the v1.5.5 adaptive layout on a Vimeo-bearing article and the app froze.

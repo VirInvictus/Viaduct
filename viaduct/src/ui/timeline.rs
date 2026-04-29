@@ -535,6 +535,15 @@ fn decode_common_entities(s: &str) -> String {
 /// a Tokio 1.x runtime". The panic cascaded into a frozen
 /// AdwNavigationSplitView whenever a Vimeo-bearing article got bound while
 /// the window was in collapsed adaptive layout.
+///
+/// SCROLL DEBOUNCE (v1.5.7): the fetch is delayed 220 ms after bind via
+/// `glib::timeout_add_local_once`. During fast touchpad scrolls, rows
+/// recycle dozens of times per second; without this debounce we spawn a
+/// tokio task per recycle, and the cumulative `cache.client().await`
+/// Mutex acquisition on every video row stalls the GTK main thread enough
+/// to judder the scroll. With the debounce, only rows the user has
+/// lingered on long enough to actually look at trigger a fetch — rows
+/// scrolled past quickly never spawn a task.
 fn spawn_video_thumbnail_fetch(article: &Article, picture: &gtk::Picture, cache: Arc<ImageCache>) {
     let Some(source) = detect_video(article) else {
         return;
@@ -542,47 +551,64 @@ fn spawn_video_thumbnail_fetch(article: &Article, picture: &gtk::Picture, cache:
     let expected_id = article.article_id.clone();
     let picture_weak = picture.downgrade();
 
-    // All reqwest work happens on the tokio runtime; the resolved bytes
-    // come back to the GTK thread via oneshot for `GdkTexture::from_bytes`.
-    let (tx, rx) = tokio::sync::oneshot::channel::<Option<Vec<u8>>>();
-    let cache_for_runtime = cache.clone();
-    crate::spawn_on_runtime(async move {
-        let bytes = match source {
-            VideoSource::YouTube { id } => {
-                cache_for_runtime
-                    .video_thumbnail(&crate::network::video_thumbs::youtube_thumbnail_url(&id))
-                    .await
-            }
-            VideoSource::Vimeo { .. } => {
-                let client = cache_for_runtime.client().await;
-                let url_opt = crate::network::video_thumbs::thumbnail_url(&client, &source).await;
-                match url_opt {
-                    Some(u) => cache_for_runtime.video_thumbnail(&u).await,
-                    None => None,
-                }
-            }
-        };
-        let _ = tx.send(bytes);
-    });
-
-    glib::spawn_future_local(async move {
-        let Ok(Some(bytes)) = rx.await else { return };
+    glib::timeout_add_local_once(std::time::Duration::from_millis(220), move || {
+        // Scroll-debounce check: if the row recycled to a different
+        // article (or got dropped entirely) before our timer fired,
+        // bail without spawning the runtime task.
         let Some(picture) = picture_weak.upgrade() else {
             return;
         };
         if picture.widget_name() != expected_id {
             return;
         }
-        let glib_bytes = glib::Bytes::from_owned(bytes);
-        match gtk::gdk::Texture::from_bytes(&glib_bytes) {
-            Ok(texture) => {
-                picture.set_paintable(Some(&texture));
-                picture.set_visible(true);
+        let picture_weak = picture.downgrade();
+        let expected_id_for_apply = expected_id.clone();
+
+        // All reqwest work happens on the tokio runtime; the resolved bytes
+        // come back to the GTK thread via oneshot for `GdkTexture::from_bytes`.
+        let (tx, rx) = tokio::sync::oneshot::channel::<Option<Vec<u8>>>();
+        let cache_for_runtime = cache.clone();
+        let source_for_runtime = source.clone();
+        crate::spawn_on_runtime(async move {
+            let bytes = match source_for_runtime {
+                VideoSource::YouTube { id } => {
+                    cache_for_runtime
+                        .video_thumbnail(&crate::network::video_thumbs::youtube_thumbnail_url(&id))
+                        .await
+                }
+                VideoSource::Vimeo { .. } => {
+                    let client = cache_for_runtime.client().await;
+                    let url_opt =
+                        crate::network::video_thumbs::thumbnail_url(&client, &source_for_runtime)
+                            .await;
+                    match url_opt {
+                        Some(u) => cache_for_runtime.video_thumbnail(&u).await,
+                        None => None,
+                    }
+                }
+            };
+            let _ = tx.send(bytes);
+        });
+
+        glib::spawn_future_local(async move {
+            let Ok(Some(bytes)) = rx.await else { return };
+            let Some(picture) = picture_weak.upgrade() else {
+                return;
+            };
+            if picture.widget_name() != expected_id_for_apply {
+                return;
             }
-            Err(e) => {
-                tracing::debug!(?e, "failed to decode video thumbnail bytes");
+            let glib_bytes = glib::Bytes::from_owned(bytes);
+            match gtk::gdk::Texture::from_bytes(&glib_bytes) {
+                Ok(texture) => {
+                    picture.set_paintable(Some(&texture));
+                    picture.set_visible(true);
+                }
+                Err(e) => {
+                    tracing::debug!(?e, "failed to decode video thumbnail bytes");
+                }
             }
-        }
+        });
     });
 }
 
