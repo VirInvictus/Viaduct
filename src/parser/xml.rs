@@ -241,6 +241,98 @@ fn guid_looks_like_url(s: &str) -> bool {
     true
 }
 
+/// Dispatches a Text or CDATA payload into the right RSS-item / RSS-channel
+/// field. Extracted so the main loop can share one body of logic across
+/// `Event::Text` and `Event::CData` arms — without this, CDATA-wrapped
+/// `<description>` and `<content:encoded>` (the dominant shape on
+/// WordPress and most news sites) silently dropped to `None`.
+#[allow(clippy::too_many_arguments)]
+fn rss_handle_text_or_cdata(
+    text_str: String,
+    in_item: bool,
+    in_channel_image: bool,
+    current_tag: &[u8],
+    current_guid_is_permalink: bool,
+    current_item_title: &mut Option<String>,
+    current_item_link: &mut Option<String>,
+    current_item_body: &mut Option<String>,
+    current_item_guid: &mut Option<String>,
+    current_item_permalink: &mut Option<String>,
+    current_item_date: &mut Option<chrono::DateTime<chrono::Utc>>,
+    current_item_authors: &mut Vec<Author>,
+    icon_url: &mut Option<String>,
+    title: &mut Option<String>,
+    home_page_url: &mut Option<String>,
+    language: &mut Option<String>,
+) {
+    if in_item {
+        match current_tag {
+            b"title" if current_item_title.is_none() => {
+                *current_item_title = Some(text_str);
+            }
+            b"link" if current_item_link.is_none() => {
+                *current_item_link = Some(resolve_url(&text_str, home_page_url.as_deref()));
+            }
+            b"description" if current_item_body.is_none() => {
+                *current_item_body = Some(text_str);
+            }
+            b"encoded" => {
+                // `<content:encoded>` always wins over `<description>`
+                // because it's the full body where description is the
+                // summary. NNW prefers it the same way.
+                *current_item_body = Some(text_str);
+            }
+            b"guid" => {
+                *current_item_guid = Some(text_str.clone());
+                if current_guid_is_permalink
+                    && current_item_permalink.is_none()
+                    && guid_looks_like_url(&text_str)
+                {
+                    *current_item_permalink =
+                        Some(resolve_url(&text_str, home_page_url.as_deref()));
+                }
+            }
+            b"pubDate" | b"date" if current_item_date.is_none() => {
+                *current_item_date = parse_date_bytes(text_str.as_bytes());
+            }
+            b"creator" | b"author" => {
+                let mut author = Author {
+                    name: None,
+                    url: None,
+                    avatar_url: None,
+                    email: None,
+                };
+                if text_str.contains('@') {
+                    author.email = Some(text_str);
+                } else if text_str.starts_with("http") {
+                    author.url = Some(text_str);
+                } else {
+                    author.name = Some(text_str);
+                }
+                current_item_authors.push(author);
+            }
+            _ => {}
+        }
+    } else if in_channel_image {
+        if current_tag == b"url" && icon_url.is_none() {
+            *icon_url = Some(text_str);
+        }
+    } else {
+        match current_tag {
+            b"title" if title.is_none() => {
+                *title = Some(text_str);
+            }
+            b"link" if home_page_url.is_none() => {
+                *home_page_url = Some(text_str);
+            }
+            b"language" if language.is_none() => {
+                *language = Some(text_str);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
     let mut reader = Reader::from_reader(data);
     reader.config_mut().trim_text(true);
@@ -349,78 +441,53 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 }
             }
             Ok(Event::Text(ref e)) => {
-                if in_item {
-                    if let Ok(text) = e.unescape() {
-                        let text_str = text.to_string();
-                        match current_tag.as_slice() {
-                            b"title" if current_item_title.is_none() => {
-                                current_item_title = Some(text_str);
-                            }
-                            b"link" if current_item_link.is_none() => {
-                                current_item_link =
-                                    Some(resolve_url(&text_str, home_page_url.as_deref()));
-                            }
-                            b"description" if current_item_body.is_none() => {
-                                current_item_body = Some(text_str);
-                            }
-                            b"encoded" => {
-                                // content:encoded
-                                current_item_body = Some(text_str);
-                            }
-                            b"guid" => {
-                                current_item_guid = Some(text_str.clone());
-                                if current_guid_is_permalink
-                                    && current_item_permalink.is_none()
-                                    && guid_looks_like_url(&text_str)
-                                {
-                                    current_item_permalink =
-                                        Some(resolve_url(&text_str, home_page_url.as_deref()));
-                                }
-                            }
-                            b"pubDate" | b"date" if current_item_date.is_none() => {
-                                current_item_date = parse_date_bytes(text.as_bytes());
-                            }
-                            b"creator" | b"author" => {
-                                let mut author = Author {
-                                    name: None,
-                                    url: None,
-                                    avatar_url: None,
-                                    email: None,
-                                };
-                                if text_str.contains('@') {
-                                    author.email = Some(text_str);
-                                } else if text_str.starts_with("http") {
-                                    author.url = Some(text_str);
-                                } else {
-                                    author.name = Some(text_str);
-                                }
-                                current_item_authors.push(author);
-                            }
-                            _ => {}
-                        }
-                    }
-                } else if in_channel_image {
-                    if let Ok(text) = e.unescape()
-                        && current_tag.as_slice() == b"url"
-                        && icon_url.is_none()
-                    {
-                        icon_url = Some(text.to_string());
-                    }
-                } else if let Ok(text) = e.unescape() {
-                    let text_str = text.to_string();
-                    match current_tag.as_slice() {
-                        b"title" if title.is_none() => {
-                            title = Some(text_str);
-                        }
-                        b"link" if home_page_url.is_none() => {
-                            home_page_url = Some(text_str);
-                        }
-                        b"language" if language.is_none() => {
-                            language = Some(text_str);
-                        }
-                        _ => {}
-                    }
-                }
+                let Ok(text) = e.unescape() else { continue };
+                let text_str = text.to_string();
+                rss_handle_text_or_cdata(
+                    text_str,
+                    in_item,
+                    in_channel_image,
+                    &current_tag,
+                    current_guid_is_permalink,
+                    &mut current_item_title,
+                    &mut current_item_link,
+                    &mut current_item_body,
+                    &mut current_item_guid,
+                    &mut current_item_permalink,
+                    &mut current_item_date,
+                    &mut current_item_authors,
+                    &mut icon_url,
+                    &mut title,
+                    &mut home_page_url,
+                    &mut language,
+                );
+            }
+            Ok(Event::CData(ref e)) => {
+                // CDATA carries raw bytes — no entity decoding needed.
+                // Sacha Chua's blog and most WordPress sites wrap their
+                // <description> and <content:encoded> bodies in CDATA;
+                // before this branch existed those bodies were dropped
+                // on the floor entirely (empty article panes for the
+                // majority of feeds we see in the wild).
+                let text_str = String::from_utf8_lossy(e.as_ref()).into_owned();
+                rss_handle_text_or_cdata(
+                    text_str,
+                    in_item,
+                    in_channel_image,
+                    &current_tag,
+                    current_guid_is_permalink,
+                    &mut current_item_title,
+                    &mut current_item_link,
+                    &mut current_item_body,
+                    &mut current_item_guid,
+                    &mut current_item_permalink,
+                    &mut current_item_date,
+                    &mut current_item_authors,
+                    &mut icon_url,
+                    &mut title,
+                    &mut home_page_url,
+                    &mut language,
+                );
             }
             Ok(Event::End(ref e)) => {
                 let name = e.local_name();
@@ -677,6 +744,74 @@ fn atom_type_is_xhtml(e: &quick_xml::events::BytesStart) -> bool {
     false
 }
 
+/// Same shape as `rss_handle_text_or_cdata` but for Atom — dispatches
+/// a Text or CDATA payload into the right per-author / per-entry /
+/// channel field. Atom CDATA is rarer than RSS but real (some Hugo and
+/// Jekyll templates produce it).
+#[allow(clippy::too_many_arguments)]
+fn atom_handle_text_or_cdata(
+    text_str: String,
+    in_item: bool,
+    in_author: bool,
+    in_source: bool,
+    current_tag: &[u8],
+    current_author: &mut Option<MutableAuthor>,
+    current_item_title: &mut Option<String>,
+    current_item_body: &mut Option<String>,
+    current_item_guid: &mut Option<String>,
+    current_item_date: &mut Option<chrono::DateTime<chrono::Utc>>,
+    current_item_date_modified: &mut Option<chrono::DateTime<chrono::Utc>>,
+    title: &mut Option<String>,
+    icon_url: &mut Option<String>,
+    logo_url: &mut Option<String>,
+) {
+    // Author body: collect into the open MutableAuthor.
+    if in_author && let Some(author) = current_author.as_mut() {
+        match current_tag {
+            b"name" => author.name = Some(text_str),
+            b"email" => author.email = Some(text_str),
+            b"uri" => author.url = Some(text_str),
+            _ => {}
+        }
+        return;
+    }
+    // <source> wraps a republished entry's original feed metadata —
+    // ignore everything inside it so it doesn't pollute our entry.
+    if in_source {
+        return;
+    }
+    if in_item {
+        match current_tag {
+            b"title" if current_item_title.is_none() => {
+                *current_item_title = Some(text_str);
+            }
+            b"content" if current_item_body.is_none() => {
+                *current_item_body = Some(text_str);
+            }
+            b"summary" if current_item_body.is_none() => {
+                *current_item_body = Some(text_str);
+            }
+            b"id" if current_item_guid.is_none() => {
+                *current_item_guid = Some(text_str);
+            }
+            b"published" | b"issued" if current_item_date.is_none() => {
+                *current_item_date = parse_date_bytes(text_str.as_bytes());
+            }
+            b"updated" | b"modified" if current_item_date_modified.is_none() => {
+                *current_item_date_modified = parse_date_bytes(text_str.as_bytes());
+            }
+            _ => {}
+        }
+    } else {
+        match current_tag {
+            b"title" if title.is_none() => *title = Some(text_str),
+            b"icon" if icon_url.is_none() => *icon_url = Some(text_str),
+            b"logo" if logo_url.is_none() => *logo_url = Some(text_str),
+            _ => {}
+        }
+    }
+}
+
 fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
     let mut reader = Reader::from_reader(data);
     reader.config_mut().trim_text(true);
@@ -792,54 +927,47 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
             Ok(Event::Text(ref e)) => {
                 let Ok(text) = e.unescape() else { continue };
                 let text_str = text.to_string();
-
-                // Author body: collect into the open MutableAuthor.
-                if in_author && let Some(author) = current_author.as_mut() {
-                    match current_tag.as_slice() {
-                        b"name" => author.name = Some(text_str),
-                        b"email" => author.email = Some(text_str),
-                        b"uri" => author.url = Some(text_str),
-                        _ => {}
-                    }
-                    continue;
-                }
-
-                // <source> wraps a republished entry's original feed metadata —
-                // ignore everything inside it so it doesn't pollute our entry.
-                if in_source {
-                    continue;
-                }
-
-                if in_item {
-                    match current_tag.as_slice() {
-                        b"title" if current_item_title.is_none() => {
-                            current_item_title = Some(text_str);
-                        }
-                        b"content" if current_item_body.is_none() => {
-                            current_item_body = Some(text_str);
-                        }
-                        b"summary" if current_item_body.is_none() => {
-                            current_item_body = Some(text_str);
-                        }
-                        b"id" if current_item_guid.is_none() => {
-                            current_item_guid = Some(text_str);
-                        }
-                        b"published" | b"issued" if current_item_date.is_none() => {
-                            current_item_date = parse_date_bytes(text.as_bytes());
-                        }
-                        b"updated" | b"modified" if current_item_date_modified.is_none() => {
-                            current_item_date_modified = parse_date_bytes(text.as_bytes());
-                        }
-                        _ => {}
-                    }
-                } else {
-                    match current_tag.as_slice() {
-                        b"title" if title.is_none() => title = Some(text_str),
-                        b"icon" if icon_url.is_none() => icon_url = Some(text_str),
-                        b"logo" if logo_url.is_none() => logo_url = Some(text_str),
-                        _ => {}
-                    }
-                }
+                atom_handle_text_or_cdata(
+                    text_str,
+                    in_item,
+                    in_author,
+                    in_source,
+                    &current_tag,
+                    &mut current_author,
+                    &mut current_item_title,
+                    &mut current_item_body,
+                    &mut current_item_guid,
+                    &mut current_item_date,
+                    &mut current_item_date_modified,
+                    &mut title,
+                    &mut icon_url,
+                    &mut logo_url,
+                );
+            }
+            Ok(Event::CData(ref e)) => {
+                // Same CDATA fix as parse_rss: Atom feeds with
+                // `<title><![CDATA[…]]></title>` or
+                // `<content type="html"><![CDATA[…]]></content>` were
+                // dropping their content entirely. Less common than RSS
+                // but still encountered (e.g. some Hugo + Jekyll
+                // templates).
+                let text_str = String::from_utf8_lossy(e.as_ref()).into_owned();
+                atom_handle_text_or_cdata(
+                    text_str,
+                    in_item,
+                    in_author,
+                    in_source,
+                    &current_tag,
+                    &mut current_author,
+                    &mut current_item_title,
+                    &mut current_item_body,
+                    &mut current_item_guid,
+                    &mut current_item_date,
+                    &mut current_item_date_modified,
+                    &mut title,
+                    &mut icon_url,
+                    &mut logo_url,
+                );
             }
             Ok(Event::End(ref e)) => {
                 let name = e.local_name();
@@ -1116,6 +1244,65 @@ mod tests {
         let feed = parse_atom(xml, "https://example.com/feed").unwrap();
         assert_eq!(feed.items.len(), 1);
         assert_eq!(feed.items[0].title.as_deref(), Some("Real Title"));
+    }
+
+    #[test]
+    fn rss_cdata_description_captured_as_body() {
+        // Sacha Chua's blog and most WordPress / Jekyll feeds wrap
+        // <description> in CDATA. Before the parser learned to
+        // handle Event::CData these bodies were silently dropped.
+        let xml = br#"<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <title>Site</title>
+  <item>
+    <title>Post</title>
+    <link>https://example.com/post</link>
+    <description><![CDATA[<p>Hello <a href="https://example.com">world</a>.</p>]]></description>
+    <pubDate>Mon, 27 Apr 2026 11:29:30 GMT</pubDate>
+  </item>
+</channel></rss>"#;
+        let feed = parse_rss(xml, "https://example.com/feed", false).unwrap();
+        assert_eq!(feed.items.len(), 1);
+        let body = feed.items[0].content_html.as_deref().unwrap_or("");
+        assert!(body.contains("<p>Hello "), "missing CDATA body: {body}");
+        assert!(body.contains("<a href"), "missing CDATA link: {body}");
+    }
+
+    #[test]
+    fn rss_cdata_content_encoded_overrides_description() {
+        // <content:encoded> is the full body; <description> is the
+        // summary. NNW prefers content:encoded and so do we — confirm
+        // it works through CDATA too.
+        let xml = br#"<?xml version="1.0"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel>
+  <title>Site</title>
+  <item>
+    <title>Post</title>
+    <description><![CDATA[<p>Short summary.</p>]]></description>
+    <content:encoded><![CDATA[<p>Full article body with <strong>everything</strong>.</p>]]></content:encoded>
+  </item>
+</channel></rss>"#;
+        let feed = parse_rss(xml, "https://example.com/feed", false).unwrap();
+        let body = feed.items[0].content_html.as_deref().unwrap_or("");
+        assert!(body.contains("Full article body"), "body lost: {body}");
+        assert!(!body.contains("Short summary"), "summary leaked: {body}");
+    }
+
+    #[test]
+    fn atom_cdata_content_captured_as_body() {
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Site</title>
+  <entry>
+    <id>1</id>
+    <title>Post</title>
+    <updated>2024-01-01T00:00:00Z</updated>
+    <content type="html"><![CDATA[<p>Atom CDATA body.</p>]]></content>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        let body = feed.items[0].content_html.as_deref().unwrap_or("");
+        assert!(body.contains("Atom CDATA body"), "body lost: {body}");
     }
 
     #[test]

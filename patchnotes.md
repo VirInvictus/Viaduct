@@ -1,5 +1,16 @@
 # viaduct — Patch Notes
 
+## v1.0.8 — CDATA Body Capture (Critical Parser Fix)
+
+Fixes a long-standing bug where the RSS and Atom parsers silently dropped article bodies wrapped in CDATA sections. Surfaced during v1.1.0-pre3 smoke testing — Sacha Chua's blog and most other WordPress / Hugo / Jekyll feeds publish bodies as `<description><![CDATA[…]]></description>` or `<content:encoded><![CDATA[…]]></content:encoded>`. quick-xml emits these as `Event::CData`, but our parsers only handled `Event::Text`, so the bodies hit the floor.
+
+- **`rss_handle_text_or_cdata` and `atom_handle_text_or_cdata` helpers** in `src/parser/xml.rs` carry the per-tag dispatch logic (`<title>`, `<description>`, `<content:encoded>`, `<guid>`, `<pubDate>`, etc.). The main event loops invoke them from both `Event::Text` and `Event::CData` arms, so the same body-capture path fires regardless of how the feed author wrapped the bytes.
+- **`Event::Text` entity-decodes** via `unescape()`; **`Event::CData` reads raw bytes** (no entity decoding needed — that's the whole point of CDATA per XML 1.0 §2.7).
+- **`<content:encoded>` precedence preserved** — when a feed publishes both `<description>` (summary) and `<content:encoded>` (full body), the latter wins. Verified in CDATA mode by the new `rss_cdata_content_encoded_overrides_description` test.
+- **Author / source / channel scopes preserved** — the helpers honor `in_item`, `in_author`, `in_source`, and `in_channel_image` exactly like the previous inline match. No regressions in the existing 11 xml tests.
+- **3 new regression tests** in `parser::xml::tests`: `rss_cdata_description_captured_as_body`, `rss_cdata_content_encoded_overrides_description`, `atom_cdata_content_captured_as_body`. 50 passing total (was 47).
+- **Retroactive note**: previously-cached articles in `articles.sqlite` retain their empty bodies until those articles are re-fetched (the refresher's content-hash short-circuit skips re-parsing on byte-identical responses). New articles + bodies for any feed that publishes an update will be captured correctly. To force a full re-parse, delete `articles.sqlite` or wait for the feed to update.
+
 ## v1.0.7 — NNW Domain Sync + Substring-Match Bug Fix
 
 Brings our refresher's host-matching policy into parity with NetNewsWire 7.0.5 and closes a real (latent) substring-matching false-positive in the special-case host check. Phase 16 video thumbnails are explicitly deferred to v1.2.0 polish where they wire naturally into the timeline.
