@@ -1,10 +1,10 @@
 # viaduct — Application Specification
 
-**Version:** 1.0.0  
-**Target:** GNOME 50+, GTK4/libadwaita  
+**Version:** 1.9.1  
+**Target:** GNOME 50+, GTK4 ≥ 4.16, libadwaita ≥ 1.7, WebKitGTK 6.0  
 **Language:** Rust (2024 Edition)  
-**Build System:** Cargo / Meson (for Flatpak packaging)  
-**License:** GPLv3
+**Build System:** Cargo workspace (`viaduct-core` + `viaduct`) / Meson wrapper for Flatpak packaging  
+**License:** MIT
 
 ---
 

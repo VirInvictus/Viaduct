@@ -35,7 +35,10 @@ Modern feed readers tend to be Electron / browser-engine apps with sprawling mem
 | **Adaptive layout** | `AdwBreakpoint`s collapse the three-pane split at 900sp / 600sp into mobile-style navigation stacks. Same code, every form factor. |
 | **Reader View** | Local readability extraction (no Mercury / external service), gated behind a 5MB input cap and disk-cached. |
 | **Video thumbnails + in-pane playback** | YouTube + Vimeo detection in feed bodies. Thumbnails in the timeline; opt-in playback in a sandboxed dialog WebView (separate from the article pane's locked-down instance). |
-| **Keyboard shortcuts** | NetNewsWire's bindings, plus `Ctrl+Shift+C` copy URL, `Ctrl+Shift+R` toggle reader, `Esc` close article, `Ctrl+?` cheat sheet. |
+| **Keyboard shortcuts** | NetNewsWire's bindings, plus `Ctrl+Shift+C` copy URL, `Ctrl+Shift+R` toggle reader, `Esc` close article, `Ctrl+N` add feed, `Ctrl+?` cheat sheet. |
+| **Add Feed dialog** | Paste a feed URL or a website URL — a port of NNW's `FeedFinder` runs the two-pass discovery (parse-as-feed → fall back to scanning HTML `<link rel="alternate">`). Optional name + folder placement. |
+| **Right-click context menus** | Sidebar feed rows: Mark All Read / Refresh / Copy Feed URL / Delete (destructive-styled confirm). Sidebar folder rows: Mark All Read. Timeline rows: Toggle Read / Star / Open in Browser / Open Enclosure / Copy URL. |
+| **Auto-sync** | Optional refresh-on-open + periodic refresh (Never / 15 min / 30 min / 1 h / 2 h / 6 h / Daily). Background-while-window-closed mode planned — see `docs/background-service-plan.md`. |
 | **OPML import/export** | NetNewsWire-shaped serialization, byte-for-byte compatible with `OPMLExporter`. |
 | **The Pruning Engine** | Age-based article purge, orphaned-author cleanup (NNW issue #5232), startup VACUUM on the worker thread. |
 
