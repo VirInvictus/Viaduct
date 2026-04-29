@@ -1,5 +1,38 @@
 # viaduct — Patch Notes
 
+## v2.6.7 — Tray icon on GNOME (AppIndicator extension)
+
+User report after v2.6.6: "It's still a box with three dots in it. It is not our logo." Screenshot confirmed the slot is allocated but rendered as the AppIndicator placeholder.
+
+### Root cause
+
+GNOME doesn't natively host StatusNotifierItem — it uses the [`gnome-shell-extension-appindicator`](https://github.com/ubuntu/gnome-shell-extension-appindicator) extension as a bridge. That extension **mostly ignores `IconPixmap`** (the property v2.6.6 populates) and resolves icons through GTK's icon theme using `IconName` + `IconThemePath`. v2.6.6 worked on KDE / XFCE / Cinnamon (which honor `IconPixmap`) but produced the placeholder on GNOME because the extension never read the pixel data.
+
+### Fix
+
+`Tray::icon_theme_path` now returns `$XDG_CACHE_HOME/viaduct/tray-icons/`, populated at startup with a hicolor-shaped layout:
+
+```
+~/.cache/viaduct/tray-icons/
+└── hicolor/
+    ├── 256x256/apps/org.virinvictus.Viaduct.png
+    └── 512x512/apps/org.virinvictus.Viaduct.png
+```
+
+Bytes come from the same `include_bytes!` of `docs/icon-{256,512}.png` v2.6.6 added; v2.6.7 just writes them to disk in the structure GTK's icon theme search expects. The AppIndicator extension prepends `icon_theme_path` to its icon-theme search and looks up `org.virinvictus.Viaduct` in there. Result: real logo on GNOME.
+
+`icon_pixmap` (v2.6.6) and `icon_name` (the freedesktop name) both stay in place so KDE / XFCE / Cinnamon hosts that prefer pixmap, and shipped builds where the SVG is in `$datadir/icons/hicolor/`, both still work without any second discovery pass.
+
+### Implementation notes
+
+- Install runs once per process via `OnceLock<Option<String>>` and is idempotent across runs: only writes the file when missing or when the on-disk size differs from the embedded byte length (treats the static-asset bytes as immutable, no hash needed).
+- I/O failures log and return `None` so the SNI host falls back to the system icon-theme search path. Doesn't bring the tray down.
+- Lives at `$XDG_CACHE_HOME/viaduct/tray-icons/` rather than `$XDG_DATA_HOME` because it's regenerable from the binary on every startup — same disposability the existing favicon / image / video-thumb caches have. The new v2.6.5 cache sweep doesn't touch it (paths.rs only resolves `favicons/`, `images/`, `video-thumbs/`).
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.6 — Tray icon renders without an installed icon theme
 
 User report: "It runs in the background, but its system tray icon doesn't work." Root cause: `tray.rs` only implemented `Tray::icon_name`, returning the freedesktop name `"org.virinvictus.Viaduct"`. SNI hosts resolve that against the system icon theme — which works for shipped builds (`meson install` drops the SVG into `$datadir/icons/hicolor/scalable/apps/`, Flatpak puts it in the runtime's theme), but **not for `cargo run` dev builds**, which never install anything. The host fell back to a placeholder, or in some KDE / extension cases nothing at all.

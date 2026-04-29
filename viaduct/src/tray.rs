@@ -48,6 +48,15 @@ struct ViaductTray {
     /// failed (we still install `icon_name` so themable hosts have a
     /// fallback). v2.6.6.
     icons: Vec<ksni::Icon>,
+    /// Hicolor-structured directory containing
+    /// `hicolor/<size>/apps/<icon_name>.png`. Reported via
+    /// `Tray::icon_theme_path` so the GNOME AppIndicator extension —
+    /// which mostly ignores `icon_pixmap` and resolves through GTK's
+    /// icon theme — picks up our PNGs without needing the SVG to be
+    /// installed system-wide. Empty string when the install failed
+    /// (silently falls back to the host's icon-theme search path).
+    /// v2.6.7.
+    icon_theme_path: String,
 }
 
 impl Tray for ViaductTray {
@@ -72,6 +81,10 @@ impl Tray for ViaductTray {
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         self.icons.clone()
+    }
+
+    fn icon_theme_path(&self) -> String {
+        self.icon_theme_path.clone()
     }
 
     fn category(&self) -> ksni::Category {
@@ -192,7 +205,12 @@ fn start_service(tx: tokio::sync::mpsc::UnboundedSender<TrayAction>) {
             return;
         }
         let icons = cached_icons();
-        let tray = ViaductTray { tx, icons };
+        let icon_theme_path = cached_icon_theme_path().unwrap_or_default();
+        let tray = ViaductTray {
+            tx,
+            icons,
+            icon_theme_path,
+        };
         // ksni's `spawn` consumes the tray and yields a Handle on the
         // current Tokio runtime (the global one we install in `main`).
         // Has to run from a Tokio context; the wire() call site is on
@@ -283,6 +301,66 @@ fn decode_icon(png_bytes: &[u8]) -> Result<ksni::Icon, String> {
         height,
         data,
     })
+}
+
+/// v2.6.7: write the embedded PNGs to a hicolor-shaped directory and
+/// return its path so `Tray::icon_theme_path` can hand it to the SNI
+/// host. Cached once per process via `OnceLock`.
+///
+/// Why this exists despite `icon_pixmap` working in v2.6.6: the GNOME
+/// AppIndicator Shell extension (the only way GNOME sees SNI tray
+/// items) mostly **ignores** the `IconPixmap` D-Bus property and
+/// resolves through GTK's icon theme using `IconName` + `IconThemePath`.
+/// We hand it a private theme path containing our PNGs so the icon
+/// renders correctly on GNOME without polluting the user's system
+/// icon theme.
+///
+/// Layout:
+///
+/// ```text
+///   $XDG_CACHE_HOME/viaduct/tray-icons/
+///   └── hicolor/
+///       ├── 256x256/apps/org.virinvictus.Viaduct.png
+///       └── 512x512/apps/org.virinvictus.Viaduct.png
+/// ```
+///
+/// Returns `None` (caller falls back to empty `icon_theme_path`) when
+/// any I/O step fails — the SNI host then falls back to the system
+/// icon-theme search path or our `icon_pixmap` payload.
+fn cached_icon_theme_path() -> Option<String> {
+    static THEME_PATH: OnceLock<Option<String>> = OnceLock::new();
+    THEME_PATH.get_or_init(install_tray_icon_theme).clone()
+}
+
+fn install_tray_icon_theme() -> Option<String> {
+    const ICON_NAME: &str = "org.virinvictus.Viaduct";
+    let base = match crate::paths::cache_dir() {
+        Ok(p) => p.join("tray-icons"),
+        Err(e) => {
+            tracing::warn!(?e, "tray icon theme: cache_dir resolution failed");
+            return None;
+        }
+    };
+    for (size, bytes) in [(256, ICON_PNG_256), (512, ICON_PNG_512)] {
+        let dir = base.join(format!("hicolor/{size}x{size}/apps"));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(?dir, ?e, "tray icon theme: create_dir_all failed");
+            return None;
+        }
+        let path = dir.join(format!("{ICON_NAME}.png"));
+        // Re-write only when missing or when content differs (size
+        // proxy is enough — these are static asset bytes). Avoids
+        // touching the file on every startup.
+        let needs_write = match std::fs::metadata(&path) {
+            Ok(m) => m.len() != bytes.len() as u64,
+            Err(_) => true,
+        };
+        if needs_write && let Err(e) = std::fs::write(&path, bytes) {
+            tracing::warn!(?path, ?e, "tray icon theme: write failed");
+            return None;
+        }
+    }
+    Some(base.to_string_lossy().into_owned())
 }
 
 fn stop_service() {
