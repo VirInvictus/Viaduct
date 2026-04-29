@@ -156,6 +156,7 @@ fn theme_index_to_nick(index: u32) -> &'static str {
     }
     // Map the underscore form back to the schema's dash form.
     match THEMES[i].id {
+        "adwaita" => "adwaita",
         "sepia" => "sepia",
         "appanoose" => "appanoose",
         "biblioteca" => "biblioteca",

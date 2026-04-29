@@ -72,8 +72,10 @@ pub struct Theme {
     /// accent_bg_color` / `accent_color` so the GTK chrome (sidebar
     /// selection, focus rings, switches, buttons) visually echoes the
     /// theme of the article pane. Pulled from each NNW stylesheet's
-    /// most distinctive accent.
-    pub accent_hex: &'static str,
+    /// most distinctive accent. `None` means "don't override" — the
+    /// Adwaita theme uses this so GNOME's system accent surfaces
+    /// unchanged through the chrome.
+    pub accent_hex: Option<&'static str>,
 }
 
 /// All eight NNW themes ported in v1.1.0. Name and identifier match NNW's
@@ -81,12 +83,20 @@ pub struct Theme {
 /// `data/themes/<id>/`.
 pub const THEMES: &[Theme] = &[
     Theme {
+        id: "adwaita",
+        display_name: "Adwaita",
+        template: include_str!("../../data/themes/adwaita/template.html"),
+        stylesheet: include_str!("../../data/themes/adwaita/stylesheet.css"),
+        dark: false,
+        accent_hex: None, // surrender to GNOME's system accent
+    },
+    Theme {
         id: "sepia",
         display_name: "Sepia",
         template: include_str!("../../data/themes/sepia/template.html"),
         stylesheet: include_str!("../../data/themes/sepia/stylesheet.css"),
         dark: false,
-        accent_hex: "#7a4d1f", // warm cinnamon — pulled from body text on tan
+        accent_hex: Some("#7a4d1f"), // warm cinnamon — body text on tan
     },
     Theme {
         id: "appanoose",
@@ -94,7 +104,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/appanoose/template.html"),
         stylesheet: include_str!("../../data/themes/appanoose/stylesheet.css"),
         dark: false,
-        accent_hex: "#086aee", // clean web-blue — link color
+        accent_hex: Some("#086aee"), // clean web-blue link color
     },
     Theme {
         id: "biblioteca",
@@ -102,7 +112,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/biblioteca/template.html"),
         stylesheet: include_str!("../../data/themes/biblioteca/stylesheet.css"),
         dark: false,
-        accent_hex: "#1145a5", // deep scholarly blue
+        accent_hex: Some("#1145a5"), // deep scholarly blue
     },
     Theme {
         id: "hyperlegible",
@@ -110,7 +120,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/hyperlegible/template.html"),
         stylesheet: include_str!("../../data/themes/hyperlegible/stylesheet.css"),
         dark: false,
-        accent_hex: "#086aee",
+        accent_hex: Some("#086aee"),
     },
     Theme {
         id: "newsfax",
@@ -118,7 +128,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/newsfax/template.html"),
         stylesheet: include_str!("../../data/themes/newsfax/stylesheet.css"),
         dark: false,
-        accent_hex: "#3a3a3a", // newsprint dark gray; theme is monochrome
+        accent_hex: Some("#3a3a3a"), // newsprint dark gray; monochrome theme
     },
     Theme {
         id: "promenade",
@@ -126,7 +136,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/promenade/template.html"),
         stylesheet: include_str!("../../data/themes/promenade/stylesheet.css"),
         dark: false,
-        accent_hex: "#086aee",
+        accent_hex: Some("#086aee"),
     },
     Theme {
         id: "tiqoe_dark",
@@ -134,7 +144,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/tiqoe_dark/template.html"),
         stylesheet: include_str!("../../data/themes/tiqoe_dark/stylesheet.css"),
         dark: true,
-        accent_hex: "#b08660", // warm tan, visible on dark
+        accent_hex: Some("#b08660"), // warm tan visible on dark
     },
     Theme {
         id: "verdana_revival",
@@ -142,14 +152,16 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/verdana_revival/template.html"),
         stylesheet: include_str!("../../data/themes/verdana_revival/stylesheet.css"),
         dark: false,
-        accent_hex: "#2670c4", // bright slate-blue from headings
+        accent_hex: Some("#2670c4"), // bright slate-blue from headings
     },
 ];
 
 /// Install a CSS provider on the default `gdk::Display` overriding
 /// libadwaita's accent throughout the GTK chrome to match the chosen
 /// article theme. Replaces any prior provider so theme switches are
-/// instant (no app restart).
+/// instant (no app restart). `None` removes the active override
+/// entirely so GNOME's system accent surfaces unchanged — used by
+/// the Adwaita theme to feel like stock GNOME.
 ///
 /// libadwaita 1.7 propagates GNOME's system accent (e.g. the
 /// `org.gnome.desktop.interface accent-color` GSetting) via internal
@@ -162,7 +174,7 @@ pub const THEMES: &[Theme] = &[
 /// `@define-color` redirects are kept for stylesheets that consult the
 /// named-color cascade directly (rare in libadwaita 1.7+ but free
 /// insurance).
-pub fn apply_app_accent(hex: &str) {
+pub fn apply_app_accent(hex: Option<&str>) {
     use std::cell::RefCell;
     thread_local! {
         static ACTIVE_PROVIDER: RefCell<Option<gtk::CssProvider>> = const {
@@ -171,6 +183,16 @@ pub fn apply_app_accent(hex: &str) {
     }
     let Some(display) = gtk::gdk::Display::default() else {
         tracing::warn!("article_renderer: no default Gdk display — accent skipped");
+        return;
+    };
+    // No-override path: pull our active provider so GNOME's system
+    // accent (or whatever the user has set) re-takes the cascade.
+    let Some(hex) = hex else {
+        ACTIVE_PROVIDER.with(|cell| {
+            if let Some(old) = cell.borrow_mut().take() {
+                gtk::style_context_remove_provider_for_display(&display, &old);
+            }
+        });
         return;
     };
     // Beat libadwaita's system-accent integration (which sits at USER
@@ -763,15 +785,21 @@ mod tests {
     }
 
     #[test]
-    fn all_eight_themes_load() {
+    fn all_themes_load() {
         // Compile-time check — if any include_str! fails the build breaks.
         // This just asserts the registry shape didn't drift.
-        assert_eq!(THEMES.len(), 8);
+        assert_eq!(THEMES.len(), 9, "Adwaita + 8 NNW themes");
         for t in THEMES {
             assert!(!t.template.is_empty(), "{}: template empty", t.id);
             assert!(!t.stylesheet.is_empty(), "{}: stylesheet empty", t.id);
         }
         assert_eq!(theme_by_id("sepia").id, "sepia");
-        assert_eq!(theme_by_id("nope").id, "sepia"); // fallback
+        assert_eq!(theme_by_id("adwaita").id, "adwaita");
+        // Adwaita opts out of accent override.
+        assert!(theme_by_id("adwaita").accent_hex.is_none());
+        // Sepia carries an accent.
+        assert!(theme_by_id("sepia").accent_hex.is_some());
+        // Unknown id falls back to first registered theme (Adwaita).
+        assert_eq!(theme_by_id("nope").id, "adwaita");
     }
 }
