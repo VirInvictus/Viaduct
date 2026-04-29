@@ -20,6 +20,12 @@ pub enum SyncDbOp {
     SelectForProcessing(Option<usize>, oneshot::Sender<Result<Vec<SyncStatus>>>),
     DeleteSelectedForProcessing(Vec<String>, oneshot::Sender<Result<()>>),
     ResetAllSelectedForProcessing(oneshot::Sender<Result<()>>),
+    /// v2.6.5: wipe every row in `syncStatus`. The table is only
+    /// touched by remote-sync delegates (Inoreader); when the local
+    /// delegate is active any row here is leftover ghost from a
+    /// previous remote session. Returns count for the cleanup-summary
+    /// log line.
+    WipeAll(oneshot::Sender<Result<usize>>),
 }
 
 pub fn setup_schema(conn: &Connection) -> Result<()> {
@@ -110,6 +116,12 @@ pub fn handle_op(conn: &mut Connection, op: SyncDbOp) {
             let res = conn
                 .execute("UPDATE syncStatus SET selected = 0", [])
                 .map(|_| ())
+                .map_err(Into::into);
+            let _ = reply.send(res);
+        }
+        SyncDbOp::WipeAll(reply) => {
+            let res = conn
+                .execute("DELETE FROM syncStatus", [])
                 .map_err(Into::into);
             let _ = reply.send(res);
         }

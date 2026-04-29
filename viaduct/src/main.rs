@@ -170,6 +170,11 @@ fn build_ui(app: &adw::Application, account: Arc<Account>) {
         .find_map(|w| w.downcast::<ui::window::ViaductWindow>().ok())
     {
         existing.present();
+        // v2.6.3 diagnostics: cancel the hidden-state RSS ticker and
+        // log the re-show snapshot. Must run before the timeline
+        // repopulate so the logged delta is "hidden idle → just
+        // re-shown", not "hidden idle → re-shown + repopulated".
+        existing.unhide_from_background();
         // Repopulate from the still-selected sidebar item so the user
         // lands back on the feed they were reading, plus any articles
         // that arrived while the window was hidden.

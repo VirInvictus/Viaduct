@@ -20,6 +20,14 @@ pub trait AccountDelegate: Send + Sync {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<Vec<crate::models::Feed>>> + Send + '_>,
     >;
+    /// Whether this delegate is the local-only one. Used by v2.6.5
+    /// `cleanup_at_startup` to decide if `syncStatus` rows are by
+    /// definition ghost (yes for local — the table is only used by
+    /// remote-sync delegates, so any row here is leftover from a
+    /// previous Inoreader session).
+    fn is_local(&self) -> bool {
+        false
+    }
 }
 
 pub struct LocalAccountDelegate;
@@ -48,6 +56,10 @@ impl AccountDelegate for LocalAccountDelegate {
     > {
         let path = path.to_path_buf();
         Box::pin(async move { account.import_opml_internal(&path).await })
+    }
+
+    fn is_local(&self) -> bool {
+        true
     }
 }
 

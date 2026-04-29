@@ -53,6 +53,11 @@ mod imp {
         /// preferences — the previous timeout is removed first so we
         /// don't end up with overlapping cycles after a few flips.
         pub periodic_refresh_timeout: RefCell<Option<glib::SourceId>>,
+        /// v2.6.3 background-mode RSS ticker. Armed by
+        /// `hide_for_background`, cancelled by `unhide_from_background`.
+        /// Climbing values across overnight runs = real leak; a stable
+        /// oscillation = benign heap caching.
+        pub hidden_state_ticker: RefCell<Option<glib::SourceId>>,
         /// Whether `refresh_on_startup_if_enabled` has run. Belt-and-
         /// braces guard against the GTK Application activating twice
         /// (single-instance handoff or similar) double-refreshing.
@@ -178,6 +183,7 @@ impl ViaductWindow {
         if crate::is_debug_mode() {
             let debug_section = gio::Menu::new();
             debug_section.append(Some("Crash (Panic)"), Some("win.debug-crash"));
+            debug_section.append(Some("Wipe Disk Caches"), Some("win.debug-clear-caches"));
             window
                 .imp()
                 .sidebar_view
@@ -246,6 +252,50 @@ impl ViaductWindow {
         imp.timeline_view.get().clear();
 
         self.set_visible(false);
+
+        // v2.6.3 diagnostics: snapshot post-clear RSS and arm the
+        // hidden-state ticker. Verifies v1.10.0's "≤ 100 MB hidden"
+        // target and detects the run-in-background memory growth the
+        // user reported (~450 MB peak after a long session).
+        let (rss_mb, peak_mb) = crate::read_memory_mb();
+        tracing::info!(rss_mb, peak_mb, "diag: hide_for_background post-clear");
+        self.arm_hidden_state_ticker();
+    }
+
+    /// Inverse of `hide_for_background`. Called from `main.rs build_ui`
+    /// when GApplication re-activates an existing window (dock-icon
+    /// click, D-Bus activation, tray Show). Cancels the periodic
+    /// hidden-state ticker and logs the re-show RSS so the delta from
+    /// the last hide line shows the re-summon cost.
+    pub fn unhide_from_background(&self) {
+        if let Some(source) = self.imp().hidden_state_ticker.borrow_mut().take() {
+            source.remove();
+        }
+        let (rss_mb, peak_mb) = crate::read_memory_mb();
+        tracing::info!(rss_mb, peak_mb, "diag: reload_current_timeline re-show");
+    }
+
+    /// Arm a 5-minute `glib::timeout_add_seconds_local` that logs
+    /// VmRSS while the window is hidden. No-op when one is already
+    /// armed (defensive: `hide_for_background` running twice without
+    /// a re-show shouldn't double-arm).
+    fn arm_hidden_state_ticker(&self) {
+        const TICK_SECS: u32 = 300;
+        let imp = self.imp();
+        if imp.hidden_state_ticker.borrow().is_some() {
+            return;
+        }
+        let weak = self.downgrade();
+        let source = glib::timeout_add_seconds_local(TICK_SECS, move || {
+            // Stop firing once the window is gone.
+            let Some(_window) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let (rss_mb, peak_mb) = crate::read_memory_mb();
+            tracing::info!(rss_mb, peak_mb, "diag: background tick");
+            glib::ControlFlow::Continue
+        });
+        imp.hidden_state_ticker.borrow_mut().replace(source);
     }
 
     /// Read the current OPML's folder names so the Add Feed dialog can
@@ -339,7 +389,17 @@ impl ViaductWindow {
                         window.refresh_unread_counts();
                     }
                 }
-                Ok(Err(e)) => tracing::warn!(?e, "failed to load OPML at startup"),
+                Ok(Err(e)) => {
+                    tracing::warn!(?e, "failed to load OPML at startup");
+                    // v2.6.5: surface a toast so the user knows feeds
+                    // didn't load. Pre-v2.6.5 the sidebar just sat
+                    // empty and the user had no signal whether the
+                    // OPML was malformed, missing, or just genuinely
+                    // empty (fresh install, no feeds yet).
+                    if let Some(window) = window_weak_for_load.upgrade() {
+                        window.show_toast("Couldn't load local.opml — see log for details.");
+                    }
+                }
                 Err(_) => tracing::warn!("OPML load task aborted"),
             }
         });
@@ -2068,6 +2128,47 @@ impl ViaductWindow {
         panic!("Intentional crash triggered from Debug menu");
     }
 
+    /// v2.6.5: nuke every file in the three `~/.cache/viaduct/`
+    /// subdirs and drop the in-memory LRU. Useful when triaging a
+    /// favicon / image / video-thumb caching bug — restart with a
+    /// guaranteed-empty disk cache without `rm -rf`-ing by hand. Wired
+    /// only when `--debug` is on.
+    pub(crate) fn act_debug_clear_caches(&self) {
+        if let Some(cache) = self.imp().image_cache.get() {
+            cache.clear_memory();
+        }
+        let weak = self.downgrade();
+        let (tx, rx) = tokio::sync::oneshot::channel::<usize>();
+        crate::spawn_on_runtime(async move {
+            let total = tokio::task::spawn_blocking(|| {
+                use crate::network::cache_sweep::wipe_dir;
+                let mut total = 0usize;
+                if let Ok(p) = crate::paths::favicon_cache_dir() {
+                    total += wipe_dir(&p);
+                }
+                if let Ok(p) = crate::paths::image_cache_dir() {
+                    total += wipe_dir(&p);
+                }
+                if let Ok(p) = crate::paths::video_thumb_cache_dir() {
+                    total += wipe_dir(&p);
+                }
+                total
+            })
+            .await
+            .unwrap_or(0);
+            let _ = tx.send(total);
+        });
+        glib::spawn_future_local(async move {
+            let total = rx.await.unwrap_or(0);
+            if let Some(window) = weak.upgrade() {
+                window.show_toast(&format!(
+                    "Wiped {total} cache file{}.",
+                    if total == 1 { "" } else { "s" }
+                ));
+            }
+        });
+    }
+
     fn show_toast(&self, message: &str) {
         let toast = adw::Toast::new(message);
         self.imp().toast_overlay.add_toast(toast);
@@ -2305,6 +2406,17 @@ async fn run_refresh_with_tally(
     force: bool,
 ) -> RefreshTally {
     let feeds_attempted = paired.len();
+    // v2.6.3: pre-cycle peak so the post-cycle line carries a delta.
+    // Climbing values across many cycles point at refresher-side
+    // retention (Arc<Account>, scheme-handler closures, glib cycles).
+    let (rss_before, peak_before) = crate::read_memory_mb();
+    tracing::info!(
+        rss_mb = rss_before,
+        peak_mb = peak_before,
+        feeds_attempted,
+        force,
+        "diag: refresh cycle pre"
+    );
     let (changes_tx, mut changes_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::models::ArticleChanges>();
     let drain = tokio::spawn(async move {
@@ -2325,6 +2437,14 @@ async fn run_refresh_with_tally(
     }
     drop(refresher);
     let per_feed_new = drain.await.unwrap_or_default();
+    let (rss_after, peak_after) = crate::read_memory_mb();
+    tracing::info!(
+        rss_mb = rss_after,
+        peak_mb = peak_after,
+        peak_delta_mb = peak_after.saturating_sub(peak_before),
+        feeds_attempted,
+        "diag: refresh cycle post"
+    );
     RefreshTally {
         feeds_attempted,
         per_feed_new,

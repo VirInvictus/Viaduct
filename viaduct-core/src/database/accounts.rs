@@ -605,6 +605,14 @@ impl Account {
     /// the user no longer subscribes to, sweep stale orphan statuses, then
     /// VACUUM both databases. All four ops are independent and non-fatal —
     /// each logs its own failure rather than aborting the chain.
+    ///
+    /// **v2.6.5** extends the chain with disk-cache sweeps (favicons /
+    /// images / video-thumbs in `$XDG_CACHE_HOME/viaduct/`) and a
+    /// local-only `syncStatus` wipe. The disk-cache sweeps are the only
+    /// fix for the long-tail growth of `~/.cache/viaduct/` across many
+    /// months of use; favicons use a targeted sweep against the live
+    /// `feed_settings` URL set, images and video-thumbs use age-based
+    /// pruning since neither has a clean live-set definition.
     pub async fn cleanup_at_startup(&self, retention_days: i64) -> Result<()> {
         let opml = self.load_opml().await?;
         let valid_urls = opml_feed_urls(&opml);
@@ -654,11 +662,100 @@ impl Account {
             tracing::info!("Cleaned up {} orphan author rows", removed_authors);
         }
 
+        // v2.6.5: disk-cache sweep. Targeted for favicons (we have the
+        // live URL set in `feed_settings`); age-based for images +
+        // video-thumbs (no clean live-set definition; rely on article
+        // retention as a proxy — anything older than the retention
+        // window is for a pruned article).
+        let removed_caches = self.sweep_disk_caches(retention_days).await;
+        if removed_caches > 0 {
+            tracing::info!("Cleaned up {} orphan cache files", removed_caches);
+        }
+
+        // v2.6.5: when running in local-only mode (no Inoreader
+        // credentials), every row in `syncStatus` is leftover ghost
+        // from a previous remote session. Wipe wholesale. When
+        // Inoreader is active, the rows are live state — leave alone.
+        if self.is_local_account() {
+            match self.wipe_sync_statuses().await {
+                Ok(n) if n > 0 => {
+                    tracing::info!("Cleaned up {} orphan syncStatus rows", n)
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(?e, "wipe_sync_statuses failed"),
+            }
+        }
+
         if let Err(e) = self.vacuum_databases().await {
             tracing::warn!(?e, "vacuum_databases failed");
         }
 
         Ok(())
+    }
+
+    /// v2.6.5: walk the three `~/.cache/viaduct/` subdirs and prune
+    /// ghost files. Favicons use the `feed_settings`-derived live set
+    /// (exact, no false positives). Images + video-thumbs use mtime
+    /// against the article retention window — anything older is for
+    /// an article that's been pruned out, so by definition orphan.
+    /// Image threshold is `retention_days × 2` to give a buffer for
+    /// re-bound articles; video-thumbs reuse `retention_days` directly
+    /// (NNW's video-thumbnail TTL is the same).
+    ///
+    /// Returns the total number of files deleted across all three
+    /// dirs. Errors per-file warn and continue; whole-dir errors warn
+    /// and contribute zero to the sum.
+    async fn sweep_disk_caches(&self, retention_days: i64) -> usize {
+        let live_urls = self.collect_favicon_urls().await.unwrap_or_else(|e| {
+            tracing::warn!(?e, "collect_favicon_urls failed; skipping favicon sweep");
+            Vec::new()
+        });
+        let favicon_dir = match crate::paths::favicon_cache_dir() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(?e, "favicon_cache_dir resolution failed");
+                return 0;
+            }
+        };
+        let image_dir = match crate::paths::image_cache_dir() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(?e, "image_cache_dir resolution failed");
+                return 0;
+            }
+        };
+        let video_thumb_dir = match crate::paths::video_thumb_cache_dir() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(?e, "video_thumb_cache_dir resolution failed");
+                return 0;
+            }
+        };
+
+        // I/O happens on a blocking task — std::fs::read_dir +
+        // remove_file are sync, and we don't want to stall the worker.
+        let retention = retention_days.max(1) as u64;
+        tokio::task::spawn_blocking(move || {
+            use crate::network::cache_sweep::{live_filenames_for, sweep_by_age, sweep_targeted};
+            let live_set = live_filenames_for(&live_urls);
+            let removed_favicons = if live_set.is_empty() {
+                // Empty live set means no settings exist yet (fresh
+                // install) or we failed to collect. Don't sweep
+                // wholesale — that would nuke favicons we just fetched
+                // for feeds whose settings haven't persisted yet.
+                0
+            } else {
+                sweep_targeted(&favicon_dir, &live_set)
+            };
+            let removed_images = sweep_by_age(&image_dir, retention.saturating_mul(2));
+            let removed_thumbs = sweep_by_age(&video_thumb_dir, retention);
+            removed_favicons + removed_images + removed_thumbs
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(?e, "sweep_disk_caches join failed");
+            0
+        })
     }
 
     async fn delete_settings_for_feeds_not_in(&self, feed_urls: Vec<String>) -> Result<usize> {
@@ -774,6 +871,43 @@ impl Account {
         let (tx, rx) = oneshot::channel();
         self.sync_tx
             .send(SyncDbOp::ResetAllSelectedForProcessing(tx))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// v2.6.5: returns true when the active delegate is the
+    /// local-only one (no Inoreader credentials at construction time).
+    /// Used by `cleanup_at_startup` to gate the syncStatus wipe.
+    pub fn is_local_account(&self) -> bool {
+        self.delegate.is_local()
+    }
+
+    /// v2.6.5 favicon-sweep helper: returns every non-blank
+    /// `favicon_url` + `icon_url` value from `feed_settings` so the
+    /// cache sweep can compute the live md5 set.
+    pub async fn collect_favicon_urls(&self) -> Result<Vec<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Settings(Box::new(SettingsDbOp::CollectFaviconUrls(
+                tx,
+            ))))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// v2.6.5 sync-sweep helper: drop every row from `syncStatus`.
+    /// Only safe to call from `cleanup_at_startup` when the active
+    /// delegate is the local-only one; otherwise the rows are
+    /// in-flight remote-sync state that the Inoreader delegate
+    /// expects to consume.
+    pub async fn wipe_sync_statuses(&self) -> Result<usize> {
+        let (tx, rx) = oneshot::channel();
+        self.sync_tx
+            .send(SyncDbOp::WipeAll(tx))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

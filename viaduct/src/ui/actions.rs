@@ -90,6 +90,7 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     if crate::is_debug_mode() {
         // Debug
         register(window, "debug-crash", |w| w.act_debug_crash());
+        register(window, "debug-clear-caches", |w| w.act_debug_clear_caches());
     }
 
     // Accelerators. NNW-exact where available; roadmap's additions stacked

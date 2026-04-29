@@ -5,7 +5,9 @@
 // Network layer for fetching feeds and images
 pub mod background;
 pub mod cache;
+pub mod cache_sweep;
 pub mod credentials;
+pub mod favicon_discovery;
 pub mod feed_discovery;
 pub mod fetcher;
 pub mod http;

@@ -1,5 +1,101 @@
 # viaduct — Patch Notes
 
+## v2.6.5 — Ghost-data sweep + missing-file failsafes
+
+A spring-cleaning release. Audited the SQLite stores and disk caches for "ghost information" we were carrying across sessions, audited the file-missing failsafes for the inevitable user `rm -rf ~/.local/share/viaduct/foo`, and surfaced one user-visible failure mode that was previously silent.
+
+### Disk-cache sweep (the actual ghost-data fix)
+
+`~/.cache/viaduct/{favicons,images,video-thumbs}/` had no garbage collection. Files for unsubscribed feeds and pruned articles accumulated forever — after a year of normal use the favicon dir alone could be hundreds of MB of icons for feeds you no longer subscribe to. Two strategies, picked per cache kind:
+
+- **Targeted sweep (favicons)**. New `SettingsDbOp::CollectFaviconUrls` returns every non-blank `favicon_url` + `icon_url` value in `feed_settings`. Hash to the same md5-hex filename `cache::cache_filename` produces, walk `favicons/`, delete files not in the live set. Exact, no false positives.
+- **Age-based sweep (images, video-thumbs)**. There's no clean live set for either — would mean parsing every article's HTML for `<img>` URLs and running `detect_video` over every body. Instead we lean on the fact that article retention is itself age-bounded: anything older than the retention window is for an article that's been pruned out, so by definition orphan. Threshold = `retention_days × 2` for images (buffer for re-bound articles), `retention_days` for video-thumbs.
+
+Both sweeps run from `cleanup_at_startup` after the existing settings/articles/statuses/authors prunes. I/O hops to `tokio::task::spawn_blocking` so the worker thread doesn't stall.
+
+### Sync.sqlite ghost-row sweep
+
+When the active delegate is `LocalAccountDelegate` (no Inoreader credentials), every row in `syncStatus` is leftover state from a previous Inoreader session — the local delegate never reads or writes that table. New `SyncDbOp::WipeAll` plus a `cleanup_at_startup` branch nukes the lot. New `AccountDelegate::is_local()` (default false; LocalAccountDelegate overrides to true) gates the wipe so flipping back to Inoreader doesn't lose live remote-sync state.
+
+### Missing-file failsafes
+
+Audited every "what if the user `rm`s X" path. Most were already graceful — `paths::ensure_dirs()` recreates missing data + cache dirs; `Connection::open` recreates missing SQLite files and `setup_schema` rebuilds tables; `load_opml` returns an empty `OpmlFile` when `local.opml` is missing; the existing `delete_settings_for_feeds_not_in([])` and `delete_articles_not_in_feeds([])` regression-tested early-returns mean an empty OPML doesn't nuke the DBs. The one gap was malformed OPML: `load_opml` errored, the sidebar sat silently empty, and the user had no UI signal anything was wrong. Now surfaces an `adw::Toast` (`window.rs::wire_models` callback): "Couldn't load local.opml — see log for details."
+
+### `--debug` "Wipe Disk Caches" action
+
+New `win.debug-clear-caches` in the Debug submenu. Drops the in-memory `ImageCache` LRU, then `wipe_dir`s all three cache subdirs from a `spawn_blocking` task. Toast reports the file count. Useful when triaging a favicon / image / video-thumb caching bug — restart with a guaranteed-empty disk cache without `rm -rf`-ing by hand.
+
+### Implementation notes
+
+- New module `viaduct-core/src/network/cache_sweep.rs`: `sweep_targeted` (md5 set), `sweep_by_age` (mtime threshold), `wipe_dir` (unconditional), `live_filenames_for` (URL → md5 helper). 8 unit tests covering each function + missing-dir handling + the `live_filenames_for` round-trip with `cache::cache_filename`.
+- `cache::cache_filename` promoted to `pub(crate)` so the sweep module reads from one canonical naming function.
+- `Account::collect_favicon_urls` / `Account::wipe_sync_statuses` / `Account::is_local_account()` added; the cleanup chain calls all three.
+- mtime, not atime, gates the age-based sweep — most filesystems mount with `noatime` or `relatime` so reads don't reliably bump access time. mtime gets rewritten on every cache *write*, which is the operation that matters for "still in active use".
+
+### Test status
+
+23 viaduct + **90** viaduct-core (was 82 — +8 cache_sweep unit tests covering targeted/age/wipe + missing-dir handling + live-set round-trip) + 1 integration = 114 tests pass. fmt + clippy clean.
+
+## v2.6.4 — Favicon discovery + YouTube placeholder filter
+
+Two cosmetic but persistent rough edges fixed in one release.
+
+### Favicon discovery
+
+Pre-v2.6.4, the sidebar favicon path was `settings.favicon_url.or(settings.icon_url)`, both populated only from feed-level XML metadata (`<image><url>` for RSS, `<icon>`/`<logo>` for Atom). Most personal blogs (Sacha Chua, Karthinks, Howardism, public voit, vv's blog, Protesilaos Stavrou…) ship neither, so the sidebar fell back to the `adw::Avatar` initials. Real readers — including NetNewsWire — also probe the home-page HTML head and `<origin>/favicon.ico`. We didn't.
+
+Now we do. New `viaduct-core/src/network/favicon_discovery.rs` ports NNW's `SingleFaviconDownloader` flow:
+
+1. Fetch the home page HTML (capped at 256 KB so we don't pull a multi-MB landing page).
+2. Run `parser::extract_metadata` and pick the best `<link>` candidate: plain `rel="icon"` / `rel="shortcut icon"` first, `rel="apple-touch-icon"` as fallback.
+3. Verify with HEAD; if HEAD 405s (some Cloudflare-fronted feeds do), retry with GET.
+4. If still nothing, fall back to `<origin>/favicon.ico` and verify the same way.
+
+Successful discoveries persist into `FeedSettings.favicon_url`, so the probe runs at most once per feed across the lifetime of the install — subsequent refreshes hit the persisted URL via the existing `ImageCache::favicon` path.
+
+`fetcher.rs::refresh_one_feed` also now persists `parsed.home_page_url` into `new_settings.home_page_url`, which was being dropped on the floor (the parser captures it from `<link>` / Atom alternate but the refresher never wrote it back). Without this, favicon discovery has nothing to probe against; with it, every feed gets a base URL after its first successful refresh post-upgrade.
+
+`Fetcher` gained a `pub fn client(&self) -> Client` accessor so adjacent network work (favicon discovery, future home-link UI) reuses the existing connection pool instead of building a fresh `reqwest::Client`. `reqwest::Client` is cheap to clone — internally an `Arc`.
+
+### YouTube thumbnail placeholder filter
+
+The v1.3.0 timeline thumbnail column was reserving 80×45 of layout for some rows even when no real video was present. Root cause: `detect_video` was matching YouTube URLs in article body text (Michael Tsai's link-roundup posts, HN summaries with embedded YT links, TimminsToday news articles), the fetch against `i.ytimg.com/vi/<id>/hqdefault.jpg` succeeded with HTTP 200, and YouTube returned its **120×90 gray "no thumbnail" placeholder** instead of a real thumb. `from_bytes` decoded the placeholder fine, `set_visible(true)` ran, and the row got a dark 80×45 square.
+
+`spawn_video_thumbnail_fetch` now drops decoded textures whose `width()` is < 200. Real `hqdefault.jpg` is 480×360; the placeholder is exactly 120×90. The picture stays invisible, the column collapses, the row reflows tightly.
+
+### Test status
+
+23 viaduct + **82** viaduct-core (was 73 — added 9 favicon-discovery unit tests covering each `<link>` rel variant + relative-href resolution + ignore-non-icon-links) + 1 integration = 106 tests pass. fmt + clippy clean.
+
+## v2.6.3 — Background-mode memory diagnostics
+
+User report: "Hit ~450 MB peak after a session with run-in-background on; v1.1.0 baseline foreground-only was ~280 MB." Could be a real leak; could be `VmHWM`-monotonic-aggregation across many refresh peaks over a long session. v2.6.3 adds enough logging that the next overnight run answers it definitively.
+
+### What's logged
+
+Five new `tracing::info` lines, all gated on the default `viaduct=info` filter so they surface in normal output (no `--debug` required):
+
+- **`diag: hide_for_background post-clear`** — fires after `ImageCache::clear_memory` + WebView idle + ListStore compact. Verifies v1.10.0's "≤ 100 MB hidden" target still holds.
+- **`diag: reload_current_timeline re-show`** — fires from `unhide_from_background` when GApplication re-activates the existing window (dock icon, D-Bus, tray Show). Delta from the last hide line tells you the re-summon cost.
+- **`diag: refresh cycle pre` / `diag: refresh cycle post`** — wraps `run_refresh_with_tally` (used by manual `Ctrl+R`, post-import refresh, and the v1.8.0 periodic-refresh `glib::timeout`). Post-line carries `peak_delta_mb`. Climbing peak across many cycles = real leak; flat peak = `VmHWM` is just sticky.
+- **`diag: background tick`** — `glib::timeout_add_seconds_local(300)` armed by `hide_for_background`, cancelled by `unhide_from_background`. Logs VmRSS every 5 min while hidden. Climbing line = leak. Oscillating around a stable value = heap caching, benign.
+- **`diag: tray Show` / `diag: tray Quit`** — fires from the `viaduct/src/tray.rs` receive loop on each menu activation.
+
+### How to use
+
+Run viaduct with `RUST_LOG=viaduct=info` (or no env override — `info` is default) for an overnight session in background mode. Grep the log for `diag:` and reconstruct the timeline. Suspects to investigate if a leak is confirmed: ksni's tokio worker + zbus retention, `LocalAccountRefresher` per-cycle `Arc<Account>` retention, `WebContext` scheme-handler closure retention, any new `glib::Object` cycles introduced in v2.x.
+
+### Implementation notes
+
+- New `pub fn read_memory_mb() -> (u64, u64)` on `viaduct-core` (the helper was already there, just private — promoted so the binary crate can call it from anywhere without a roundabout). Re-exported at the `viaduct` crate root.
+- New `imp.hidden_state_ticker: RefCell<Option<glib::SourceId>>` on `ViaductWindow`. Armed in `hide_for_background`, removed in the new `unhide_from_background` method, and self-breaks if the window is already gone.
+- `run_refresh_with_tally` reads VmHWM both before and after the cycle so the post-line carries `peak_delta_mb` directly — no need to correlate two separate log lines.
+- `main.rs build_ui` calls `existing.unhide_from_background()` before `existing.reload_current_timeline()` so the re-show snapshot reflects "just re-presented", not "re-presented + repopulated".
+
+### Test status
+
+23 viaduct + 73 viaduct-core + 1 integration = 97 tests pass. fmt + clippy clean. The new log lines are observation-only — no behaviour change to test against.
+
 ## v2.6.2 — Mark All Read leaves badge stuck at 1 (orphan status rows)
 
 User report: "After hitting mark all as read, the All Unread stays with a 1 in the badge." Investigation found the same count-vs-fetch-disagreement bug pattern v2.6.1 fixed for Today, but in a different location.

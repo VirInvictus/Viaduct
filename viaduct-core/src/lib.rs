@@ -69,7 +69,10 @@ pub fn spawn_debug_memory_ticker() {
     });
 }
 
-fn read_memory_mb() -> (u64, u64) {
+/// Read VmRSS + VmHWM from `/proc/self/status`, both in MB. Returns
+/// `(0, 0)` if the file can't be read (non-Linux test sandboxes, etc.) so
+/// callers can log unconditionally without branching on `Option`.
+pub fn read_memory_mb() -> (u64, u64) {
     let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
         return (0, 0);
     };

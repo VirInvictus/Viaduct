@@ -227,7 +227,7 @@ async fn download(client: &Client, url: &str) -> Option<Vec<u8>> {
     }
 }
 
-fn cache_filename(url: &str) -> String {
+pub(crate) fn cache_filename(url: &str) -> String {
     let mut h = Md5::new();
     h.update(url.as_bytes());
     format!("{:x}", h.finalize())

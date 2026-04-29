@@ -59,6 +59,13 @@ impl Fetcher {
         }
     }
 
+    /// Borrow the underlying `reqwest::Client` so adjacent network work
+    /// (favicon discovery, feed_discovery) can share the connection
+    /// pool. `reqwest::Client` is cheap to clone — internally an `Arc`.
+    pub fn client(&self) -> Client {
+        self.client.clone()
+    }
+
     pub async fn fetch(
         &self,
         url: &str,
@@ -532,6 +539,31 @@ async fn refresh_one_feed(
                     // favicon fetch uses `icon_url` first.
                     if parsed.icon_url.is_some() {
                         new_settings.icon_url = parsed.icon_url.clone();
+                    }
+                    // Persist the home-page URL so favicon discovery
+                    // (and any future home-link UI) has a base to work
+                    // from. Was being dropped on the floor pre-v2.6.4.
+                    if parsed.home_page_url.is_some() {
+                        new_settings.home_page_url = parsed.home_page_url.clone();
+                    }
+                    // v2.6.4: most personal blogs don't ship a feed-level
+                    // `<image>` / `<icon>`, so `parsed.icon_url` stays
+                    // None and the sidebar shows the AdwAvatar fallback.
+                    // Probe the home page HTML head for `<link rel="icon">`
+                    // and fall back to `<origin>/favicon.ico`. Only runs
+                    // when we don't already have a favicon — successful
+                    // discoveries persist into `favicon_url`, so the
+                    // probe is at most once per feed across the lifetime
+                    // of the install.
+                    if new_settings.favicon_url.is_none()
+                        && let Some(home) = new_settings.home_page_url.as_deref()
+                        && let Some(found) = crate::network::favicon_discovery::discover_favicon(
+                            &fetcher.client,
+                            home,
+                        )
+                        .await
+                    {
+                        new_settings.favicon_url = Some(found);
                     }
                     match account
                         .update_feed(feed.id.clone(), parsed.items, true, retention_days)

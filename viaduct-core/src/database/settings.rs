@@ -16,6 +16,11 @@ pub enum SettingsDbOp {
     /// Run `VACUUM`. NNW vacuums the FeedSettingsDatabase on every init
     /// (`FeedSettingsDatabase.swift:67`); we do the same once per startup.
     Vacuum(oneshot::Sender<Result<()>>),
+    /// v2.6.5 favicon disk-cache sweep helper. Returns every non-null
+    /// `favicon_url` + `icon_url` value from `feed_settings` so the
+    /// caller can hash to the md5 set the targeted-sweep expects.
+    /// Empty / blank URLs are filtered out at the SQL layer.
+    CollectFaviconUrls(oneshot::Sender<Result<Vec<String>>>),
 }
 
 pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
@@ -74,7 +79,24 @@ pub(crate) fn handle_op(conn: &mut Connection, op: SettingsDbOp) {
             let res = vacuum(conn);
             let _ = tx.send(res);
         }
+        SettingsDbOp::CollectFaviconUrls(tx) => {
+            let res = collect_favicon_urls(conn);
+            let _ = tx.send(res);
+        }
     }
+}
+
+fn collect_favicon_urls(conn: &mut Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT favicon_url FROM feed_settings WHERE favicon_url IS NOT NULL AND favicon_url <> ''
+         UNION
+         SELECT icon_url FROM feed_settings WHERE icon_url IS NOT NULL AND icon_url <> ''",
+    )?;
+    let urls: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(urls)
 }
 
 fn vacuum(conn: &mut Connection) -> Result<()> {

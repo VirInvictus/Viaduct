@@ -13,7 +13,7 @@
 
 pub use viaduct_core::{
     block_on_runtime, database, error, init_runtime, is_debug_mode, models, network, parser, paths,
-    set_debug_mode, spawn_debug_memory_ticker, spawn_on_runtime,
+    read_memory_mb, set_debug_mode, spawn_debug_memory_ticker, spawn_on_runtime,
 };
 
 pub mod fonts;

@@ -146,6 +146,10 @@ async fn receive_loop(
     while let Some(action) = rx.recv().await {
         match action {
             TrayAction::Show => {
+                // v2.6.3: log RSS at the tray re-summon path so the
+                // overnight diagnostic timeline shows tray activations.
+                let (rss_mb, peak_mb) = crate::read_memory_mb();
+                tracing::info!(rss_mb, peak_mb, "diag: tray Show");
                 // Same path the dock-icon click takes (Phase 17 D-Bus
                 // re-summon). build_ui will find the existing window
                 // and `present()` it, or build a new one if the user
@@ -153,6 +157,11 @@ async fn receive_loop(
                 app.activate();
             }
             TrayAction::Quit => {
+                // v2.6.3: terminal RSS snapshot (the at-exit summary in
+                // main.rs reports VmHWM; this captures the live VmRSS
+                // at the user-visible click moment).
+                let (rss_mb, peak_mb) = crate::read_memory_mb();
+                tracing::info!(rss_mb, peak_mb, "diag: tray Quit");
                 // gio::Application::quit() ends the main loop without
                 // firing connect_close_request, so the run-in-background
                 // hide-instead-of-quit branch is bypassed cleanly.

@@ -632,6 +632,15 @@ fn spawn_video_thumbnail_fetch(article: &Article, picture: &gtk::Picture, cache:
             let glib_bytes = glib::Bytes::from_owned(bytes);
             match gtk::gdk::Texture::from_bytes(&glib_bytes) {
                 Ok(texture) => {
+                    // Skip YouTube's 120×90 "no thumbnail" placeholder.
+                    // Real `hqdefault.jpg` is 480×360; the placeholder
+                    // is exactly 120×90 and gets returned for invalid /
+                    // removed video IDs (or ones we mis-extracted from
+                    // article body text). Keeping the picture invisible
+                    // collapses the column so the row reflows tightly.
+                    if texture.width() < 200 {
+                        return;
+                    }
                     picture.set_paintable(Some(&texture));
                     picture.set_visible(true);
                 }
