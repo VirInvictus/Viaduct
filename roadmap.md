@@ -169,7 +169,7 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Capture RSS channel `<image><url>` as the feed-level icon URL; refresher persists into `FeedSettings.icon_url`. *(in_channel_image state in `parse_rss`, `fetcher.rs::refresh_one_feed` persists `parsed.icon_url`)*
 - [x] Capture Atom `<icon>` and `<logo>` (icon wins over logo per NNW). *(in `parse_atom`, prefer `icon_url.or(logo_url)`)*
 - [x] Capture RSS `<language>` and Atom `<feed xml:lang>` into `ParsedFeed.language`. Stored on the parsed feed; reading-pane direction-tagging deferred (no v1.0 user need yet).
-- [ ] Atom `type="xhtml"` `<content>` and `<summary>` currently parse as plain text. NNW uses `XMLSAXParser.captureRawInnerContent` to hand back the raw inner bytes; `quick-xml` has no direct analog. Options: (a) accept degraded fidelity, (b) detect `type="xhtml"` at Start and buffer raw input until matching End, (c) switch to `html5ever` for those subtrees.
+- [x] Atom `type="xhtml"` `<content>` and `<summary>` raw inner HTML capture. *(option (b) from the original list — `capture_atom_xhtml_inner` in `parser/xml.rs` re-serializes the inner XML via `quick_xml::Writer`, scoping `trim_text(false)` around the capture so inline whitespace is preserved. Includes the spec-required `<div xmlns="http://www.w3.org/1999/xhtml">` wrapper, which renders fine through ammonia. NNW's `captureRawInnerContent` parity.)*
 
 ## Phase 12: OPML Import & Export
 

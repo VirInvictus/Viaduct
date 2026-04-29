@@ -615,6 +615,68 @@ impl MutableAuthor {
     }
 }
 
+/// Atom `<content type="xhtml">` / `<summary type="xhtml">`: capture the raw
+/// inner XML between the tags (including the spec-required `<div xmlns="…">`
+/// wrapper) and re-serialize it as a string so it rides the same render
+/// pipeline as `type="html"` payloads. Port of NNW's
+/// `XMLSAXParser.captureRawInnerContent`. Returns the inner string on the
+/// matching `End`, or `None` on EOF/parse error.
+fn capture_atom_xhtml_inner<R: std::io::BufRead>(reader: &mut Reader<R>) -> Option<String> {
+    let mut out: Vec<u8> = Vec::with_capacity(256);
+    let mut writer = quick_xml::Writer::new(&mut out);
+    let mut buf = Vec::new();
+    let mut depth: i32 = 1;
+    // The outer parser uses trim_text(true) so titles / IDs come back clean.
+    // For xhtml capture we need raw whitespace preserved or "foo <em>bar</em>"
+    // collapses to "foo<em>bar</em>". Flip it off, capture, restore.
+    reader.config_mut().trim_text(false);
+    let result = loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                let _ = writer.write_event(Event::Start(e));
+            }
+            Ok(Event::End(e)) => {
+                depth -= 1;
+                if depth == 0 {
+                    break Some(String::from_utf8_lossy(&out).into_owned());
+                }
+                let _ = writer.write_event(Event::End(e));
+            }
+            Ok(Event::Empty(e)) => {
+                let _ = writer.write_event(Event::Empty(e));
+            }
+            Ok(Event::Text(e)) => {
+                let _ = writer.write_event(Event::Text(e));
+            }
+            Ok(Event::CData(e)) => {
+                let _ = writer.write_event(Event::CData(e));
+            }
+            Ok(Event::Comment(e)) => {
+                let _ = writer.write_event(Event::Comment(e));
+            }
+            Ok(Event::Eof) | Err(_) => break None,
+            _ => (),
+        }
+    };
+    reader.config_mut().trim_text(true);
+    result
+}
+
+/// Returns true when an Atom Start tag carries `type="xhtml"`.
+fn atom_type_is_xhtml(e: &quick_xml::events::BytesStart) -> bool {
+    for attr in e.attributes().filter_map(|a| a.ok()) {
+        if attr.key.as_ref() == b"type"
+            && let Ok(val) = str::from_utf8(attr.value.as_ref())
+            && val.eq_ignore_ascii_case("xhtml")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
     let mut reader = Reader::from_reader(data);
     reader.config_mut().trim_text(true);
@@ -678,6 +740,22 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                     current_item_attachments.clear();
                 } else if name_ref == b"source" && in_item {
                     in_source = true;
+                } else if in_item
+                    && !in_source
+                    && (name_ref == b"content" || name_ref == b"summary")
+                    && atom_type_is_xhtml(e)
+                {
+                    // type="xhtml" payloads contain inline XML (per RFC 4287,
+                    // wrapped in a single <div xmlns="...">). Capture the raw
+                    // inner XML and feed it to the renderer as HTML. Without
+                    // this branch quick-xml hands us only the bare text nodes,
+                    // which loses every tag.
+                    if let Some(inner) = capture_atom_xhtml_inner(&mut reader)
+                        && current_item_body.is_none()
+                    {
+                        current_item_body = Some(inner);
+                    }
+                    current_tag.clear();
                 } else if name_ref == b"author" {
                     in_author = true;
                     current_author = Some(MutableAuthor::default());
@@ -1038,6 +1116,54 @@ mod tests {
         let feed = parse_atom(xml, "https://example.com/feed").unwrap();
         assert_eq!(feed.items.len(), 1);
         assert_eq!(feed.items[0].title.as_deref(), Some("Real Title"));
+    }
+
+    #[test]
+    fn atom_xhtml_content_captures_inline_html() {
+        // Atom RFC 4287 says type="xhtml" payloads contain a single <div>
+        // wrapper in the XHTML namespace. Without raw-inner capture we would
+        // see only the bare text nodes ("Hello bar") and lose every tag.
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Site</title>
+  <entry>
+    <id>1</id>
+    <title>Post</title>
+    <updated>2024-01-01T00:00:00Z</updated>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>Hello <em>bar</em>.</p><p>Second.</p></div></content>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        assert_eq!(feed.items.len(), 1);
+        let body = feed.items[0].content_html.as_deref().unwrap_or("");
+        assert!(body.contains("<p>Hello "), "missing <p> tag: {body}");
+        assert!(body.contains("<em>bar</em>"), "missing <em>: {body}");
+        assert!(
+            body.contains("<p>Second."),
+            "missing second paragraph: {body}"
+        );
+    }
+
+    #[test]
+    fn atom_xhtml_summary_used_when_content_absent() {
+        // Falls back to <summary type="xhtml"> when no <content> tag is
+        // present, matching our existing summary-as-body rule for type="text".
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Site</title>
+  <entry>
+    <id>2</id>
+    <title>Post</title>
+    <updated>2024-01-01T00:00:00Z</updated>
+    <summary type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><strong>Inline</strong> summary.</div></summary>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        let body = feed.items[0].content_html.as_deref().unwrap_or("");
+        assert!(
+            body.contains("<strong>Inline</strong>"),
+            "lost xhtml: {body}"
+        );
     }
 
     #[test]

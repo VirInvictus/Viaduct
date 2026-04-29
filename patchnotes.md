@@ -1,5 +1,16 @@
 # viaduct — Patch Notes
 
+## v1.0.4 — Atom `type="xhtml"` Raw Inner HTML Capture
+
+Closes the last unchecked item under Phase 11 "Parser fidelity follow-ups". Atom feeds that publish their content as inline XHTML (per RFC 4287, wrapped in a single `<div xmlns="http://www.w3.org/1999/xhtml">…</div>`) now render with structure intact instead of collapsing to bare text nodes.
+
+- **`capture_atom_xhtml_inner`** in `src/parser/xml.rs` re-serializes the inner XML between `<content type="xhtml">` (or `<summary type="xhtml">`) and the matching close tag via `quick_xml::Writer`. Tracks element depth to handle the nested `<div>` wrapper plus arbitrary inline structure.
+- **`trim_text(false)` scoped around the capture** so inline whitespace survives — without this, `Hello <em>bar</em>` collapses to `Hello<em>bar</em>` because the parent parser uses `trim_text(true)` for clean titles/IDs/dates. Restored to `true` after the capture finishes.
+- **Detection**: a new `atom_type_is_xhtml` helper checks the Start tag's `type` attribute case-insensitively (matches NNW). Only fires when `in_item && !in_source && (name == "content" || name == "summary")`.
+- **Body precedence**: matches existing summary-as-body fallback — the first non-empty body wins, so `<content>` beats `<summary>` when both are present.
+- **NNW deviation logged**: NNW uses `XMLSAXParser.captureRawInnerContent` (a libxml2 SAX hook). Our `quick_xml::Writer` round-trip is functionally equivalent but produces structurally clean XML (canonicalized attribute quoting, etc.) rather than byte-perfect raw bytes. Acceptable since the result feeds through `ammonia` and the renderer.
+- **Tests**: 2 new regression tests in `parser::xml::tests` — `atom_xhtml_content_captures_inline_html` (multi-paragraph + `<em>`), `atom_xhtml_summary_used_when_content_absent` (summary fallback). 37 passing total (was 35).
+
 ## v1.0.3 — CI Hygiene
 
 CI was red on `main` — `cargo clippy --all-targets -- -D warnings` had 13 standing errors and `cargo fmt --check` flagged trailing whitespace. Both blockers cleared so future feature commits land on a green baseline.
