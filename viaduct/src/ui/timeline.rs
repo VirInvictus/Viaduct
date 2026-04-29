@@ -525,33 +525,48 @@ fn decode_common_entities(s: &str) -> String {
 /// `ImageCache`. The widget's `name` carries the article_id as a stale-row
 /// guard — when the row gets recycled to a different article before the
 /// thumbnail finishes downloading, we skip applying the texture.
+///
+/// IMPORTANT (v1.5.6): every reqwest call goes through `spawn_on_runtime`
+/// so DNS resolution lands on the tokio reactor. The previous version
+/// called `thumbnail_url(&client, …)` directly inside
+/// `glib::spawn_future_local`; for the Vimeo path that triggered
+/// `client.get(oembed_url).send().await` from the GLib executor, panicking
+/// with "there is no reactor running, must be called from the context of
+/// a Tokio 1.x runtime". The panic cascaded into a frozen
+/// AdwNavigationSplitView whenever a Vimeo-bearing article got bound while
+/// the window was in collapsed adaptive layout.
 fn spawn_video_thumbnail_fetch(article: &Article, picture: &gtk::Picture, cache: Arc<ImageCache>) {
     let Some(source) = detect_video(article) else {
         return;
     };
     let expected_id = article.article_id.clone();
     let picture_weak = picture.downgrade();
-    glib::spawn_future_local(async move {
-        let bytes_opt = match source {
+
+    // All reqwest work happens on the tokio runtime; the resolved bytes
+    // come back to the GTK thread via oneshot for `GdkTexture::from_bytes`.
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<Vec<u8>>>();
+    let cache_for_runtime = cache.clone();
+    crate::spawn_on_runtime(async move {
+        let bytes = match source {
             VideoSource::YouTube { id } => {
-                cache
+                cache_for_runtime
                     .video_thumbnail(&crate::network::video_thumbs::youtube_thumbnail_url(&id))
                     .await
             }
-            VideoSource::Vimeo { id } => {
-                let client = cache.client().await;
-                let url_opt = crate::network::video_thumbs::thumbnail_url(
-                    &client,
-                    &VideoSource::Vimeo { id },
-                )
-                .await;
+            VideoSource::Vimeo { .. } => {
+                let client = cache_for_runtime.client().await;
+                let url_opt = crate::network::video_thumbs::thumbnail_url(&client, &source).await;
                 match url_opt {
-                    Some(u) => cache.video_thumbnail(&u).await,
+                    Some(u) => cache_for_runtime.video_thumbnail(&u).await,
                     None => None,
                 }
             }
         };
-        let Some(bytes) = bytes_opt else { return };
+        let _ = tx.send(bytes);
+    });
+
+    glib::spawn_future_local(async move {
+        let Ok(Some(bytes)) = rx.await else { return };
         let Some(picture) = picture_weak.upgrade() else {
             return;
         };

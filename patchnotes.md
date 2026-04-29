@@ -1,5 +1,60 @@
 # viaduct — Patch Notes
 
+## v1.5.6 — Vimeo thumbnail panic fix (and the AdwNavigationSplitView freeze it caused)
+
+**Critical fix.** v1.3.0 introduced a tokio-reactor regression in the Vimeo path of `spawn_video_thumbnail_fetch`, but it stayed dormant because most users have YouTube-heavy timelines. Brandon hit it testing the v1.5.5 adaptive layout on a Vimeo-bearing article and the app froze.
+
+### What was happening
+
+`spawn_video_thumbnail_fetch` runs inside `glib::spawn_future_local` (it has to — it touches `gtk::Picture`). For YouTube articles the code only does string formatting, all good. For Vimeo articles, it called:
+
+```rust
+let client = cache.client().await;
+let url_opt = video_thumbs::thumbnail_url(&client, &source).await;
+```
+
+…where `thumbnail_url` for Vimeo internally calls `client.get(oembed_url).send().await`. **That triggers DNS resolution, which `hyper-util` performs with the assumption that a Tokio reactor is running on the current thread.** GLib's `MainContext` executor isn't a Tokio reactor, so `dns.rs:119` panics with "there is no reactor running, must be called from the context of a Tokio 1.x runtime."
+
+The CLAUDE.md gotchas section warns about exactly this pattern. I missed it when porting v1.3.0's video thumbnail code; the YouTube branch ran clean and I shipped without testing the Vimeo branch on a real Vimeo article.
+
+### Why the freeze
+
+The panic itself doesn't crash the process — `glib::spawn_future_local` swallows panics from individual futures. But the panic leaves the *future* in a poisoned state: cancelled mid-await, with the `tokio::sync::oneshot::Sender` it owns dropped without sending. Any `AdwNavigationSplitView` animation or back-button handler that ended up awaiting on the same task graph stalled forever waiting for a result that wasn't coming. From the user's perspective the app froze on back-navigation right after viewing a Vimeo article.
+
+### Fix
+
+Rewrote `spawn_video_thumbnail_fetch` to do **all reqwest work inside `crate::spawn_on_runtime`** and ferry the resolved bytes back to the GTK thread via `tokio::sync::oneshot`. Same pattern used by `viaduct-img://`'s scheme handler and `ImageCache::favicon`/`image`/`video_thumbnail`. The GLib-side future just awaits the channel and decodes the texture — no reqwest call ever runs on the GLib executor.
+
+```rust
+// v1.5.6 (correct):
+let (tx, rx) = oneshot::channel::<Option<Vec<u8>>>();
+crate::spawn_on_runtime(async move {
+    // every reqwest call lives inside this block
+    let bytes = match source { ... };
+    let _ = tx.send(bytes);
+});
+glib::spawn_future_local(async move {
+    let Ok(Some(bytes)) = rx.await else { return };
+    // texture decode + assignment, GTK-thread only
+});
+```
+
+### Audit
+
+Swept every other `glib::spawn_future_local` block in the workspace for stray `reqwest` / `client.send()` / `.bytes().await` / `.json()` calls. None found. The Vimeo path was the lone offender. The viaduct-img URI scheme handler, the favicon fetch, the OPML load, the timeline-fetch, the article-render, the Reader View extraction kick-off — all correctly hop to the tokio runtime before doing any I/O.
+
+### Lag
+
+Brandon also reported the adaptive layout was laggy. That's almost certainly cascading from the same panic — every Vimeo article binding queued a panicking task, and the GLib loop spent extra time unwinding cancelled futures between frames. With the panic gone, the lag should resolve. If lag persists at the breakpoint transition itself (the AdwBreakpoint animation), that's libadwaita's transition cost, not us.
+
+### Test status
+
+74 unit + 1 integration tests passing. fmt + clippy clean. The video-thumbnail logic was already covered by the v1.3.0 unit tests for URL detection; the I/O path itself is integration-tested through a live request.
+
+### Lesson
+
+CLAUDE.md gotchas section is right in the open about this exact pattern. I read past it when porting Vimeo support. Pre-flight check before shipping any future that does I/O: *is the I/O happening inside a `glib::spawn_future_local`? If yes, route through `spawn_on_runtime` + oneshot.* No exceptions.
+
 ## v1.5.5 — Selected-row contrast + adaptive navigation push
 
 Two real bugs Brandon caught at the running app, both significant.
