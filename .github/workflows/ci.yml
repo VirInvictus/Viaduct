@@ -16,12 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GTK4 / libadwaita
+      - name: Install GTK4 / libadwaita / WebKitGTK
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-4-dev \
             libadwaita-1-dev \
+            libwebkitgtk-6.0-dev \
             libsqlite3-dev \
             pkg-config
 
@@ -36,7 +37,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test
-        run: cargo test --all
+        run: cargo test --workspace

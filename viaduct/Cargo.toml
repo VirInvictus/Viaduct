@@ -1,0 +1,31 @@
+[package]
+name = "viaduct"
+description = "A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+default-run = "viaduct"
+
+[dependencies]
+viaduct-core = { path = "../viaduct-core" }
+gtk.workspace = true
+adw.workspace = true
+webkit6.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ammonia.workspace = true
+crossbeam-channel.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+chrono.workspace = true
+md-5.workspace = true
+lru.workspace = true
+readability.workspace = true
+oo7.workspace = true
+ashpd.workspace = true

@@ -2,10 +2,16 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-//! viaduct library root. The binary (`src/main.rs`) is a thin wrapper that
-//! spins up tracing + tokio + the GTK application; everything else lives here
-//! so auxiliary binaries (profiling harnesses, future CLI tools) can share
-//! the same modules.
+//! viaduct-core: headless library crate housing every non-GUI module.
+//! Database, network, parser, models, error types, XDG path helpers, and
+//! the global tokio runtime + debug-mode toggles all live here.
+//!
+//! The GTK / libadwaita / WebKit binary lives in the sibling `viaduct`
+//! crate which depends on this one. The split (introduced in v1.5.0)
+//! enforces architectural boundaries by making it a *compile error* to
+//! reach into GTK from data / network / parser code, rather than relying
+//! on review discipline. It also lets profiling harnesses (`mem_check`)
+//! and future headless CLIs share the same code paths.
 
 pub mod database;
 pub mod error;
@@ -13,8 +19,6 @@ pub mod models;
 pub mod network;
 pub mod parser;
 pub mod paths;
-pub mod preferences;
-pub mod ui;
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};

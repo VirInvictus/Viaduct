@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt};
 use viaduct::database::accounts::Account;
-use viaduct::{database, paths, ui};
+use viaduct::{database, fonts, paths, ui};
 
 fn main() -> glib::ExitCode {
     init_tracing();
@@ -28,6 +28,12 @@ fn main() -> glib::ExitCode {
     if let Err(err) = paths::ensure_dirs() {
         error!(?err, "failed to create XDG directories; aborting");
         return glib::ExitCode::FAILURE;
+    }
+    if let Err(err) = fonts::install_bundled() {
+        // Font install is best-effort — log but don't abort. Themes will
+        // still render (browser falls back to system fonts when the bundled
+        // ones aren't installed).
+        tracing::warn!(?err, "failed to install bundled fonts");
     }
 
     info!(version = env!("CARGO_PKG_VERSION"), "Starting viaduct");
@@ -128,7 +134,13 @@ fn ensure_schema_dir() {
         return;
     }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let schema_dir = std::path::Path::new(manifest_dir).join("data");
+    // After v1.5.0's workspace split, the binary crate sits at
+    // `viaduct/` and the schema source still lives at the repo root's
+    // `data/`. Walk one level up to reach it in dev builds.
+    let schema_dir = std::path::Path::new(manifest_dir)
+        .parent()
+        .map(|p| p.join("data"))
+        .unwrap_or_else(|| std::path::Path::new(manifest_dir).join("data"));
     if schema_dir.join("gschemas.compiled").exists() {
         // SAFETY: called before tokio runtime / gio init / threads spawn.
         unsafe {

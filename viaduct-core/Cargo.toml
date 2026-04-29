@@ -1,0 +1,26 @@
+[package]
+name = "viaduct-core"
+description = "Headless core (database, network, parser, models) for the viaduct RSS reader."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+tokio.workspace = true
+rusqlite.workspace = true
+reqwest.workspace = true
+quick-xml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ammonia.workspace = true
+crossbeam-channel.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
+chrono.workspace = true
+md-5.workspace = true
+lru.workspace = true
+oo7.workspace = true
+ashpd.workspace = true

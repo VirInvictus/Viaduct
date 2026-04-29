@@ -47,7 +47,7 @@ use webkit6::prelude::*;
 
 /// Outer wrapper template — port of `.netnewswire/Mac/MainWindow/Detail/page.html`.
 /// Substitutions: `[[title]]`, `[[style]]`, `[[baseURL]]`, `[[body]]`.
-const PAGE_HTML: &str = include_str!("../../data/themes/page.html");
+const PAGE_HTML: &str = include_str!("../../../data/themes/page.html");
 
 /// CSS appended after every theme stylesheet so the WebKitWebView in the
 /// article pane behaves correctly inside the GtkOverlay container that
@@ -124,8 +124,8 @@ pub const THEMES: &[Theme] = &[
     Theme {
         id: "adwaita",
         display_name: "Adwaita",
-        template: include_str!("../../data/themes/adwaita/template.html"),
-        stylesheet: include_str!("../../data/themes/adwaita/stylesheet.css"),
+        template: include_str!("../../../data/themes/adwaita/template.html"),
+        stylesheet: include_str!("../../../data/themes/adwaita/stylesheet.css"),
         dark: false,
         accent_hex: None,
         dark_overlay: None, // Adwaita stylesheet has prefers-color-scheme baked in
@@ -133,62 +133,62 @@ pub const THEMES: &[Theme] = &[
     Theme {
         id: "sepia",
         display_name: "Sepia",
-        template: include_str!("../../data/themes/sepia/template.html"),
-        stylesheet: include_str!("../../data/themes/sepia/stylesheet.css"),
+        template: include_str!("../../../data/themes/sepia/template.html"),
+        stylesheet: include_str!("../../../data/themes/sepia/stylesheet.css"),
         dark: false,
         accent_hex: Some("#7a4d1f"),
-        dark_overlay: Some(include_str!("../../data/themes/sepia/dark.css")),
+        dark_overlay: Some(include_str!("../../../data/themes/sepia/dark.css")),
     },
     Theme {
         id: "appanoose",
         display_name: "Appanoose",
-        template: include_str!("../../data/themes/appanoose/template.html"),
-        stylesheet: include_str!("../../data/themes/appanoose/stylesheet.css"),
+        template: include_str!("../../../data/themes/appanoose/template.html"),
+        stylesheet: include_str!("../../../data/themes/appanoose/stylesheet.css"),
         dark: false,
         accent_hex: Some("#086aee"),
-        dark_overlay: Some(include_str!("../../data/themes/appanoose/dark.css")),
+        dark_overlay: Some(include_str!("../../../data/themes/appanoose/dark.css")),
     },
     Theme {
         id: "biblioteca",
         display_name: "Biblioteca",
-        template: include_str!("../../data/themes/biblioteca/template.html"),
-        stylesheet: include_str!("../../data/themes/biblioteca/stylesheet.css"),
+        template: include_str!("../../../data/themes/biblioteca/template.html"),
+        stylesheet: include_str!("../../../data/themes/biblioteca/stylesheet.css"),
         dark: false,
         accent_hex: Some("#1145a5"),
-        dark_overlay: Some(include_str!("../../data/themes/biblioteca/dark.css")),
+        dark_overlay: Some(include_str!("../../../data/themes/biblioteca/dark.css")),
     },
     Theme {
         id: "hyperlegible",
         display_name: "Hyperlegible",
-        template: include_str!("../../data/themes/hyperlegible/template.html"),
-        stylesheet: include_str!("../../data/themes/hyperlegible/stylesheet.css"),
+        template: include_str!("../../../data/themes/hyperlegible/template.html"),
+        stylesheet: include_str!("../../../data/themes/hyperlegible/stylesheet.css"),
         dark: false,
         accent_hex: Some("#086aee"),
-        dark_overlay: Some(include_str!("../../data/themes/hyperlegible/dark.css")),
+        dark_overlay: Some(include_str!("../../../data/themes/hyperlegible/dark.css")),
     },
     Theme {
         id: "newsfax",
         display_name: "NewsFax",
-        template: include_str!("../../data/themes/newsfax/template.html"),
-        stylesheet: include_str!("../../data/themes/newsfax/stylesheet.css"),
+        template: include_str!("../../../data/themes/newsfax/template.html"),
+        stylesheet: include_str!("../../../data/themes/newsfax/stylesheet.css"),
         dark: false,
         accent_hex: Some("#3a3a3a"),
-        dark_overlay: Some(include_str!("../../data/themes/newsfax/dark.css")),
+        dark_overlay: Some(include_str!("../../../data/themes/newsfax/dark.css")),
     },
     Theme {
         id: "promenade",
         display_name: "Promenade",
-        template: include_str!("../../data/themes/promenade/template.html"),
-        stylesheet: include_str!("../../data/themes/promenade/stylesheet.css"),
+        template: include_str!("../../../data/themes/promenade/template.html"),
+        stylesheet: include_str!("../../../data/themes/promenade/stylesheet.css"),
         dark: false,
         accent_hex: Some("#086aee"),
-        dark_overlay: Some(include_str!("../../data/themes/promenade/dark.css")),
+        dark_overlay: Some(include_str!("../../../data/themes/promenade/dark.css")),
     },
     Theme {
         id: "tiqoe_dark",
         display_name: "Tiqoe Dark",
-        template: include_str!("../../data/themes/tiqoe_dark/template.html"),
-        stylesheet: include_str!("../../data/themes/tiqoe_dark/stylesheet.css"),
+        template: include_str!("../../../data/themes/tiqoe_dark/template.html"),
+        stylesheet: include_str!("../../../data/themes/tiqoe_dark/stylesheet.css"),
         dark: true,
         accent_hex: Some("#b08660"),
         dark_overlay: None, // already dark
@@ -196,11 +196,13 @@ pub const THEMES: &[Theme] = &[
     Theme {
         id: "verdana_revival",
         display_name: "Verdana Revival",
-        template: include_str!("../../data/themes/verdana_revival/template.html"),
-        stylesheet: include_str!("../../data/themes/verdana_revival/stylesheet.css"),
+        template: include_str!("../../../data/themes/verdana_revival/template.html"),
+        stylesheet: include_str!("../../../data/themes/verdana_revival/stylesheet.css"),
         dark: false,
         accent_hex: Some("#2670c4"),
-        dark_overlay: Some(include_str!("../../data/themes/verdana_revival/dark.css")),
+        dark_overlay: Some(include_str!(
+            "../../../data/themes/verdana_revival/dark.css"
+        )),
     },
 ];
 
@@ -606,22 +608,24 @@ const BUNDLED_FONTS: &[FontEntry] = &[
     FontEntry {
         family: "atkinson",
         variant: "regular",
-        bytes: include_bytes!("../../data/fonts/atkinson/AtkinsonHyperlegibleNext-Regular.ttf"),
+        bytes: include_bytes!("../../../data/fonts/atkinson/AtkinsonHyperlegibleNext-Regular.ttf"),
     },
     FontEntry {
         family: "atkinson",
         variant: "bold",
-        bytes: include_bytes!("../../data/fonts/atkinson/AtkinsonHyperlegibleNext-Bold.ttf"),
+        bytes: include_bytes!("../../../data/fonts/atkinson/AtkinsonHyperlegibleNext-Bold.ttf"),
     },
     FontEntry {
         family: "atkinson",
         variant: "italic",
-        bytes: include_bytes!("../../data/fonts/atkinson/AtkinsonHyperlegibleNext-Italic.ttf"),
+        bytes: include_bytes!("../../../data/fonts/atkinson/AtkinsonHyperlegibleNext-Italic.ttf"),
     },
     FontEntry {
         family: "atkinson",
         variant: "bolditalic",
-        bytes: include_bytes!("../../data/fonts/atkinson/AtkinsonHyperlegibleNext-BoldItalic.ttf"),
+        bytes: include_bytes!(
+            "../../../data/fonts/atkinson/AtkinsonHyperlegibleNext-BoldItalic.ttf"
+        ),
     },
 ];
 

@@ -1,5 +1,41 @@
 # viaduct — Patch Notes
 
+## v1.5.0 — Cargo workspace refactor
+
+Closes the long-open Phase 16 "Workspace Refactoring" item. The single `viaduct` crate is split into a Cargo workspace with two members:
+
+- **`viaduct-core/`** (headless library) — `database`, `network`, `parser`, `models`, `error`, `paths`, plus the global Tokio runtime + debug-mode toggles. **No GTK / libadwaita / WebKit dependencies.** Suitable for profiling harnesses, future headless CLIs, and zero-UI integration testing.
+- **`viaduct/`** (binary crate) — `main.rs`, `ui/*`, `preferences.rs`, `fonts.rs`, plus the `mem_check` aux binary. Depends on `viaduct-core` for everything headless. The GTK + libadwaita + WebKit stack lives entirely here.
+
+### What this enforces
+
+Architectural boundaries become **compile errors** instead of review discipline. Reaching into GTK from `viaduct-core` no longer just violates a CLAUDE.md rule — it stops compiling. The `mem_check` profiling harness now demonstrably runs against the same code path the GUI uses, with no chance of a sneaky `gtk` import slipping into the data layer.
+
+### What stays at the repo root
+
+- `data/` — themes, fonts, gschema. Referenced from `viaduct/` via three-up `../../data/...` paths in `include_bytes!` / `include_str!`. The `viaduct/build.rs` walks `CARGO_MANIFEST_DIR.parent()` to locate the schema source for `glib-compile-schemas`.
+- `Cargo.toml` (now a virtual workspace manifest) — declares both members, sets `default-members = ["viaduct"]` so `cargo run` at the repo root continues to launch the GTK app, and centralizes shared dependency versions in `[workspace.dependencies]`.
+- `Cargo.lock`, `roadmap.md`, `spec.md`, `CLAUDE.md`, `patchnotes.md`, `README.md` — all unchanged-location.
+- `.github/workflows/ci.yml` — bumped to `cargo clippy --workspace` and `cargo test --workspace` so both members are exercised, and `libwebkitgtk-6.0-dev` added to the apt install since the binary crate now needs it explicitly.
+
+### Code surface changes
+
+- `viaduct-core/src/lib.rs`: drops the `pub mod ui` and `pub mod preferences` lines that were unused by the headless modules anyway. Keeps the `init_runtime` / `spawn_on_runtime` / `block_on_runtime` / `is_debug_mode` / `set_debug_mode` / `spawn_debug_memory_ticker` exports.
+- `viaduct/src/lib.rs` (new): re-exports `viaduct_core` symbols at the binary crate's root (`pub use viaduct_core::{database, network, parser, models, error, paths, init_runtime, spawn_on_runtime, ...}`) so existing intra-binary callers continue to use the unprefixed names (`crate::network::ImageCache`, `crate::models::Article`, etc.) — every `ui/*` file resolves these via the re-export. **Zero call-site churn** in the UI layer.
+- `viaduct/src/fonts.rs` (new): pulled out of `paths.rs::install_bundled_fonts`. Lives in the binary crate because installing fonts and shelling `fc-cache` is a GTK-runtime concern, not a path-resolution concern. `paths::ensure_dirs` now stops at directory creation; `main.rs` calls `fonts::install_bundled` separately.
+- `Cargo.toml` (workspace): every dep version is in `[workspace.dependencies]`. Both member crates pull from `.workspace = true` so version drift between the two is structurally impossible.
+
+### What didn't change
+
+- All 71+ unit tests + integration test still pass (59 in `viaduct-core`, 12 in `viaduct`, 1 integration). Test totals shifted between crates but the count is identical.
+- Every `crate::xxx` import path inside `viaduct/src/ui/` works unchanged thanks to the lib.rs re-exports.
+- Memory profile is identical — the split is structural, not runtime.
+- `cargo run` at the repo root still launches the GTK app via `default-members`.
+
+### Why now
+
+The roadmap deferred this since v0.5 because doing it before the `ui/` tree was settled would have forced multiple rounds of import churn. With v1.4.0 closing the headline feature work, the structural cleanup is finally cheap to do — and it sets up the v1.5.1 Meson wrapper to target a single binary crate cleanly.
+
 ## v1.4.0 — In-pane video playback
 
 Closes the post-v1.3.0 follow-up — articles backed by a YouTube or Vimeo URL now play in-app, not just show a thumbnail. Picks up the user-noted feature ("recognize when YouTube videos are in the feed and allow them to be played there").

@@ -1,14 +1,15 @@
-[package]
-name = "viaduct"
-version = "1.4.0"
-edition = "2024"
-description = "A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire."
-license = "MIT"
-default-run = "viaduct"
+[workspace]
+members = ["viaduct-core", "viaduct"]
+default-members = ["viaduct"]
+resolver = "2"
 
-[dependencies]
-gtk = { version = "0.9", package = "gtk4", features = ["v4_16"] }
-adw = { version = "0.7", package = "libadwaita", features = ["v1_7"] }
+[workspace.package]
+version = "1.5.0"
+edition = "2024"
+license = "MIT"
+authors = ["Brandon LaRocque"]
+
+[workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 rusqlite = { version = "0.32", features = ["bundled", "time", "url"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "gzip", "brotli"] }
@@ -28,4 +29,6 @@ lru = "0.17.0"
 readability = "0.3.0"
 oo7 = "0.6.0"
 ashpd = "0.10"
+gtk = { version = "0.9", package = "gtk4", features = ["v4_16"] }
+adw = { version = "0.7", package = "libadwaita", features = ["v1_7"] }
 webkit6 = "0.4"

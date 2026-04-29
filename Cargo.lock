@@ -3477,7 +3477,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viaduct"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -3489,10 +3489,8 @@ dependencies = [
  "lru",
  "md-5",
  "oo7",
- "quick-xml",
  "readability",
  "reqwest 0.12.28",
- "rusqlite",
  "serde",
  "serde_json",
  "thiserror",
@@ -3500,7 +3498,31 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "viaduct-core",
  "webkit6",
+]
+
+[[package]]
+name = "viaduct-core"
+version = "1.5.0"
+dependencies = [
+ "ammonia",
+ "anyhow",
+ "ashpd 0.10.3",
+ "chrono",
+ "crossbeam-channel",
+ "lru",
+ "md-5",
+ "oo7",
+ "quick-xml",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

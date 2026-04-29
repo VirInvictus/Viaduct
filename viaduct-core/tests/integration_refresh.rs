@@ -1,9 +1,9 @@
 use chrono::Utc;
 use tokio::sync::mpsc;
-use viaduct::database::accounts::Account;
-use viaduct::database::worker::spawn_db_worker;
-use viaduct::database::worker::spawn_sync_worker;
-use viaduct::models::ParsedItem;
+use viaduct_core::database::accounts::Account;
+use viaduct_core::database::worker::spawn_db_worker;
+use viaduct_core::database::worker::spawn_sync_worker;
+use viaduct_core::models::ParsedItem;
 
 #[tokio::test]
 async fn test_account_update_feed_integration() {
