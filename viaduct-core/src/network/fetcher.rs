@@ -23,6 +23,19 @@ const CACHE_CONTROL_MAX_MAX_AGE_SECS: i64 = 5 * 60 * 60;
 /// full re-sync. openrss.org and rachelbythebay.com are excluded.
 const CONDITIONAL_GET_EXPIRY_DAYS: i64 = 8;
 
+/// v2.6.9: cap on simultaneously-running per-feed pipelines inside a
+/// single refresh cycle. Pre-v2.6.9 we `tokio::spawn`-ed every feed at
+/// once, which made the cycle's peak RSS scale linearly with feed
+/// count (one user reported `peak_delta_mb=124` for 130 feeds). 8 is
+/// roughly the URLSession default global concurrency on macOS — enough
+/// pipelining to keep network busy on a fast connection, low enough
+/// that the in-flight HTTP bodies + parsed feeds + favicon-discovery
+/// HTML stay bounded. NNW caps per-host at 1 via URLSession's
+/// `httpMaximumConnectionsPerHost`; we don't replicate the per-host
+/// shape (reqwest pools differently), but the global cap provides the
+/// same memory-bound effect.
+const REFRESH_PARALLELISM: usize = 8;
+
 #[derive(Clone, Debug)]
 pub struct FetchResult {
     pub status: u16,
@@ -280,6 +293,17 @@ impl AccountRefresher {
         let total_input = feeds.len();
         let mut skipped = 0usize;
 
+        // v2.6.9: cap in-flight per-feed pipelines to keep peak RSS
+        // bounded. The pre-v2.6.9 path `tokio::spawn`-ed every feed
+        // simultaneously, so a 130-feed cycle held 130 HTTP bodies +
+        // 130 parsed feed trees + 130 favicon-discovery HTML pages
+        // (v2.6.4) all in memory at the same time. Diagnostic from a
+        // real run: `peak_delta_mb=124` for a single cycle. NNW caps
+        // per-host concurrency at 1 via `URLSession.httpMaximum
+        // ConnectionsPerHost`; reqwest pools differently, so we
+        // bound at the pipeline level instead. Eight is roughly the
+        // URLSession default global concurrency on macOS.
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(REFRESH_PARALLELISM));
         let mut futures = Vec::new();
         for (feed, settings) in feeds {
             if !force && Self::feed_should_be_skipped(&feed, &settings, special_case_cutoff_date) {
@@ -292,8 +316,20 @@ impl AccountRefresher {
             let account = self.account.clone();
             let sender = self.changes_sender.clone();
             let retention_days = self.retention_days;
+            let permit_source = semaphore.clone();
 
             futures.push(tokio::spawn(async move {
+                // Acquire blocks the per-feed task at the start of
+                // the pipeline so the captured `feed` / `settings` /
+                // `account` / `sender` / `fetcher` clones held while
+                // queued are minimal — the heavy allocations (HTTP
+                // body, parsed feed, favicon discovery) only land
+                // once we hold a permit. `acquire_owned` returns
+                // None only when the semaphore was closed; we never
+                // close it, so the unwrap_or skip is defensive.
+                let Ok(_permit) = permit_source.acquire_owned().await else {
+                    return;
+                };
                 refresh_one_feed(
                     fetcher,
                     account,
@@ -312,6 +348,7 @@ impl AccountRefresher {
             skipped,
             attempted = total_input - skipped,
             force,
+            parallelism = REFRESH_PARALLELISM,
             "refresh_feeds: dispatched"
         );
 

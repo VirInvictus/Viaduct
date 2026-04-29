@@ -1,5 +1,39 @@
 # viaduct — Patch Notes
 
+## v2.6.9 — Bound refresh-cycle concurrency
+
+The v2.6.3 diagnostics caught a real signal in a user's run on a 130-feed corpus:
+
+```
+diag: refresh cycle pre  rss_mb=295 peak_mb=295 feeds_attempted=130 force=true
+diag: refresh cycle post rss_mb=397 peak_mb=419 peak_delta_mb=124
+```
+
+A single refresh cycle added **124 MB to peak RSS**. Inside the 500 MB budget, but worth fixing — and explains the user's reported ~450 MB peak in long sessions.
+
+### Root cause
+
+`AccountRefresher::refresh_feeds_inner` `tokio::spawn`-ed every feed simultaneously, with no concurrency limit. For a 130-feed cycle that means 130 in-flight per-feed pipelines, each holding:
+
+- The HTTP response body (`Vec<u8>`, often 50–200 KB)
+- The `ParsedFeed` (full article content_html for every item)
+- The `ArticleChanges` queued for the DB worker
+- v2.6.4 favicon discovery: an additional home-page HTML fetch up to 256 KB
+
+Multiply by 130 in flight and the per-cycle peak scales linearly with feed count. NetNewsWire side-steps this by leaning on `URLSession.httpMaximumConnectionsPerHost = 1` plus URLSession's internal global cap; reqwest pools differently, so the limit didn't carry across the port.
+
+### Fix
+
+A `tokio::sync::Semaphore` capped at **8** (constant `REFRESH_PARALLELISM` in `fetcher.rs`) gates the start of each per-feed pipeline. All 130 tasks still spawn immediately — the captured state per parked task is small (Arc clones + a Feed struct) — but only 8 hold the permit at once, so the heavy allocations (HTTP body, parser tree, favicon-discovery HTML) stay bounded regardless of feed count. 8 is roughly the URLSession default global concurrency on macOS — enough pipelining to keep network busy on a fast connection, low enough to bound memory.
+
+### Expected impact
+
+Peak per-cycle delta should drop from `feed_count × per-feed allocation` to `REFRESH_PARALLELISM × per-feed allocation`. For a 130-feed cycle that's roughly a 16× reduction in the cycle's peak contribution. The v2.6.3 `diag: refresh cycle post` log line is the canonical way to verify on your own corpus.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.8 — Tray icon on GNOME, take three (`index.theme`)
 
 Follow-up to v2.6.7. User reported the icon was still the placeholder after the v2.6.7 fix. On-disk verification: the PNGs were present at the right paths (`~/.cache/viaduct/tray-icons/hicolor/{256x256,512x512}/apps/org.virinvictus.Viaduct.png`), the SNI item was registered, the slot was allocated. So the install worked. So why still a placeholder?
