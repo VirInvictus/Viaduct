@@ -538,6 +538,93 @@ pub fn apply_locked_down_settings(view: &webkit6::WebView) {
 pub const VIADUCT_IMG_SCHEME: &str = "viaduct-img";
 const VIADUCT_IMG_PREFIX: &str = "viaduct-img://i/";
 
+/// Custom URI scheme served by the bundled font registry below. Each
+/// `@font-face` rule in the article CSS references a `viaduct-font://`
+/// URL; the scheme handler returns the embedded TTF bytes.
+pub const VIADUCT_FONT_SCHEME: &str = "viaduct-font";
+
+/// Hardcoded registry of fonts bundled into the binary via `include_bytes!`.
+/// Keyed by `(family, variant)` where variant is one of `regular` / `bold` /
+/// `italic` / `bolditalic`. Adding a new font: drop the TTF in
+/// `data/fonts/<family>/`, add four `include_bytes!` lines below, and
+/// declare the four `@font-face` rules in `font_face_css()`.
+struct FontEntry {
+    family: &'static str,
+    variant: &'static str,
+    bytes: &'static [u8],
+}
+
+const BUNDLED_FONTS: &[FontEntry] = &[
+    FontEntry {
+        family: "atkinson",
+        variant: "regular",
+        bytes: include_bytes!("../../data/fonts/atkinson/AtkinsonHyperlegibleNext-Regular.ttf"),
+    },
+    FontEntry {
+        family: "atkinson",
+        variant: "bold",
+        bytes: include_bytes!("../../data/fonts/atkinson/AtkinsonHyperlegibleNext-Bold.ttf"),
+    },
+    FontEntry {
+        family: "atkinson",
+        variant: "italic",
+        bytes: include_bytes!("../../data/fonts/atkinson/AtkinsonHyperlegibleNext-Italic.ttf"),
+    },
+    FontEntry {
+        family: "atkinson",
+        variant: "bolditalic",
+        bytes: include_bytes!("../../data/fonts/atkinson/AtkinsonHyperlegibleNext-BoldItalic.ttf"),
+    },
+];
+
+/// `@font-face` declarations prepended to every theme stylesheet so
+/// `font-family: 'Atkinson Hyperlegible'` and friends resolve through
+/// our bundled TTFs even when the system doesn't have them installed.
+/// Themes that don't reference these family names simply ignore the
+/// declarations — `@font-face` only loads on demand.
+fn font_face_css() -> &'static str {
+    "\
+@font-face {\n\
+  font-family: 'Atkinson Hyperlegible';\n\
+  src: url('viaduct-font://atkinson/regular') format('truetype');\n\
+  font-weight: normal;\n\
+  font-style: normal;\n\
+  font-display: swap;\n\
+}\n\
+@font-face {\n\
+  font-family: 'Atkinson Hyperlegible';\n\
+  src: url('viaduct-font://atkinson/bold') format('truetype');\n\
+  font-weight: bold;\n\
+  font-style: normal;\n\
+  font-display: swap;\n\
+}\n\
+@font-face {\n\
+  font-family: 'Atkinson Hyperlegible';\n\
+  src: url('viaduct-font://atkinson/italic') format('truetype');\n\
+  font-weight: normal;\n\
+  font-style: italic;\n\
+  font-display: swap;\n\
+}\n\
+@font-face {\n\
+  font-family: 'Atkinson Hyperlegible';\n\
+  src: url('viaduct-font://atkinson/bolditalic') format('truetype');\n\
+  font-weight: bold;\n\
+  font-style: italic;\n\
+  font-display: swap;\n\
+}\n\
+"
+}
+
+fn lookup_bundled_font(uri: &str) -> Option<&'static [u8]> {
+    let rest = uri.strip_prefix("viaduct-font://")?;
+    // rest looks like "atkinson/regular"
+    let (family, variant) = rest.split_once('/')?;
+    BUNDLED_FONTS
+        .iter()
+        .find(|f| f.family == family && f.variant == variant)
+        .map(|f| f.bytes)
+}
+
 /// Percent-encode every byte that isn't an unreserved RFC 3986 character.
 /// Used for stuffing arbitrary URLs into our scheme's path component.
 fn percent_encode(input: &str) -> String {
@@ -649,6 +736,35 @@ pub fn sanitize_and_rewrite_image_srcs(html: &str) -> String {
 /// `ImageCache` instead of the network. Idempotent within a process; the
 /// last registration wins on a re-call. Must be invoked on the GTK main
 /// thread.
+/// Register `viaduct-font://` so the `@font-face` rules in
+/// `font_face_css()` resolve through our bundled TTFs. Sync handler
+/// (font bytes are baked into the binary via `include_bytes!` so no
+/// async work is needed). Idempotent.
+pub fn install_font_uri_scheme() {
+    let Some(ctx) = webkit6::WebContext::default() else {
+        tracing::warn!("article_renderer: no default WebContext — viaduct-font:// disabled");
+        return;
+    };
+    ctx.register_uri_scheme(VIADUCT_FONT_SCHEME, |request| {
+        let uri = request.uri().map(|s| s.to_string()).unwrap_or_default();
+        match lookup_bundled_font(&uri) {
+            Some(bytes) => {
+                let len = bytes.len() as i64;
+                // Bytes::from_static — no allocation, the static slice
+                // lives forever.
+                let g_bytes = glib::Bytes::from_static(bytes);
+                let stream = gio::MemoryInputStream::from_bytes(&g_bytes);
+                request.finish(&stream, len, Some("font/ttf"));
+            }
+            None => {
+                tracing::warn!(%uri, "viaduct-font: not in bundled registry");
+                let mut err = glib::Error::new(gio::IOErrorEnum::NotFound, "font not bundled");
+                request.finish_error(&mut err);
+            }
+        }
+    });
+}
+
 pub fn install_image_uri_scheme(image_cache: Arc<ImageCache>) {
     let Some(ctx) = webkit6::WebContext::default() else {
         tracing::warn!("article_renderer: no default WebContext — viaduct-img:// disabled");
@@ -723,7 +839,14 @@ pub fn render_themed(
 
     let mut outer_subs: HashMap<&'static str, String> = HashMap::with_capacity(4);
     outer_subs.insert("title", title_for_outer);
-    outer_subs.insert("style", theme.stylesheet.to_string());
+    // Prepend bundled @font-face rules so themes that reference
+    // 'Atkinson Hyperlegible' (etc.) get the bundled TTFs even on
+    // systems where those fonts aren't installed. CSP allows
+    // `font-src viaduct-font:` for this.
+    outer_subs.insert(
+        "style",
+        format!("{}\n{}", font_face_css(), theme.stylesheet),
+    );
     outer_subs.insert(
         "baseURL",
         base_uri.map(|s| s.to_string()).unwrap_or_default(),

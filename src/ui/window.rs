@@ -195,6 +195,10 @@ impl ViaductWindow {
         // so the article pane's CSP-locked img-src can route through our
         // ImageCache. Process-wide; idempotent.
         article_renderer::install_image_uri_scheme(self.image_cache());
+        // Register viaduct-font:// so themes that reference bundled
+        // fonts (e.g. Hyperlegible → Atkinson Hyperlegible) resolve
+        // even when the system doesn't have those fonts installed.
+        article_renderer::install_font_uri_scheme();
         // Show the link URL in the article pane's bottom-left when the
         // user hovers a link — preview where Enter / click will go.
         article_renderer::install_hover_url_overlay(
