@@ -26,7 +26,16 @@ Visual unification + reading-pane upgrades. Built up across pre-release commits;
   - **HTML-stripped previews**: the 2-line preview text is now run through a small tag-stripping pass that drops tags, decodes the most common entities (`&amp;`, `&mdash;`, `&rsquo;`, `&ldquo;` and twelve siblings), and collapses whitespace. Feeds that ship `<description>` as raw HTML (most WordPress sites) finally have clean preview text. Falls back to `content_html` when summary and content_text are both empty so podcast-only / image-only posts still render something.
   - **Sharper read/unread visual hierarchy**: read articles now dim the entire row (feed name + preview + date) to 55 % opacity via a `viaduct-row-read` CSS class, on top of the existing title bold-vs-dim toggle. Unread rows pop out clearly even in a long timeline.
   - 6 new tests in `ui::timeline::tests` covering `strip_html_for_preview` and `format_relative_date`. 56 passing total.
-  - **pre4.2 followup**: dates were missing in smart-feed views (Today / All Unread / Starred) even though the underlying values rendered correctly. The trace showed the date_label was being set fine — but smart-feed timelines aggregate articles across many feeds, producing unusually long titles that pushed the date label off-screen via the row's hbox layout. Fixed by reserving 9 character widths on the date label (`set_width_chars(9)` + `xalign 1.0`), enough to fit the widest relative-date string ("Yesterday") plus padding. Title still ellipsizes via its `EllipsizeMode::End`.
+  - **pre4.2 / pre4.3**: dates kept disappearing in smart-feed views (Today / All Unread / Starred). pre4.2 tried `set_width_chars(9)` + `xalign 1.0` to reserve space — didn't take. pre4.3 restructured the row layout: date_label moved out of the title's `top_hbox` to be a sibling of the content vbox at the row level, with a hard `set_size_request(80, -1)` pixel floor. New tree:
+    ```
+    row_hbox
+    ├── content_vbox  (hexpand=true)
+    │   ├── top_hbox: title + media icon + count
+    │   ├── feed_name_label
+    │   └── preview_label
+    └── date_label  (valign=Start, 80 px min)
+    ```
+    Date is now top-aligned in its own column, content shrinks via hexpand on the inner vbox. Long aggregated titles in smart feeds can't push the date off because hbox layout allocates the date its hard-floor width before letting hexpand=true children take the rest. Bonus: looks more like NetNewsWire's macOS layout, with the date as a clear column header rather than fighting for inline space with the title.
 
 ## v1.1.0 — Phase 6: Neutered WebKit Article Pane
 

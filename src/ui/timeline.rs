@@ -110,12 +110,29 @@ pub fn setup_timeline_list_view(
             .downcast_ref::<gtk::ListItem>()
             .expect("Needs to be ListItem");
 
-        // The timeline cell needs: title, source/feed name, date, 2-line preview
-        let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        vbox.set_margin_start(8);
-        vbox.set_margin_end(8);
-        vbox.set_margin_top(8);
-        vbox.set_margin_bottom(8);
+        // Row layout (v1.2.0-pre4.3 — restructured to fix date getting
+        // pushed off-screen in smart-feed views):
+        //
+        //   row_hbox:
+        //     content_vbox (hexpand=true):
+        //       top_hbox: title (hexpand) | media icon + count
+        //       feed_name
+        //       preview (2 lines)
+        //     date_label  ← fixed-width, top-aligned, RIGHT column
+        //
+        // Date sits as a sibling of the entire content column instead of
+        // sharing an hbox with the title. Long aggregated titles in
+        // smart feeds (Today / All Unread / Starred) can't push it off
+        // because hbox layout allocates the date its natural width
+        // before letting hexpand=true children take the rest.
+        let row_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row_hbox.set_margin_start(8);
+        row_hbox.set_margin_end(8);
+        row_hbox.set_margin_top(8);
+        row_hbox.set_margin_bottom(8);
+
+        let content_vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        content_vbox.set_hexpand(true);
 
         let top_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
 
@@ -136,22 +153,9 @@ pub fn setup_timeline_list_view(
         media_count.add_css_class("dim-label");
         media_count.set_visible(false);
 
-        let date_label = gtk::Label::new(None);
-        date_label.set_halign(gtk::Align::End);
-        date_label.add_css_class("dim-label");
-        // Reserve fixed minimum width so the date never gets squeezed
-        // off-screen by long titles competing for space in the same
-        // hbox. 9 chars covers our widest relative-date string
-        // ("Yesterday") plus a little padding. Smart-feed timelines
-        // surfaced this — long aggregated titles from many feeds were
-        // ellipsizing past the date label and pushing it out of view.
-        date_label.set_width_chars(9);
-        date_label.set_xalign(1.0);
-
         top_hbox.append(&title_label);
         top_hbox.append(&media_icon);
         top_hbox.append(&media_count);
-        top_hbox.append(&date_label);
 
         let feed_name_label = gtk::Label::new(None);
         feed_name_label.set_halign(gtk::Align::Start);
@@ -165,11 +169,25 @@ pub fn setup_timeline_list_view(
         preview_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         preview_label.add_css_class("dim-label");
 
-        vbox.append(&top_hbox);
-        vbox.append(&feed_name_label);
-        vbox.append(&preview_label);
+        content_vbox.append(&top_hbox);
+        content_vbox.append(&feed_name_label);
+        content_vbox.append(&preview_label);
 
-        item.set_child(Some(&vbox));
+        let date_label = gtk::Label::new(None);
+        date_label.add_css_class("dim-label");
+        date_label.add_css_class("numeric");
+        date_label.set_valign(gtk::Align::Start);
+        date_label.set_xalign(1.0);
+        // Hard pixel min-width — guaranteed slot for the relative-date
+        // string. Width-chars alone wasn't enough; long titles still
+        // squeezed it under hbox layout. set_size_request is a hard
+        // floor.
+        date_label.set_size_request(80, -1);
+
+        row_hbox.append(&content_vbox);
+        row_hbox.append(&date_label);
+
+        item.set_child(Some(&row_hbox));
     });
 
     let feed_names_for_bind = feed_names.clone();
@@ -179,19 +197,27 @@ pub fn setup_timeline_list_view(
             .expect("Needs to be ListItem");
 
         let node = item.item().and_downcast::<ArticleNode>().unwrap();
-        let vbox = item.child().and_downcast::<gtk::Box>().unwrap();
+        // New tree from pre4.3:
+        //   row_hbox
+        //   ├── content_vbox  (first_child)
+        //   │   ├── top_hbox (title + media)
+        //   │   ├── feed_name_label
+        //   │   └── preview_label
+        //   └── date_label  (last_child)
+        let row_hbox = item.child().and_downcast::<gtk::Box>().unwrap();
+        let content_vbox = row_hbox.first_child().and_downcast::<gtk::Box>().unwrap();
+        let date_label = row_hbox.last_child().and_downcast::<gtk::Label>().unwrap();
 
-        let top_hbox = vbox.first_child().and_downcast::<gtk::Box>().unwrap();
+        let top_hbox = content_vbox
+            .first_child()
+            .and_downcast::<gtk::Box>()
+            .unwrap();
         let title_label = top_hbox.first_child().and_downcast::<gtk::Label>().unwrap();
         let media_icon = title_label
             .next_sibling()
             .and_downcast::<gtk::Image>()
             .unwrap();
         let media_count = media_icon
-            .next_sibling()
-            .and_downcast::<gtk::Label>()
-            .unwrap();
-        let date_label = media_count
             .next_sibling()
             .and_downcast::<gtk::Label>()
             .unwrap();
