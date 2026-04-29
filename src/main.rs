@@ -64,7 +64,48 @@ fn main() -> glib::ExitCode {
     // `init_tracing` already pulled the flag's intent into the global
     // DEBUG_MODE atomic, so the filtered argv is fully equivalent.
     let args: Vec<String> = std::env::args().filter(|a| a != "--debug").collect();
-    app.run_with_args(&args)
+    let exit = app.run_with_args(&args);
+
+    // At-exit memory snapshot so every session has a record of its peak.
+    // Always-on (not gated on debug mode); cheap and useful for triage.
+    log_session_memory_summary();
+    exit
+}
+
+fn log_session_memory_summary() {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return;
+    };
+    let mut rss_kb = 0u64;
+    let mut hwm_kb = 0u64;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            rss_kb = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+        } else if let Some(rest) = line.strip_prefix("VmHWM:") {
+            hwm_kb = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+        }
+    }
+    let rss_mb = rss_kb / 1024;
+    let peak_mb = hwm_kb / 1024;
+    let budget_mb = 500u64;
+    if peak_mb > budget_mb {
+        tracing::warn!(
+            rss_mb,
+            peak_mb,
+            budget_mb,
+            "session exit: peak RSS exceeded 500 MB ceiling"
+        );
+    } else {
+        tracing::info!(rss_mb, peak_mb, budget_mb, "session exit: memory summary");
+    }
 }
 
 fn init_tracing() {
