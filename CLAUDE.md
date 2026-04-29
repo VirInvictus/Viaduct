@@ -14,7 +14,7 @@ NetNewsWire is open-source, battle-tested, and has already solved every hard pro
 
 If you catch yourself thinking "I have a better idea" — you don't. Go read the corresponding Swift file in `.netnewswire/` and port *that*. The app is local-only, no sync backends, no WebKit, strict memory budget. Targets **GNOME 50+** and **libadwaita 1.7+** on Wayland.
 
-Current version: **v1.0.0** (Stable). The xdg-desktop-portal Background daemon moved from Phase 13 to Phase 17 because it pairs naturally with the Flatpak manifest work. See `roadmap.md` for the live phase plan and `patchnotes.md` for the shipped log.
+Current version: **v1.6.0** (Stable). The v1.5.x series shipped video thumbnails + in-pane playback, the Cargo workspace split, the Meson build wrapper, the v1.5.2 NetNewsWire-parity audit (Atom summary/content separation + orphaned-author cleanup), the v1.5.3–v1.5.4 visual identity work (icon, banner, README), and the v1.5.5–v1.5.9 stability arc (theme-contrast picker, adaptive-layout navigation, Vimeo panic, scroll debounce, focus-grab cleanup, working YouTube playback via iframe wrapper). v1.6.0 collects all of it as a stable point. See `roadmap.md` for the live phase plan and `patchnotes.md` for the shipped log.
 
 **License:** MIT. **Edition:** Rust 2024.
 

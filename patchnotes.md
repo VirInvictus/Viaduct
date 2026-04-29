@@ -1,5 +1,46 @@
 # viaduct — Patch Notes
 
+## v1.6.0 — Stable
+
+Collecting the v1.5.5 → v1.5.9 stability arc into a tagged stable point. No new code beyond a version bump — every fix this release covers already shipped in a v1.5.x release. v1.6.0 exists so packagers, the Flathub manifest, and the AppData release history have a single coherent "stable" line to point at after a long string of incremental hotfixes.
+
+### What's in this release line
+
+Everything from v1.5.0 (workspace refactor) through v1.5.9 (working YouTube playback). Headline items:
+
+**Architecture**
+- Cargo workspace split into `viaduct-core` (headless: database, network, parser, models) and `viaduct` (binary: GTK / libadwaita / WebKit). Boundary enforced by the compiler, not code review (v1.5.0).
+- Meson build wrapper for Flatpak packaging; Flatpak manifest switched to `buildsystem: meson` (v1.5.1).
+
+**NetNewsWire parity catch-up** (v1.5.2)
+- Atom `<summary>` and `<content>` strictly separated — port of NNW `d6eb8df7d`. Summary lands in `ParsedItem.summary`, content in `content_html`, never share a slot.
+- Orphan-author cleanup on startup — port of NNW `200e5b19f` (issue #5232). Sweeps `authorsLookup` rows whose article no longer exists, drops `authors` rows no longer referenced. Plus an `authorsLookup_article_id_idx` index for the trigger and sweep.
+- Domain lists (`SPECIAL_CASE_DOMAINS`, `NO_MINIMUM_TIME_DOMAINS`) confirmed in sync with NNW's April 2026 commits.
+
+**Visual identity** (v1.5.3–v1.5.4)
+- Application icon — stone arch with RSS broadcast waves emerging from the inner archway. Concentric arcs (uniform 10px wall thickness), integrated keystone, NNW-orange RSS mark inside. Scalable SVG plus pre-rendered 256/512 PNGs in `docs/`.
+- Symbolic icon for menus / sidebars / notifications.
+- Horizontal banner logo with unified cream card so the wordmark reads on both light and dark host backgrounds.
+- README rewritten — leads with "A Linux port of NetNewsWire" framing; features table is specific instead of marketing-shaped; explicit Acknowledgements section thanking Brent and the NNW team and recommending NetNewsWire to macOS / iOS users.
+- Real screenshots wired into both README and AppStream metainfo (v1.5.8).
+
+**Stability arc** (v1.5.5–v1.5.9)
+- Selected-row contrast: GNOME's stock convention (full accent background, contrasting foreground), with a WCAG-luminance-based foreground picker that handles every shipped theme — including Tiqoe Dark's warm tan where white-on-tan would fail AA (v1.5.5).
+- Adaptive-layout forward navigation push: tap a feed in collapsed mode, the timeline page actually appears (v1.5.5).
+- Vimeo thumbnail panic fix: every reqwest call now goes through `spawn_on_runtime`, never directly off `glib::spawn_future_local`. Fixes the cascading AdwNavigationSplitView freeze users hit on Vimeo-bearing articles (v1.5.6).
+- Defensive `set_show_content` guards: only push when state actually needs to change. Eliminates the "back / close button stuck until Esc" bug (v1.5.7).
+- WebKit focus-grab cleanup: `act_close_article` and the video-dialog `connect_closed` both explicitly grab focus on the timeline list view, plus load `about:blank` on closing the embed view to release WebKit's input grab (v1.5.7).
+- Touchpad scroll judder fixed: 220 ms debounce on video-thumbnail spawns. Rows scrolled past quickly never trigger a tokio task (v1.5.7).
+- YouTube + Vimeo playback finally works: embed runs inside a real `<iframe>` of a synthetic host HTML document loaded with a `viaduct.local` base URI, satisfying the player's iframe-context check that surfaces error 153 when loaded as a top-level navigation. Plus the storage / WebGL settings the player needs to initialize. Plus URL escaping so query separators aren't corrupted by the HTML parser (v1.5.8 + v1.5.9).
+
+### Test status
+
+77 unit + 1 integration tests passing across the workspace. fmt + clippy clean. Mem-check harness still running 500 feeds × 10 articles + 550 image fetches + 10 Reader View extractions under the 500 MB ceiling.
+
+### What's next
+
+The roadmap's only remaining open item is **tag 1.0.0 and submit to Flathub** under Phase 17. That's still on Brandon — the Flathub submission needs his account credentials. v1.6.0 is the stable line that submission would point at.
+
 ## v1.5.9 — YouTube playback finally works (iframe wrapper)
 
 The v1.5.8 fix (re-enabling LocalStorage / IndexedDB / WebGL on the embed view) addressed the *symptom-adjacent* problem but not the actual cause. YouTube error 153 kept firing.
