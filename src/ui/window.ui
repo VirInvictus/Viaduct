@@ -131,6 +131,7 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                                 <property name="name">content</property>
                                 <property name="child">
                                   <object class="GtkScrolledWindow">
+                                    <property name="hscrollbar-policy">never</property>
                                     <property name="child">
                                       <object class="GtkListView" id="timeline_list_view"/>
                                     </property>

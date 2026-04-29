@@ -174,16 +174,13 @@ pub fn setup_timeline_list_view(
         content_vbox.append(&preview_label);
 
         let date_label = gtk::Label::new(None);
-        // DIAGNOSTIC pre4.4: dim-label removed temporarily, viaduct-debug-date
-        // class added so we can see if the label is allocated space at all.
-        // If the user still can't see dates after this, the problem is
-        // size/visibility, not opacity. Reverts once cause is identified.
+        date_label.add_css_class("dim-label");
         date_label.add_css_class("numeric");
-        date_label.add_css_class("viaduct-debug-date");
         date_label.set_valign(gtk::Align::Start);
         date_label.set_xalign(1.0);
-        date_label.set_size_request(100, -1);
-        date_label.set_visible(true);
+        // Hard-floor width so the date column always shows. Title
+        // ellipsizes around it.
+        date_label.set_size_request(80, -1);
 
         row_hbox.append(&content_vbox);
         row_hbox.append(&date_label);
