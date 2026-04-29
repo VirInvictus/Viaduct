@@ -1,8 +1,10 @@
 # viaduct — Patch Notes
 
-## v1.2.0 — UI Polish (in progress)
+## v1.2.0 — UI Polish
 
-Visual unification + reading-pane upgrades. Built up across pre-release commits; this section is updated with each pre and finalized when v1.2.0 ships.
+The "make it pretty on GNOME 50" pass. The whole window now visually echoes the chosen reading theme, every pane tells you what to do when it's empty, the sidebar reads as a real GNOME-style navigation list with section headers and pill badges, the timeline shows relative dates and clean previews and a clear unread/read split, and the layout adapts to narrow windows for laptop-on-the-couch reading. **Real-world session peak: 280–385 MB / 500 MB budget** — same band as v1.1.0.
+
+Built up across two sub-arcs of pre-release commits; full chronology below.
 
 ### Sub-arc 1 (`v1.2.0-pre1` → `v1.2.0-pre1.6`): theme picker, accent unification, fonts, dark variants, scroll fix
 

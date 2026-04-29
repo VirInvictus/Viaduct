@@ -72,22 +72,36 @@ Unconstrained web engines are memory black holes. viaduct ships **exactly one** 
 
 ```text
 AdwApplicationWindow
-├── AdwHeaderBar
-│   ├── [left]  AdwSplitButton (sidebar toggle)
-│   ├── [left]  GtkButton (mark all read)
-│   ├── [title] GtkLabel (viaduct)
-│   ├── [right] GtkToggleButton (search)
-│   └── [right] GtkMenuButton (primary menu)
-├── AdwNavigationSplitView (responsive; collapses on narrow windows)
-│   ├── [sidebar] GtkScrolledWindow
-│   │   └── GtkListView (Smart Feeds, Folders, Subscriptions)
-│   └── [content] AdwNavigationSplitView
-│       ├── [sidebar] GtkScrolledWindow
-│       │   └── GtkListView (Article List — recycled via GtkSignalListItemFactory)
-│       └── [content] GtkOverlay
-│           ├── GtkScrolledWindow → WebKitWebView (article body)
-│           └── GtkLabel url_overlay (hover URL preview, bottom-left)
-└── [bottom] GtkActionBar (refresh progress / background tasks)
+├── AdwBreakpoint (max-width 900sp → inner_split_view.collapsed)
+├── AdwBreakpoint (max-width 600sp → both split_views.collapsed)
+└── AdwToastOverlay
+    └── AdwNavigationSplitView outer_split_view (220–360 px sidebar)
+        ├── [sidebar] AdwNavigationPage "Feeds"
+        │   └── AdwToolbarView
+        │       ├── AdwHeaderBar
+        │       │   ├── [start] mark_all_read_btn
+        │       │   ├── [start] sync_btn (GtkStack: refresh icon ⇄ spinner)
+        │       │   ├── [end]   search_btn (toggle)
+        │       │   └── [end]   menu_btn (primary menu)
+        │       └── GtkScrolledWindow
+        │           └── GtkListView sidebar_list_view
+        │               (TreeListModel: Smart Feeds, Folders, Subscriptions)
+        └── [content] AdwNavigationSplitView inner_split_view (320–480 px sidebar)
+            ├── [sidebar] AdwNavigationPage "Timeline"
+            │   └── AdwToolbarView
+            │       ├── AdwHeaderBar + GtkSearchBar
+            │       └── GtkStack timeline_stack
+            │           ├── content: GtkScrolledWindow (hscrollbar=never)
+            │           │            → GtkListView (recycled, capped natural width)
+            │           └── empty:   AdwStatusPage "No articles"
+            └── [content] AdwNavigationPage "Article"
+                └── AdwToolbarView
+                    ├── AdwHeaderBar + reader_btn
+                    └── GtkStack article_stack
+                        ├── content: GtkOverlay
+                        │              ├── WebKitWebView article_web_view
+                        │              └── GtkLabel url_overlay (hover preview)
+                        └── empty:   AdwStatusPage "No article selected"
 ```
 
 ---

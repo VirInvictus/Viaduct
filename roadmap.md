@@ -214,6 +214,21 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 - [x] Port any remaining applicable unit tests from `.netnewswire/Tests/` and module test directories.
 - [x] **DB worker supervision**: `database::worker::spawn_db_worker` spawns a plain `std::thread::spawn` — if the worker panics every future op is orphaned. Add a supervisor loop that restarts the worker (with a small backoff) and logs the panic.
 
+## v1.2.0: UI Polish *(shipped)*
+- [x] **Theme-driven app-wide accent**: every selected article theme propagates its accent color (warm cinnamon for Sepia, deep blue for Biblioteca, warm tan for Tiqoe Dark, etc.) across the GTK chrome — sidebar selection, focus rings, switches, suggested-action buttons, text selection, link buttons. CSS provider at `STYLE_PROVIDER_PRIORITY_USER + 100` overrides libadwaita's accent integration on three layers (`@define-color`, `:root` custom properties, selector-targeted overrides for high-traffic widgets). Beats GNOME 47+'s system accent.
+- [x] **Theme picker**: new `article-theme` GSetting + `AdwComboRow` in the prefs dialog. Auto / Adwaita / 8 NNW themes. Live switch without restart.
+- [x] **Adwaita theme**: ninth theme with libadwaita-native typography (Cantarell + system-ui), `prefers-color-scheme` baked in for auto dark/light. `accent_hex: None` so GNOME's system accent surfaces unchanged.
+- [x] **Hand-tuned dark variants**: each of the 7 light NNW themes gets a `dark.css` overlay activated via `@media (prefers-color-scheme: dark)`. Sepia → roasted-coffee, Biblioteca → leather-bound deep blue, NewsFax → ink-black newsprint, etc. NNW byte-perfect stylesheets stay UNCHANGED.
+- [x] **Bundled fonts**: `viaduct-font://` URI scheme + Atkinson Hyperlegible Next bundle so the Hyperlegible theme renders correctly even when the system doesn't ship the font.
+- [x] **Empty states**: `AdwStatusPage` for both panes — "No articles" when the timeline is empty, "No article selected" when nothing's loaded. 150 ms crossfade, auto-flips via `connect_items_changed`.
+- [x] **Sidebar polish**: 24 px avatars, pill-shaped unread badges, "Smart Feeds" section heading, refined spacing.
+- [x] **Timeline polish**: relative date column (`Just now` / `5h ago` / `Yesterday` / weekday / `Mar 19` / `Mar 19, 2025`), HTML-stripped previews with entity decoding, sharper read/unread visual hierarchy. Row layout restructured so date column stays visible regardless of title length.
+- [x] **Refresh-in-progress spinner**: refresh button child swaps to `GtkSpinner` during fetch, swaps back when the cycle ends.
+- [x] **Adaptive layout**: two `AdwBreakpoint`s (`max-width: 900sp` / `600sp`) collapse the inner / both split views for narrow windows. App reflows to navigation-stack mode on laptops / phone form factors.
+- [x] **Article pane scrolling restored**: WebKit-side CSS override re-enables `html, body { overflow: auto }` since v1.1.0-pre1.6 dropped the parent `GtkScrolledWindow`. Styled WebKit scrollbar (8 px, gray thumb).
+- [x] **Singleton `gio::Settings`**: `crate::preferences::settings()` returns a process-singleton via thread_local OnceCell so `connect_changed` handlers stay alive past their callsite's stack frame. (Without this v1.2.0-pre1 shipped a non-functional theme picker.)
+- [ ] **Empty-state flash on sidebar selection** (followup): clicking between feeds briefly shows the "No articles" status page during the timeline rebuild. Cause: `populate_timeline` does `store.remove_all()` then `store.append(...)` — two `items_changed` signals. Fix: `gio::ListStore::splice(0, n_existing, &new_items)`. ~5 lines.
+
 ## Phase 17: Flatpak Sandboxing & 1.0 Release
 - [x] Flatpak manifest: `network` permission only; no `--filesystem=home`. OPML I/O entirely via `org.freedesktop.portal.FileChooser`.
 - [x] AppStream metadata (`appdata.xml`), icons at all required sizes, desktop entry.
