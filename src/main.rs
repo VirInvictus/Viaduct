@@ -145,6 +145,46 @@ fn build_ui(app: &adw::Application, account: Arc<Account>) {
         // accent so the whole window visually echoes the reading pane.
         viaduct::preferences::apply_article_theme_accent(&settings);
     }
+    apply_sidebar_styling();
     let window = ui::window::ViaductWindow::new(app, account);
     window.present();
+}
+
+/// One-time CSS provider for sidebar refinements (v1.2.0-pre3). Pill-
+/// shaped unread badges, bolder section headers for the SmartFeedGroup
+/// row. Lives at APPLICATION priority so the accent provider (USER+100)
+/// still wins for accent-coloured surfaces.
+fn apply_sidebar_styling() {
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    let css = "\
+.viaduct-sidebar-heading {\n\
+    font-weight: 700;\n\
+    font-size: 0.78em;\n\
+    letter-spacing: 0.07em;\n\
+    text-transform: uppercase;\n\
+    opacity: 0.65;\n\
+}\n\
+.viaduct-unread-badge {\n\
+    font-size: 0.82em;\n\
+    font-weight: 600;\n\
+    padding: 1px 8px;\n\
+    border-radius: 9999px;\n\
+    background-color: alpha(currentColor, 0.10);\n\
+    min-width: 18px;\n\
+}\n\
+listview > row:selected .viaduct-unread-badge {\n\
+    background-color: alpha(@accent_fg_color, 0.20);\n\
+}\n\
+";
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(css);
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    // Leak — process-wide static CSS, no swap needed.
+    Box::leak(Box::new(provider));
 }

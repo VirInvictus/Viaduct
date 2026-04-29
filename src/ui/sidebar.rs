@@ -226,9 +226,11 @@ pub fn setup_sidebar_list_view(
 
         let expander = gtk::TreeExpander::new();
 
-        let box_widget = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        box_widget.set_margin_start(4);
-        box_widget.set_margin_end(4);
+        let box_widget = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        box_widget.set_margin_start(6);
+        box_widget.set_margin_end(6);
+        box_widget.set_margin_top(2);
+        box_widget.set_margin_bottom(2);
 
         // Icon slot is a Stack with two pages — a symbolic GtkImage for groups
         // and folders, an AdwAvatar for feeds and smart feeds. Same row factory
@@ -238,18 +240,26 @@ pub fn setup_sidebar_list_view(
 
         let icon_image = gtk::Image::new();
         icon_image.set_pixel_size(16);
+        icon_image.set_valign(gtk::Align::Center);
         icon_stack.add_named(&icon_image, Some("icon"));
 
-        let avatar = adw::Avatar::new(20, None, true);
+        let avatar = adw::Avatar::new(24, None, true);
+        avatar.set_valign(gtk::Align::Center);
         icon_stack.add_named(&avatar, Some("avatar"));
 
         let label = gtk::Label::new(None);
         label.set_hexpand(true);
         label.set_halign(gtk::Align::Start);
         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_valign(gtk::Align::Center);
 
         let badge = gtk::Label::new(None);
-        badge.add_css_class("numeric"); // standard libadwaita styling
+        badge.add_css_class("numeric");
+        // Custom class flagged via apply_sidebar_styling — pill-shaped
+        // background, dimmed when count is low. Doesn't affect non-badge
+        // GtkLabels because of the class scope.
+        badge.add_css_class("viaduct-unread-badge");
+        badge.set_valign(gtk::Align::Center);
 
         box_widget.append(&icon_stack);
         box_widget.append(&label);
@@ -301,11 +311,20 @@ pub fn setup_sidebar_list_view(
         let rep_obj = node.represented_object();
 
         if let Some(obj) = rep_obj {
+            // Reset bind-time style classes so a recycled row binding to a
+            // different SidebarItem doesn't keep the previous header class.
+            label.remove_css_class("viaduct-sidebar-heading");
+            label.remove_css_class("heading");
+            label.remove_css_class("dim-label");
             if let Some(sidebar_item) = obj.downcast_ref::<SidebarItem>() {
                 match sidebar_item {
                     SidebarItem::SmartFeedGroup => {
                         label.set_text("Smart Feeds");
-                        icon_image.set_icon_name(Some("folder-symbolic"));
+                        // Section-header styling — bold, slightly smaller,
+                        // dimmed. The icon stays as a folder for now since
+                        // GtkListView still wants something in the slot.
+                        label.add_css_class("viaduct-sidebar-heading");
+                        icon_image.set_icon_name(Some("emblem-symbolic-link-symbolic"));
                         icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::SmartFeed(name) => {
