@@ -115,6 +115,15 @@ mod imp {
         /// braces guard against the GTK Application activating twice
         /// (single-instance handoff or similar) double-refreshing.
         pub did_startup_refresh: std::cell::Cell<bool>,
+        /// Monotonically-increasing counter for the sidebar selection
+        /// → timeline-fetch pipeline (v1.9.0). Each click on the
+        /// sidebar bumps this counter, captures the new value, and
+        /// passes it to the spawned fetch task. When the task returns,
+        /// it compares its captured value to the current counter — if
+        /// they don't match, the user clicked again while it was
+        /// running, so the result is dropped instead of overwriting
+        /// the timeline. NNW's `FetchRequestQueue` analog.
+        pub selection_fetch_generation: std::cell::Cell<u64>,
     }
 
     /// Captured state for whatever article is currently on-screen.
@@ -422,9 +431,29 @@ impl ViaductWindow {
                     outer.set_show_content(true);
                 }
             }
+            // v1.9.0: cancel-stale-fetch + tracing instrumentation.
+            //
+            // Bump the generation counter; capture this click's value;
+            // if a second click happens before the fetch completes, the
+            // captured value won't match the current counter at apply
+            // time and we drop the result instead of overwriting the
+            // timeline with stale data. Also lets us count cancelled
+            // fetches in the logs so users can tell us when their
+            // selection isn't sticking.
             let account = account_for_sidebar.clone();
             let store = timeline_store_for_sidebar.clone();
+            let window_weak_for_fetch = window_weak_for_sidebar.clone();
+            let item_label = sidebar_item_label(&item);
+            let generation = if let Some(window) = window_weak_for_fetch.upgrade() {
+                let imp = window.imp();
+                let g = imp.selection_fetch_generation.get().wrapping_add(1);
+                imp.selection_fetch_generation.set(g);
+                g
+            } else {
+                return;
+            };
             glib::spawn_future_local(async move {
+                let click_at = std::time::Instant::now();
                 let result: crate::error::Result<Vec<_>> = match item {
                     SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id).await,
                     SidebarItem::SmartFeed(name) => match name.as_str() {
@@ -436,12 +465,70 @@ impl ViaductWindow {
                     SidebarItem::Folder(folder) => fetch_folder_articles(&account, &folder).await,
                     SidebarItem::SmartFeedGroup => Ok(Vec::new()),
                 };
+                let fetch_ms = click_at.elapsed().as_millis();
+
+                // Cancel-stale guard: if the user clicked again while
+                // we were in the DB, drop the result.
+                if let Some(window) = window_weak_for_fetch.upgrade() {
+                    let current = window.imp().selection_fetch_generation.get();
+                    if current != generation {
+                        tracing::info!(
+                            target: "viaduct::perf",
+                            item = %item_label,
+                            generation,
+                            current,
+                            fetch_ms = fetch_ms as u64,
+                            "selection fetch dropped — newer click in flight"
+                        );
+                        return;
+                    }
+                } else {
+                    return;
+                }
+
                 match result {
                     Ok(articles) => {
+                        let count = articles.len();
+                        let populate_at = std::time::Instant::now();
                         populate_timeline(&store, articles);
+                        let populate_ms = populate_at.elapsed().as_millis();
+
+                        let status_at = std::time::Instant::now();
                         refresh_timeline_statuses(account.clone(), store.clone());
+                        let status_ms = status_at.elapsed().as_millis();
+
+                        let total_ms = click_at.elapsed().as_millis() as u64;
+                        let line = "selection navigation";
+                        if total_ms >= 500 {
+                            tracing::warn!(
+                                target: "viaduct::perf",
+                                item = %item_label,
+                                articles = count,
+                                fetch_ms = fetch_ms as u64,
+                                populate_ms = populate_ms as u64,
+                                status_ms = status_ms as u64,
+                                total_ms,
+                                "{line} (slow)"
+                            );
+                        } else {
+                            tracing::info!(
+                                target: "viaduct::perf",
+                                item = %item_label,
+                                articles = count,
+                                fetch_ms = fetch_ms as u64,
+                                populate_ms = populate_ms as u64,
+                                status_ms = status_ms as u64,
+                                total_ms,
+                                "{line}"
+                            );
+                        }
                     }
-                    Err(e) => tracing::warn!(?e, "failed to fetch articles for sidebar selection"),
+                    Err(e) => tracing::warn!(
+                        target: "viaduct::perf",
+                        item = %item_label,
+                        ?e,
+                        "selection fetch failed"
+                    ),
                 }
             });
         });
@@ -2638,6 +2725,20 @@ fn pick_sidebar_item_at(
     None
 }
 
+/// Short, human-readable label for a `SidebarItem`. Used in the
+/// timing-info log lines from the v1.9.0 instrumentation so users can
+/// see which feed / folder / smart feed they were on when slow
+/// behaviour happened. Reads the feed's edited name → name → URL host
+/// fallback chain rather than dumping the raw URL into the log.
+fn sidebar_item_label(item: &SidebarItem) -> String {
+    match item {
+        SidebarItem::Feed(feed) => display_name_for_feed(feed),
+        SidebarItem::Folder(folder) => format!("[{}]", folder.name),
+        SidebarItem::SmartFeed(name) => format!("Smart: {name}"),
+        SidebarItem::SmartFeedGroup => "Smart Feeds (group)".to_string(),
+    }
+}
+
 fn current_video_playback_mode() -> VideoPlaybackMode {
     let Some(settings) = crate::preferences::settings() else {
         return VideoPlaybackMode::InPane;
@@ -2708,19 +2809,17 @@ async fn fetch_folder_articles(
     if folder.feeds.is_empty() {
         return Ok(Vec::new());
     }
-    let mut merged: Vec<crate::models::Article> = Vec::new();
-    for feed in &folder.feeds {
-        match account.fetch_articles_by_feed(feed.id.clone()).await {
-            Ok(mut articles) => merged.append(&mut articles),
-            Err(e) => tracing::warn!(
-                feed_id = %feed.id,
-                ?e,
-                "folder aggregation: feed fetch failed (other feeds will still render)"
-            ),
-        }
-    }
+    // v1.9.0: was previously a sequential N-round-trip fan-out despite
+    // the doc-comment claim of parallelism. Now one bulk DB op via the
+    // FetchByFeeds variant (IN clause). For a folder with 50 feeds
+    // this drops folder-selection latency from O(N · channel + plan)
+    // to O(1 · channel + plan).
+    let feed_ids: Vec<String> = folder.feeds.iter().map(|f| f.id.clone()).collect();
+    let mut merged = account.fetch_articles_by_feeds(feed_ids).await?;
     // Sort newest-first. Articles without a published date sink to the
-    // bottom (matches NNW's ordering for missing dates).
+    // bottom (matches NNW's ordering for missing dates). The DB layer
+    // already sorted within each chunk; this final pass is the
+    // cross-chunk merge.
     merged.sort_by_key(|a| std::cmp::Reverse(a.date_published));
     Ok(merged)
 }

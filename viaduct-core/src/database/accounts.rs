@@ -112,6 +112,21 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// Bulk fetch articles for many feeds at once. One SQL query (with
+    /// an `IN (?, ?, …)` clause, chunked at 500 IDs to stay under
+    /// SQLite's parameter limit) instead of N round-trips. Used by the
+    /// folder-aggregate view (`fetch_folder_articles`); previously that
+    /// fanned out N sequential single-feed queries.
+    pub async fn fetch_articles_by_feeds(&self, feed_ids: Vec<String>) -> Result<Vec<Article>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::FetchByFeeds(feed_ids, tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
     pub async fn fetch_unread_articles(&self) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
         self.db_tx

@@ -1,5 +1,61 @@
 # viaduct — Patch Notes
 
+## v1.9.0 — Timeline navigation perf + debug instrumentation
+
+Brandon reported sidebar feed-clicking taking up to 3 seconds and the UI sometimes refusing further clicks. This release adds the instrumentation you'd want to diagnose that, plus the two structural fixes that explain most of the latency.
+
+### What was making it slow
+
+1. **Folder aggregation was sequential despite a doc-comment claiming parallelism.** `fetch_folder_articles` had `for feed in folder.feeds { account.fetch_articles_by_feed().await }` — each feed fetch awaited the previous before starting. For a folder with 30 feeds that was 30 sequential round-trips through the single-writer mpsc → SQLite → reply chain. Easy way to spend a few seconds.
+
+2. **Rapid sidebar clicks piled up uncancelled fetches.** Every click spawned a fresh `glib::spawn_future_local` that fetched articles, populated the timeline, and refreshed statuses. If the user clicked five feeds in two seconds, five fetches were in flight; they all eventually completed and applied their results, the last writer winning. In the meantime the worker thread was contended and the main thread chewed through stale work between user inputs.
+
+### Fixes
+
+**Cancel-stale-fetch via generation counter.** New `selection_fetch_generation: Cell<u64>` on `ViaductWindow imp`. Every selection-changed handler bumps the counter and captures its value; when the spawned task returns, it compares to the current counter and drops the result if they don't match. Port of NNW's `FetchRequestQueue` pattern. Logs a structured line under the `viaduct::perf` target every time a result is dropped so you can see in real time when this is actually firing.
+
+**`Account::fetch_articles_by_feeds(Vec<String>)`** — bulk DB op. New `ArticlesDbOp::FetchByFeeds` variant with a single `WHERE feed_id IN (?, ?, …)` SQL query, chunked at 500 IDs (under SQLite's 999 parameter limit, with headroom). `fetch_folder_articles` rewritten to use it — one round-trip instead of N.
+
+### Debug instrumentation
+
+Every sidebar click → timeline navigation now logs one structured line under `viaduct::perf`:
+
+```
+INFO viaduct::perf: selection navigation
+  item="Daring Fireball"
+  articles=143
+  fetch_ms=12
+  populate_ms=38
+  status_ms=4
+  total_ms=54
+```
+
+When `total_ms ≥ 500`, the level promotes to `WARN` so the slow case is visible without scrolling. Cancelled fetches log a separate line so you can tell when rapid clicks are dropping results:
+
+```
+INFO viaduct::perf: selection fetch dropped — newer click in flight
+  item="All Unread"
+  generation=12
+  current=14
+  fetch_ms=187
+```
+
+To see them, run from a terminal — `target/release/viaduct` — or filter explicitly:
+
+```bash
+RUST_LOG=info,viaduct::perf=info viaduct
+```
+
+`docs/debugging.md` (new) walks through all of this end-to-end, plus the `--debug` flag, the `RUST_LOG` examples, the `mem_check` harness, and how to add timing instrumentation to new hot paths.
+
+### What this can't fix
+
+The `populate_ms` cost on big smart feeds (e.g. "All Unread" with 4855 articles in your screenshot) is fundamental — it's the wall-clock time to construct that many `ArticleNode` glib::Object instances on the main thread. Easily 150–300 ms for a 5000-row populate. The eventual fix is a custom `gio::ListModel` that lazily vivifies items only as they scroll into view, but that's a bigger refactor (hundreds of lines, careful scrolling-state management). For v1.9.0 we make it visible in the logs so you can confirm whether populate is your actual bottleneck before investing in the rewrite.
+
+### Test status
+
+89 unit + 1 integration tests passing. fmt + clippy clean.
+
 ## v1.8.0 — Sync on open, periodic refresh, plus the background daemon plan
 
 Two new preferences and a written architecture plan for the background-refresh feature.

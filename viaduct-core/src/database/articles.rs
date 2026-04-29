@@ -24,6 +24,10 @@ pub enum ArticlesDbOp {
     BatchInsert(Vec<Article>, oneshot::Sender<Result<()>>),
     UpsertStatuses(Vec<ArticleStatus>, oneshot::Sender<Result<()>>),
     FetchByFeed(String, oneshot::Sender<Result<Vec<Article>>>),
+    /// Bulk variant of `FetchByFeed`. One SQL query with an `IN (?, ?, …)`
+    /// clause replaces the previous N-round-trip fan-out used by folder
+    /// aggregate views. Empty input is a no-op.
+    FetchByFeeds(Vec<String>, oneshot::Sender<Result<Vec<Article>>>),
     FetchByArticleId(String, oneshot::Sender<Result<Option<Article>>>),
     FetchUnread(oneshot::Sender<Result<Vec<Article>>>),
     FetchStarred(oneshot::Sender<Result<Vec<Article>>>),
@@ -237,6 +241,10 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
         }
         ArticlesDbOp::FetchByFeed(feed_id, tx) => {
             let res = fetch_by_feed(conn, &feed_id);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::FetchByFeeds(feed_ids, tx) => {
+            let res = fetch_by_feeds(conn, &feed_ids);
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchByArticleId(article_id, tx) => {
@@ -463,6 +471,43 @@ fn fetch_by_feed(conn: &mut Connection, feed_id: &str) -> Result<Vec<Article>> {
     for row in rows {
         articles.push(row?);
     }
+    Ok(articles)
+}
+
+/// Bulk variant of `fetch_by_feed` — `WHERE feed_id IN (?, ?, ?)`. Used
+/// for folder-aggregate views (NNW's "show all articles from feeds in
+/// this folder") which previously fanned out N sequential single-feed
+/// queries through the worker mpsc. For a folder with 50 feeds that
+/// was 50 round-trips of channel-send, `blocking_recv`, SQLite plan,
+/// and reply-send. With the IN clause it's one round-trip and one
+/// SQLite query plan.
+///
+/// Chunks at 500 IDs (SQLite's default `SQLITE_LIMIT_VARIABLE_NUMBER`
+/// is 999; we leave headroom). Empty input is a no-op.
+fn fetch_by_feeds(conn: &mut Connection, feed_ids: &[String]) -> Result<Vec<Article>> {
+    if feed_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut articles: Vec<Article> = Vec::new();
+    for chunk in feed_ids.chunks(500) {
+        let placeholders: String = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT * FROM articles WHERE feed_id IN ({placeholders}) \
+             ORDER BY date_published DESC, rowid DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), row_to_article)?;
+        for row in rows {
+            articles.push(row?);
+        }
+    }
+    // Per-chunk results are each individually sorted; chunks need a
+    // final merge-sort pass so the aggregate view stays newest-first.
+    articles.sort_by_key(|a| std::cmp::Reverse(a.date_published));
     Ok(articles)
 }
 

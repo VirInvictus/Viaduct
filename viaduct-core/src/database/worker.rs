@@ -136,6 +136,7 @@ fn articles_op_label(op: &crate::database::articles::ArticlesDbOp) -> &'static s
     use crate::database::articles::ArticlesDbOp::*;
     match op {
         BatchInsert(..) => "BatchInsert",
+        FetchByFeeds(..) => "FetchByFeeds",
         UpsertStatuses(..) => "UpsertStatuses",
         FetchByFeed(..) => "FetchByFeed",
         FetchByArticleId(..) => "FetchByArticleId",
