@@ -175,7 +175,7 @@ impl ViaductWindow {
         window
     }
 
-    fn account(&self) -> Arc<Account> {
+    pub(crate) fn account(&self) -> Arc<Account> {
         self.imp()
             .account
             .get()
@@ -183,12 +183,41 @@ impl ViaductWindow {
             .expect("ViaductWindow constructed without Account")
     }
 
-    fn image_cache(&self) -> Arc<ImageCache> {
+    pub(crate) fn image_cache(&self) -> Arc<ImageCache> {
         self.imp()
             .image_cache
             .get()
             .cloned()
             .expect("ViaductWindow constructed without ImageCache")
+    }
+
+    /// Toast surface for adjacent UI modules (Add Feed dialog and the
+    /// future context-menu actions). Same wrapper `show_toast` uses
+    /// internally; this is just a `pub` re-export so the dialog can
+    /// surface success / failure feedback through the same channel.
+    pub fn show_toast_public(&self, message: &str) {
+        self.show_toast(message);
+    }
+
+    /// Re-export for the Add Feed dialog: kicks off a one-shot refresh
+    /// of just the supplied feeds (the freshly-added one). Same body as
+    /// the OPML-import path uses.
+    pub fn refresh_specific_feeds_public(&self, feeds: Vec<crate::models::Feed>) {
+        self.refresh_specific_feeds(feeds);
+    }
+
+    /// Read the current OPML's folder names so the Add Feed dialog can
+    /// populate its folder dropdown. Snapshot of the in-memory OPML
+    /// tree the sidebar is using — no DB or network round-trip.
+    pub fn list_folder_names_public(&self) -> Vec<String> {
+        let Some(delegate) = self.imp().sidebar_delegate.get() else {
+            return Vec::new();
+        };
+        let delegate = delegate.borrow();
+        let Some(opml) = delegate.opml_file.borrow().clone() else {
+            return Vec::new();
+        };
+        opml.folders.iter().map(|f| f.name.clone()).collect()
     }
 
     fn wire_models(&self) {
@@ -1478,6 +1507,17 @@ impl ViaductWindow {
         crate::ui::preferences_dialog::present(self);
     }
 
+    /// Open the Add Feed dialog. Port of NNW's `Add Feed` window:
+    /// URL field (feed or website — discovery handles either), optional
+    /// name override, optional folder selection. On submit, runs the
+    /// two-pass discovery (feed-first, HTML rel=alternate fallback) on
+    /// the tokio runtime, adds the result to the OPML, refreshes the
+    /// sidebar, and kicks off a refresh of just the new feed so the
+    /// user sees its articles immediately.
+    pub(crate) fn act_add_feed(&self) {
+        crate::ui::add_feed_dialog::present(self);
+    }
+
     /// Import OPML — port of NNW `ImportOPMLWindowController.importOPML`.
     /// Single account, no picker sheet (NNW also short-circuits when
     /// `accounts.count == 1`). The file dialog routes through
@@ -1628,7 +1668,7 @@ impl ViaductWindow {
 
     /// Re-emit OPML into the sidebar tree after import. Same tokio-context
     /// hop as the startup load — `Account::load_opml` uses `tokio::fs`.
-    fn reload_sidebar_after_opml_change(&self) {
+    pub(crate) fn reload_sidebar_after_opml_change(&self) {
         let imp = self.imp();
         let Some(delegate) = imp.sidebar_delegate.get().cloned() else {
             return;

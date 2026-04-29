@@ -55,6 +55,9 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     register(window, "shortcuts", |w| w.act_shortcuts());
     register(window, "preferences", |w| w.act_preferences());
 
+    // Feed management
+    register(window, "add-feed", |w| w.act_add_feed());
+
     // OPML import/export — menu only, no accelerators (NNW does the same).
     register(window, "import-opml", |w| w.act_import_opml());
     register(window, "export-opml", |w| w.act_export_opml());
@@ -90,6 +93,7 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     app.set_accels_for_action("win.copy-url", &["<Ctrl><Shift>c"]);
     app.set_accels_for_action("win.toggle-reader", &["<Ctrl><Shift>r"]);
     app.set_accels_for_action("win.close-article", &["Escape"]);
+    app.set_accels_for_action("win.add-feed", &["<Ctrl>n"]);
     app.set_accels_for_action("win.refresh", &["<Ctrl>r"]);
     app.set_accels_for_action("win.focus-search", &["<Ctrl>f"]);
     app.set_accels_for_action("win.toggle-sidebar", &["F9"]);

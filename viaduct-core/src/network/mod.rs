@@ -6,6 +6,7 @@
 pub mod background;
 pub mod cache;
 pub mod credentials;
+pub mod feed_discovery;
 pub mod fetcher;
 pub mod http;
 pub mod inoreader;

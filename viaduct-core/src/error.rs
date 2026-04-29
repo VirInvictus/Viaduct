@@ -62,11 +62,24 @@ pub enum NetworkError {
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
 
+    /// Used by `feed_discovery::discover_feed` when the response carries
+    /// a `reqwest::Error` we want to surface verbatim (vs. the `Http`
+    /// branch, which is only used for the `From` impl). Same shape, but
+    /// the discoverer constructs it explicitly so the call site reads
+    /// as "discovery failed at the network layer," not "general HTTP."
+    #[error("reqwest error during feed discovery: {0}")]
+    Reqwest(reqwest::Error),
+
     #[error("invalid url: {0}")]
     InvalidUrl(#[from] url::ParseError),
 
     #[error("rate limited; retry after {retry_after_secs}s")]
     RateLimited { retry_after_secs: u64 },
+
+    /// `feed_discovery::discover_feed` exhausted both passes (URL
+    /// didn't parse as a feed, no `<link rel="alternate">` in the HTML).
+    #[error("no feed found at the supplied URL")]
+    NoFeedFound,
 }
 
 #[derive(Debug, Error)]

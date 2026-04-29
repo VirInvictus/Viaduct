@@ -8,6 +8,13 @@ Licensed under the MIT License. See LICENSE in the project root for details.
   <menu id="primary_menu">
     <section>
       <item>
+        <attribute name="label" translatable="yes">Add Feed…</attribute>
+        <attribute name="action">win.add-feed</attribute>
+        <attribute name="accel">&lt;Primary&gt;n</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
         <attribute name="label" translatable="yes">Import OPML…</attribute>
         <attribute name="action">win.import-opml</attribute>
       </item>

@@ -13,7 +13,9 @@ use crate::database::opml::{
 use crate::database::settings::SettingsDbOp;
 use crate::database::worker::DbOp;
 use crate::error::{DatabaseError, Result, ViaductError};
-use crate::models::{Article, ArticleChanges, ArticleStatus, Feed, FeedSettings, ParsedItem};
+use crate::models::{
+    Article, ArticleChanges, ArticleStatus, Feed, FeedSettings, Folder, ParsedItem,
+};
 use crate::paths::opml_path;
 
 use crate::database::delegate::{AccountDelegate, LocalAccountDelegate};
@@ -353,6 +355,93 @@ impl Account {
         let body = serialize_account_opml(title, &opml);
         tokio::fs::write(path.as_ref(), body).await?;
         Ok(())
+    }
+
+    /// Add a single feed to the OPML hierarchy and persist. If
+    /// `folder_name` is `Some`, place under that folder (creating it if
+    /// it doesn't exist); else place as a standalone feed. Dedupes by
+    /// `feed_url` — adding a feed that already exists at the same URL
+    /// returns the existing entry rather than creating a duplicate row.
+    /// Returns the `Feed` for immediate refresh by the caller.
+    pub async fn add_feed(
+        &self,
+        feed_url: String,
+        feed_name: Option<String>,
+        home_page_url: Option<String>,
+        folder_name: Option<String>,
+    ) -> Result<Feed> {
+        let mut opml = self.load_opml().await?;
+        let feed = Feed {
+            id: feed_url.clone(),
+            url: feed_url.clone(),
+            name: feed_name,
+            edited_name: None,
+            home_page_url,
+        };
+
+        let placed_feed = match folder_name {
+            Some(folder) => {
+                if let Some(existing_folder) = opml.folders.iter_mut().find(|f| f.name == folder) {
+                    if let Some(existing) = existing_folder.feeds.iter().find(|x| x.url == feed.url)
+                    {
+                        existing.clone()
+                    } else {
+                        existing_folder.feeds.push(feed.clone());
+                        feed
+                    }
+                } else {
+                    opml.folders.push(Folder {
+                        name: folder,
+                        feeds: vec![feed.clone()],
+                    });
+                    feed
+                }
+            }
+            None => {
+                if let Some(existing) = opml.standalone_feeds.iter().find(|x| x.url == feed.url) {
+                    existing.clone()
+                } else {
+                    opml.standalone_feeds.push(feed.clone());
+                    feed
+                }
+            }
+        };
+
+        self.save_opml(opml).await?;
+        Ok(placed_feed)
+    }
+
+    /// Remove a feed from the OPML hierarchy by URL. Sweeps both the
+    /// standalone list and every folder. Empty folders left behind by
+    /// the removal are preserved (NNW behaviour — folders are user-
+    /// curated, not auto-pruned). Saves the OPML. Returns true if a
+    /// feed was actually removed.
+    ///
+    /// Article rows for the removed feed are pruned by the next
+    /// `cleanup_at_startup` cycle via `delete_articles_not_in_feeds`,
+    /// or immediately if the caller fires that op manually.
+    pub async fn remove_feed(&self, feed_url: &str) -> Result<bool> {
+        let mut opml = self.load_opml().await?;
+        let mut removed = false;
+
+        let original_standalone = opml.standalone_feeds.len();
+        opml.standalone_feeds.retain(|f| f.url != feed_url);
+        if opml.standalone_feeds.len() != original_standalone {
+            removed = true;
+        }
+
+        for folder in opml.folders.iter_mut() {
+            let original_len = folder.feeds.len();
+            folder.feeds.retain(|f| f.url != feed_url);
+            if folder.feeds.len() != original_len {
+                removed = true;
+            }
+        }
+
+        if removed {
+            self.save_opml(opml).await?;
+        }
+        Ok(removed)
     }
 
     pub async fn cleanup_orphaned_settings(&self) -> Result<()> {

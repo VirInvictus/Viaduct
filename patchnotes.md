@@ -1,5 +1,49 @@
 # viaduct — Patch Notes
 
+## v1.7.0 — Add Feed dialog (the obvious missing feature)
+
+Until v1.7.0 the only way to add a feed to Viaduct was OPML import. v1.0.0 → v1.6.0 shipped a complete feed reader that didn't *let you add feeds*. Brandon caught it the right way — by laughing about it. Fixed.
+
+### What ships
+
+- **`Ctrl+N` / "Add Feed…" in the primary menu.** New `act_add_feed` action wired into the same `gio::SimpleAction` infrastructure as every other window action. Menu accelerator surfaces the keybinding next to the entry.
+
+- **Modal `AdwDialog` with three fields**:
+  - **URL** — accepts a feed URL OR a website URL. Discovery handles either.
+  - **Name (optional)** — overrides whatever the feed itself reports as its title. Blank → falls back to the parsed feed title.
+  - **Folder** — `AdwComboRow` populated from the current OPML's folder list, with "None" at the top for standalone placement.
+
+- **Two-pass discovery** — port of NetNewsWire's `FeedFinder`. New module `viaduct-core/src/network/feed_discovery.rs`:
+  1. Treat the URL as a feed and try to parse it directly. RSS / RDF / Atom / JSON Feed all dispatch through the existing `parser::parse`.
+  2. If parsing fails, treat it as HTML. Use `parser::extract_metadata` to scan the `<head>` for `<link rel="alternate" type="application/rss+xml | atom+xml | feed+json">` tags. Pick the first match, recurse into it as a feed.
+  
+  Recursion depth is capped at 2 to avoid runaway loops. URL canonicalization adds `https://` when the user pastes a bare hostname like `daringfireball.net`. 8 unit tests cover every branch.
+
+- **Async hand-off pattern.** All reqwest work goes through `crate::spawn_on_runtime`, never directly off the GLib executor. The dialog awaits a `tokio::sync::oneshot` for the result. Same pattern as `viaduct-img://`, the favicon fetch, and the v1.5.6 video-thumbnail fix. Anti-pattern explicitly called out in CLAUDE.md gotchas; followed religiously.
+
+- **`Account::add_feed`** — places the discovered feed into the OPML hierarchy under the chosen folder (creating the folder if needed) or as a standalone entry. Dedupes by `feed_url`: adding a feed already present at the same URL returns the existing entry rather than duplicating. Saves the OPML through the same coalesced ~500 ms debounced writer the rest of the app uses.
+
+- **`Account::remove_feed`** — symmetric removal helper, ready for v1.7.1's context-menu Delete Feed action. Sweeps both the standalone list and every folder. Empty folders left behind are *preserved* — folders are user-curated, not auto-pruned. Matches NNW behaviour.
+
+- **Inline status feedback.** While discovery runs, the dialog shows "Looking up the feed…" in a dim caption row. On failure ("No feed found at that URL. Check the address and try again."), the row turns into a red error message and the Add button re-enables so the user can retry. On success, the dialog closes with a toast confirming the feed name.
+
+- **Immediate refresh of just the new feed.** After the OPML save, `refresh_specific_feeds(vec![feed])` fires so articles appear in the timeline within seconds of clicking Add. Same path the OPML-import flow uses for newly-discovered feeds.
+
+### Why this didn't ship earlier
+
+It was on the roadmap — implicit in the "user-facing OPML exchange" Phase 12 work — but somehow never got translated into a single-feed entry path. Every release between v0.10 and v1.7.0 assumed the user would either (a) pre-build an OPML file and import it, or (b) edit `~/.local/share/viaduct/local.opml` by hand. Neither is the right answer. Brandon hit the gap immediately when actually using the app, which is exactly the testing methodology that was missing during the long heads-down feature push from v1.0 → v1.5.
+
+### Test status
+
+- `viaduct-core`: 69 tests (was 61; 8 new for `feed_discovery::first_feed_link` and `canonicalize_input`).
+- `viaduct`: 20 tests (unchanged; the dialog UI itself isn't unit-tested but the discovery layer it depends on is thoroughly covered).
+- 1 integration test still passing.
+- fmt + clippy clean.
+
+### What's next
+
+- **v1.7.1 — Right-click context menus.** Sidebar (mark-all-read / refresh-feed / copy-feed-url / delete-feed) and timeline (mark-read / star / open-in-browser / copy-url / mark-above-read / mark-below-read) popovers. The `Account::remove_feed` helper added in this release is what the Delete Feed action will call.
+
 ## v1.6.0 — Stable
 
 Collecting the v1.5.5 → v1.5.9 stability arc into a tagged stable point. No new code beyond a version bump — every fix this release covers already shipped in a v1.5.x release. v1.6.0 exists so packagers, the Flathub manifest, and the AppData release history have a single coherent "stable" line to point at after a long string of incremental hotfixes.
