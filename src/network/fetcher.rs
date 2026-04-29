@@ -281,10 +281,15 @@ impl AccountRefresher {
             }
         }
 
-        // Timing logic
+        // Timing logic — order matches NNW
+        // `feedShouldBeSkippedForTimingReasons`.
         if let Some(last_check) = settings.last_check_date {
-            let is_special = is_special_case_host(&feed.url);
-            if is_special {
+            // domainsWithNoMinimumTime short-circuits to false: these hosts
+            // are checked on every refresh attempt regardless of timing.
+            if is_no_minimum_time_domain(&feed.url) {
+                return false;
+            }
+            if is_special_case_host(&feed.url) {
                 if last_check > special_case_cutoff_date {
                     return true;
                 }
@@ -300,12 +305,68 @@ impl AccountRefresher {
     }
 }
 
+/// Hosts that get the 25-hour `specialCaseCutoffDate` instead of the 29-minute
+/// minimum, plus exemption from the 8-day conditional-GET expiry. These two
+/// well-behaved hosts publish high-frequency feeds and their conditional-GET
+/// is reliable. NNW's `SpecialCase.rachelByTheBayHostName` /
+/// `SpecialCase.openRSSOrgHostName`.
+const SPECIAL_CASE_DOMAINS: &[&str] = &["rachelbythebay.com", "openrss.org"];
+
+/// Hosts that skip the 29-minute minimum entirely (every refresh attempt
+/// hits them, modulo Cache-Control / 304). These are personal sites that
+/// don't publish often but can update at unpredictable times. Synced from
+/// NNW `LocalAccountRefresher.domainsWithNoMinimumTime` as of `4d594181f`.
+const NO_MINIMUM_TIME_DOMAINS: &[&str] = &[
+    "inessential.com",
+    "ranchero.com",
+    "netnewswire.blog",
+    "daringfireball.net",
+    "redsweater.com",
+    "indiestack.com",
+    "blog.plunkitup.com",
+    "bitsplitting.org",
+    "allenpike.com",
+    "hypercritical.co",
+    "micro.inessential.com",
+    "discourse.netnewswire.com",
+    "onefoottsunami.com",
+    "manton.org",
+    "randsinrepose.com",
+    "micro.blog",
+    "shapeof.com",
+    "flyingmeat.com",
+];
+
+/// Returns true if the URL's host matches one of the supplied domains
+/// exactly, ignoring case and an optional leading `www.`. Port of NNW
+/// `SpecialCase.urlStringMatchesDomain`. Domains in `domains` must already
+/// be lowercase and stripped of `www.`.
+///
+/// Substring matching (the previous behavior) false-positives on hosts
+/// like `evilrachelbythebay.com` or `example.com.evil.com`, which is a
+/// real attack surface for the conditional-GET / no-minimum-time bypass.
+fn url_host_matches_domain(url: &str, domains: &[&str]) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let lower = host.to_ascii_lowercase();
+    let normalized = lower.strip_prefix("www.").unwrap_or(&lower);
+    domains.contains(&normalized)
+}
+
 fn is_special_case_host(url: &str) -> bool {
-    url.contains("rachelbythebay.com") || url.contains("openrss.org")
+    url_host_matches_domain(url, SPECIAL_CASE_DOMAINS)
 }
 
 fn is_openrss(url: &str) -> bool {
-    url.contains("openrss.org")
+    url_host_matches_domain(url, &["openrss.org"])
+}
+
+fn is_no_minimum_time_domain(url: &str) -> bool {
+    url_host_matches_domain(url, NO_MINIMUM_TIME_DOMAINS)
 }
 
 /// Drop conditional-GET info if it's older than 8 days (NNW behavior). Some
@@ -432,5 +493,78 @@ async fn refresh_one_feed(
         Err(e) => {
             error!("Failed to fetch feed {}: {:?}", feed.url, e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_host_matches_domain_handles_www_and_case() {
+        let list = &["inessential.com", "openrss.org"];
+        assert!(url_host_matches_domain(
+            "https://inessential.com/feed.xml",
+            list
+        ));
+        assert!(url_host_matches_domain(
+            "https://www.inessential.com/feed.xml",
+            list
+        ));
+        assert!(url_host_matches_domain(
+            "https://INESSENTIAL.COM/feed.xml",
+            list
+        ));
+        assert!(url_host_matches_domain(
+            "https://openrss.org/some/path",
+            list
+        ));
+    }
+
+    #[test]
+    fn url_host_matches_domain_rejects_substring_attacks() {
+        // The previous substring-based implementation accepted these.
+        let list = &["rachelbythebay.com", "openrss.org"];
+        assert!(!url_host_matches_domain(
+            "https://evilrachelbythebay.com/",
+            list
+        ));
+        assert!(!url_host_matches_domain(
+            "https://attacker.com/?u=rachelbythebay.com",
+            list
+        ));
+        assert!(!url_host_matches_domain(
+            "https://rachelbythebay.com.evil.com/",
+            list
+        ));
+    }
+
+    #[test]
+    fn url_host_matches_domain_does_not_match_subdomains() {
+        // NNW checks exact match (after www. strip), not suffix. A
+        // sub-subdomain like `blog.example.com` does NOT match `example.com`.
+        // Domains that need both forms must be listed explicitly (see
+        // `micro.inessential.com` alongside `inessential.com`).
+        let list = &["inessential.com"];
+        assert!(!url_host_matches_domain(
+            "https://blog.inessential.com/x",
+            list
+        ));
+    }
+
+    #[test]
+    fn no_minimum_time_domains_match_real_world_urls() {
+        assert!(is_no_minimum_time_domain(
+            "https://daringfireball.net/feeds/main"
+        ));
+        assert!(is_no_minimum_time_domain(
+            "https://www.flyingmeat.com/blog/feed.xml"
+        ));
+        assert!(is_no_minimum_time_domain(
+            "https://discourse.netnewswire.com/latest.rss"
+        ));
+        assert!(!is_no_minimum_time_domain(
+            "https://example.com/daringfireball.net"
+        ));
     }
 }

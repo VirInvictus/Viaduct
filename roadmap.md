@@ -205,7 +205,7 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 ## Phase 16: QA, Test Suites, & Debug Mode
 - [x] Implement a `viaduct --debug` flag or environment variable that enables verbose `tracing` logs, disables database WAL truncation (for easier inspection), and adds a hidden Debug menu to the UI.
 - [ ] **Workspace Refactoring**: Migrate to a Cargo workspace, pulling `database`, `network`, and `parser` into a `viaduct-core` headless crate to enforce architectural boundaries and support zero-UI testing.
-- [ ] **Video Thumbnail Extraction**: Implement a `video_thumbnail_extractor` to fetch and cache preview images for YouTube/Vimeo links found in feeds.
+- [ ] **Video Thumbnail Extraction**: Implement a `video_thumbnail_extractor` to fetch and cache preview images for YouTube/Vimeo links found in feeds. *(deferred to v1.2.0 UI polish — wires naturally into the timeline preview row alongside the post-WebKit visual upgrade. Building it now would ship unwired code.)*
 - [x] Build out integration test suites for the refresh pipeline (`LocalAccountRefresher` and Inoreader sync), mocking the network layer.
 - [x] Implement UI test harnesses to ensure sidebar/timeline/article pane state transitions are rock solid.
 - [x] Port any remaining applicable unit tests from `.netnewswire/Tests/` and module test directories.

@@ -1,5 +1,17 @@
 # viaduct — Patch Notes
 
+## v1.0.7 — NNW Domain Sync + Substring-Match Bug Fix
+
+Brings our refresher's host-matching policy into parity with NetNewsWire 7.0.5 and closes a real (latent) substring-matching false-positive in the special-case host check. Phase 16 video thumbnails are explicitly deferred to v1.2.0 polish where they wire naturally into the timeline.
+
+- **`url_host_matches_domain` helper** (port of NNW `SpecialCase.urlStringMatchesDomain`): parses URL → lowercases host → strips optional `www.` prefix → exact-matches against a domain list. Replaces three substring-based checks (`is_special_case_host`, `is_openrss`, and the new `is_no_minimum_time_domain`).
+- **Substring-match fix.** Old code used `url.contains("rachelbythebay.com")` which would have false-matched `https://evilrachelbythebay.com/` and `https://attacker.com/?u=rachelbythebay.com`. Both are now correctly rejected. Three regression tests in `network::fetcher::tests` lock this down.
+- **`NO_MINIMUM_TIME_DOMAINS` const** carries the 19 personal-site hosts NNW lists in `LocalAccountRefresher.domainsWithNoMinimumTime` (synced as of upstream commit `4d594181f`): inessential.com, ranchero.com, netnewswire.blog, daringfireball.net, redsweater.com, indiestack.com, blog.plunkitup.com, bitsplitting.org, allenpike.com, hypercritical.co, micro.inessential.com, discourse.netnewswire.com, onefoottsunami.com, manton.org, randsinrepose.com, micro.blog, shapeof.com, flyingmeat.com.
+- **Timing-skip ordering matches NNW**: `is_no_minimum_time_domain` short-circuits to "do not skip" first, then special-case 25h cutoff, then 29-minute minimum for everyone else. Previously these domains were stuck behind the 29-minute floor regardless.
+- **No subdomain matching** (regression-tested). NNW's matcher is exact-host-after-www-strip; sub-subdomains like `blog.inessential.com` do NOT match `inessential.com`. Hosts that need both forms are listed explicitly (NNW lists `micro.inessential.com` alongside `inessential.com`; we follow).
+- **4 new tests** in `network::fetcher::tests`: 41 passing total (was 37).
+- **Phase 16 video thumbnails deferred to v1.2.0** in `roadmap.md`. The natural consumer is the timeline preview row, which gets its visual upgrade alongside the post-WebKit polish pass. Building it now would ship unwired code.
+
 ## v1.0.6 — Reader View Memory Gate (Phase 10 close-out)
 
 Closes the last unchecked Phase 10 item. The local readability extractor now has a quantified RSS budget instead of a hand-wave.
