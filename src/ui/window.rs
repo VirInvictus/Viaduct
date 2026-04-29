@@ -698,7 +698,10 @@ impl ViaductWindow {
                     // Clearing the search reverts the timeline to whatever
                     // the sidebar selection currently shows; for port-first
                     // we just empty it. The user can re-click the sidebar.
-                    store.remove_all();
+                    let n = store.n_items();
+                    if n > 0 {
+                        store.splice(0, n, &[] as &[ArticleNode]);
+                    }
                     return;
                 }
                 // Wrap as a prefix MATCH so `rust*` matches `rustacean`, etc.
@@ -1698,10 +1701,12 @@ fn populate_timeline_with_snippets(
     store: &gio::ListStore,
     results: Vec<(crate::models::Article, String)>,
 ) {
-    store.remove_all();
-    for (article, snippet) in results {
-        store.append(&ArticleNode::with_snippet(article, snippet));
-    }
+    let n_existing = store.n_items();
+    let nodes: Vec<ArticleNode> = results
+        .into_iter()
+        .map(|(article, snippet)| ArticleNode::with_snippet(article, snippet))
+        .collect();
+    store.splice(0, n_existing, &nodes);
 }
 
 /// Escape FTS5 special characters so user input is treated as a literal token.
@@ -1773,10 +1778,9 @@ fn html_escape(s: &str) -> String {
 }
 
 fn populate_timeline(store: &gio::ListStore, articles: Vec<crate::models::Article>) {
-    store.remove_all();
-    for article in articles {
-        store.append(&ArticleNode::new(article));
-    }
+    let n_existing = store.n_items();
+    let nodes: Vec<ArticleNode> = articles.into_iter().map(ArticleNode::new).collect();
+    store.splice(0, n_existing, &nodes);
 }
 
 /// Bulk-fetch statuses for every `ArticleNode` currently in the timeline

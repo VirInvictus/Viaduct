@@ -1,5 +1,13 @@
 # viaduct — Patch Notes
 
+## v1.2.1 — Empty-state flash fix
+
+Tiny, surgical follow-up to v1.2.0. Clicking between feeds in the sidebar briefly flashed the "No articles" `AdwStatusPage` while the timeline rebuilt. Cause: `populate_timeline` did `store.remove_all()` (one `items_changed` → empty-state stack flips visible) then `store.append(...)` per article (more `items_changed` → eventually back to content). The empty-state `connect_items_changed` watcher caught the in-between zero state every time.
+
+Fix: replace `remove_all` + `append`-loop with a single `gio::ListStore::splice(0, n_existing, &nodes)` in both `populate_timeline` and `populate_timeline_with_snippets`. Splice fires exactly one `items_changed` signal carrying both the removal count and the additions count atomically, so observers never see a transient empty store. The search-clear path in `wire_search` also moves to splice so that branch can't flash either.
+
+~10 lines net. No behavioral change beyond the flash going away.
+
 ## v1.2.0 — UI Polish
 
 The "make it pretty on GNOME 50" pass. The whole window now visually echoes the chosen reading theme, every pane tells you what to do when it's empty, the sidebar reads as a real GNOME-style navigation list with section headers and pill badges, the timeline shows relative dates and clean previews and a clear unread/read split, and the layout adapts to narrow windows for laptop-on-the-couch reading. **Real-world session peak: 280–385 MB / 500 MB budget** — same band as v1.1.0.
