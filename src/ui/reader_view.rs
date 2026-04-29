@@ -24,7 +24,6 @@
 //! it a 20 MB tracker-blob page blows the 500 MB ceiling. If we need to
 //! raise this cap, re-run `mem_check` first.
 
-use reqwest::Client;
 use std::io::Cursor;
 use std::time::Duration;
 use thiserror::Error;
@@ -99,21 +98,32 @@ pub async fn extract(
 }
 
 async fn fetch_article_html(url: &str) -> Result<String, ReaderError> {
-    let client = Client::builder()
-        .user_agent("Viaduct/1.0 (Reader View)")
-        .use_rustls_tls()
+    use reqwest::header;
+    let client = crate::network::http::client_builder()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| ReaderError::Fetch(e.to_string()))?;
+    tracing::debug!(%url, "reader_view: fetching article");
+    let started = std::time::Instant::now();
     let resp = client
         .get(url)
+        .header(header::ACCEPT, crate::network::http::ACCEPT_HTML)
         .send()
         .await
         .map_err(|e| ReaderError::Fetch(e.to_string()))?;
     if !resp.status().is_success() {
+        tracing::warn!(%url, status = %resp.status(), "reader_view: HTTP non-success");
         return Err(ReaderError::Fetch(format!("HTTP {}", resp.status())));
     }
-    resp.text()
+    let body = resp
+        .text()
         .await
-        .map_err(|e| ReaderError::Fetch(e.to_string()))
+        .map_err(|e| ReaderError::Fetch(e.to_string()))?;
+    tracing::debug!(
+        %url,
+        bytes = body.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "reader_view: fetched"
+    );
+    Ok(body)
 }

@@ -32,6 +32,9 @@ fn main() -> glib::ExitCode {
 
     info!(version = env!("CARGO_PKG_VERSION"), "Starting viaduct");
 
+    // Debug-mode periodic memory ticker (no-op outside --debug).
+    viaduct::spawn_debug_memory_ticker();
+
     let (db_tx, db_rx) = mpsc::channel(256);
     if let Err(e) = database::spawn_db_worker(db_rx) {
         error!(?e, "Failed to spawn database worker; aborting");

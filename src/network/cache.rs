@@ -46,10 +46,7 @@ struct Inner {
 impl ImageCache {
     pub fn new(favicon_dir: PathBuf, image_dir: PathBuf) -> Self {
         let cap = NonZeroUsize::new(MEMORY_CAPACITY).expect("MEMORY_CAPACITY > 0");
-        let client = Client::builder()
-            .user_agent("Viaduct/1.0 (Linux; GTK4)")
-            .use_rustls_tls()
-            .build()
+        let client = crate::network::http::build_default_client()
             .expect("Failed to build reqwest client for ImageCache");
         Self {
             inner: Arc::new(Mutex::new(Inner {
@@ -90,6 +87,7 @@ impl ImageCache {
         {
             let mut inner = self.inner.lock().await;
             if let Some(bytes) = inner.lru_mut(kind).get(url) {
+                debug!(%url, kind = ?kind, bytes = bytes.len(), "image cache: memory hit");
                 return Some(bytes.clone());
             }
         }
@@ -100,13 +98,14 @@ impl ImageCache {
             (inner.disk_path(kind, url), inner.client.clone())
         };
         if let Ok(bytes) = tokio::fs::read(&disk_path).await {
-            debug!("cache disk hit: {}", url);
+            debug!(%url, kind = ?kind, bytes = bytes.len(), "image cache: disk hit");
             let mut inner = self.inner.lock().await;
             inner.lru_mut(kind).put(url.to_string(), bytes.clone());
             return Some(bytes);
         }
 
         // 3. Network.
+        debug!(%url, kind = ?kind, "image cache: miss → network");
         let bytes = match download(&client, url).await {
             Some(b) => b,
             None => return None,
@@ -119,6 +118,8 @@ impl ImageCache {
         }
         if let Err(e) = tokio::fs::write(&disk_path, &bytes).await {
             warn!(?e, "failed to persist cache file");
+        } else {
+            debug!(%url, kind = ?kind, bytes = bytes.len(), path = ?disk_path, "image cache: disk write");
         }
 
         let mut inner = self.inner.lock().await;
@@ -127,7 +128,7 @@ impl ImageCache {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum Kind {
     Favicon,
     Image,
@@ -151,7 +152,13 @@ impl Inner {
 }
 
 async fn download(client: &Client, url: &str) -> Option<Vec<u8>> {
-    let resp = match client.get(url).send().await {
+    use reqwest::header;
+    let resp = match client
+        .get(url)
+        .header(header::ACCEPT, crate::network::http::ACCEPT_IMAGE)
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             warn!(%url, ?e, "image fetch failed");

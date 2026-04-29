@@ -7,6 +7,7 @@ pub mod background;
 pub mod cache;
 pub mod credentials;
 pub mod fetcher;
+pub mod http;
 pub mod inoreader;
 
 pub use cache::{ImageCache, color_for};

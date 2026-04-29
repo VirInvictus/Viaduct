@@ -1,5 +1,38 @@
 # viaduct — Patch Notes
 
+## v1.0.9 — HTTP Client Parity & Pervasive Debug Tracing
+
+The cause of "half my feeds won't refresh": our `reqwest` client didn't enable `gzip` or `brotli` decompression, while NewsFlash and most other RSS readers do. Servers that auto-negotiate compressed responses handed us binary garbage (which the parser flagged as `UnknownFormat`) or rejected our short / unrecognized User-Agent outright. Plus the debug-mode plumbing existed but wasn't actually being used — fixed in the same commit.
+
+### HTTP client (the actual blocker fix)
+
+- **`reqwest` features**: added `gzip` and `brotli`. Servers like passionweiss.com, the-decoder.com, and many YouTube channel feeds were returning compressed bodies that our client couldn't decode, surfacing as `Parse(UnknownFormat)` or HTTP 403/404. NewsFlash works on these because they enable the same features.
+- **Centralized client builder** in `src/network/http.rs` (new module). One source of truth for the User-Agent (`Viaduct/<VERSION> (RSS reader; +https://github.com/VirInvictus/Viaduct)` — descriptive, contact URL included, matches NNW/NewsFlash convention), plus `gzip + brotli + rustls-tls` baseline.
+- **`Accept` headers per subsystem**: `ACCEPT_FEED` (RSS/Atom/JSON Feed in preference order), `ACCEPT_IMAGE` (PNG/JPEG/WebP/SVG/ICO), `ACCEPT_HTML` (for Reader View). Some servers serve HTML challenge pages by default unless the client explicitly asks for the feed MIME types.
+- **Three call sites updated** to use the shared builder: `Fetcher::new`, `ImageCache::new`, `reader_view::fetch_article_html`. Inoreader's API client still uses `reqwest::Client::new()` — it has its own auth flow and isn't affected by this round of fixes.
+
+### Debug tracing (now actually pervasive)
+
+- **Periodic memory ticker** in `viaduct::spawn_debug_memory_ticker` — random interval between 8 and 25 seconds. Reads `/proc/self/status` for `VmRSS` and `VmHWM` and emits a `tracing::info!` line with both values plus the 500 MB budget reference. Wired in `main.rs` directly after the runtime install. No-op outside `--debug` mode.
+- **Fetcher** logs every request: `fetch: GET` (URL + which conditional-GET headers we're sending), `fetch: 304 (cached)` (with elapsed), `fetch: response` (status + body size + Content-Encoding + has_etag + max_age + elapsed), `fetch: network error` (URL + error + elapsed).
+- **Image cache** logs every memory hit / disk hit / network miss / disk write with URL, kind (favicon vs image), and byte count.
+- **Reader View** logs `reader_view: fetching article` at start, `reader_view: HTTP non-success` on bad status, `reader_view: fetched` on success with byte count + elapsed.
+- **DB worker** logs each op via `tracing::trace!` with the variant name (UpdateFeed, FetchByFeed, Search, Vacuum, etc. — 21 variants exhaustively labeled) and elapsed_ms. Trace-level (debug-mode only) so it doesn't drown info-level logs.
+- **Parse failures** now log a 120-byte body preview alongside the error, so `Parse(UnknownFormat)` immediately reveals whether the response was an HTML challenge page, a CAPTCHA, or actual malformed XML.
+
+### How to use it
+
+```sh
+cargo run --release -- --debug 2>&1 | tee /tmp/viaduct-debug.log
+```
+
+The `--debug` flag flips the `EnvFilter` baseline to `debug,viaduct=trace,html5ever=error`. `RUST_LOG=...` still wins if set explicitly. The memory ticker only fires when `--debug` is on.
+
+### What this doesn't fix
+
+- Feeds that 404/500 because the URL is genuinely dead (some YouTube channels in the user's OPML have closed). NewsFlash works on these because it caches the last-good response — viaduct will sync that behavior when it parses Inoreader-style ETags + `If-None-Match` more aggressively.
+- Inoreader API client still uses `reqwest::Client::new()`; the OAuth flow has its own UA and headers requirement that doesn't share well with the centralized builder. Tracked separately.
+
 ## v1.0.8 — CDATA Body Capture (Critical Parser Fix)
 
 Fixes a long-standing bug where the RSS and Atom parsers silently dropped article bodies wrapped in CDATA sections. Surfaced during v1.1.0-pre3 smoke testing — Sacha Chua's blog and most other WordPress / Hugo / Jekyll feeds publish bodies as `<description><![CDATA[…]]></description>` or `<content:encoded><![CDATA[…]]></content:encoded>`. quick-xml emits these as `Event::CData`, but our parsers only handled `Event::Text`, so the bodies hit the floor.

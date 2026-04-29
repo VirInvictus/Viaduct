@@ -95,6 +95,11 @@ pub fn spawn_db_worker(mut rx: mpsc::Receiver<DbOp>) -> Result<()> {
                 };
 
                 while let Some(op) = rx_ref.blocking_recv() {
+                    let op_kind = match &op {
+                        DbOp::Articles(a) => articles_op_label(a),
+                        DbOp::Settings(_) => "settings",
+                    };
+                    let started = std::time::Instant::now();
                     match op {
                         DbOp::Articles(article_op) => {
                             crate::database::articles::handle_op(&mut articles_conn, article_op);
@@ -102,6 +107,13 @@ pub fn spawn_db_worker(mut rx: mpsc::Receiver<DbOp>) -> Result<()> {
                         DbOp::Settings(settings_op) => {
                             crate::database::settings::handle_op(&mut settings_conn, *settings_op);
                         }
+                    }
+                    if crate::is_debug_mode() {
+                        tracing::trace!(
+                            op = op_kind,
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            "db: op handled"
+                        );
                     }
                 }
             });
@@ -116,6 +128,35 @@ pub fn spawn_db_worker(mut rx: mpsc::Receiver<DbOp>) -> Result<()> {
     });
 
     Ok(())
+}
+
+/// Compact label for tracing the article-op variant. Matches the variant
+/// names so log filtering with `op="UpdateFeed"` works cleanly.
+fn articles_op_label(op: &crate::database::articles::ArticlesDbOp) -> &'static str {
+    use crate::database::articles::ArticlesDbOp::*;
+    match op {
+        BatchInsert(..) => "BatchInsert",
+        UpsertStatuses(..) => "UpsertStatuses",
+        FetchByFeed(..) => "FetchByFeed",
+        FetchByArticleId(..) => "FetchByArticleId",
+        FetchUnread(..) => "FetchUnread",
+        FetchStarred(..) => "FetchStarred",
+        FetchUnreadArticleIds(..) => "FetchUnreadArticleIds",
+        FetchStarredArticleIds(..) => "FetchStarredArticleIds",
+        UpdateStatusesRead(..) => "UpdateStatusesRead",
+        UpdateStatusesStarred(..) => "UpdateStatusesStarred",
+        FetchMissingArticleIds(..) => "FetchMissingArticleIds",
+        FetchToday(..) => "FetchToday",
+        Search(..) => "Search",
+        SearchWithSnippets(..) => "SearchWithSnippets",
+        FetchStatusesByIds(..) => "FetchStatusesByIds",
+        UnreadCountsByFeed(..) => "UnreadCountsByFeed",
+        SmartFeedCounts(..) => "SmartFeedCounts",
+        UpdateFeed { .. } => "UpdateFeed",
+        DeleteArticlesNotInFeeds(..) => "DeleteArticlesNotInFeeds",
+        DeleteOldStatuses { .. } => "DeleteOldStatuses",
+        Vacuum(..) => "Vacuum",
+    }
 }
 
 fn init_articles_db(path: &Path) -> Result<Connection> {

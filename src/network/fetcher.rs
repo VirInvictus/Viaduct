@@ -49,18 +49,8 @@ impl Default for Fetcher {
 
 impl Fetcher {
     pub fn new() -> Self {
-        let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::USER_AGENT,
-            header::HeaderValue::from_static("Viaduct/1.0 (Linux; GTK4)"),
-        );
-
-        let client = Client::builder()
-            .use_rustls_tls()
-            // HTTP/2 is negotiated automatically by reqwest when rustls is used
-            .default_headers(headers)
-            .build()
-            .expect("Failed to build reqwest client");
+        let client =
+            crate::network::http::build_default_client().expect("Failed to build reqwest client");
 
         Self {
             client,
@@ -108,18 +98,30 @@ impl Fetcher {
                 let last_modified_clone = last_modified.map(|s| s.to_string());
 
                 tokio::spawn(async move {
-                    let mut req = client.get(&url_clone);
-                    if let Some(e) = etag_clone {
+                    let mut req = client
+                        .get(&url_clone)
+                        .header(header::ACCEPT, crate::network::http::ACCEPT_FEED);
+                    if let Some(e) = &etag_clone {
                         req = req.header(header::IF_NONE_MATCH, e);
                     }
-                    if let Some(l) = last_modified_clone {
+                    if let Some(l) = &last_modified_clone {
                         req = req.header(header::IF_MODIFIED_SINCE, l);
                     }
-
+                    debug!(
+                        url = %url_clone,
+                        etag = ?etag_clone.is_some(),
+                        if_modified_since = ?last_modified_clone.is_some(),
+                        "fetch: GET"
+                    );
+                    let send_started = std::time::Instant::now();
                     let res = req.send().await;
                     let out = match res {
                         Ok(response) => {
                             let status = response.status();
+                            let content_encoding = response
+                                .headers()
+                                .get(header::CONTENT_ENCODING)
+                                .and_then(|v| v.to_str().ok().map(|s| s.to_string()));
                             if status == StatusCode::TOO_MANY_REQUESTS
                                 && let Some(retry_after) =
                                     response.headers().get(header::RETRY_AFTER)
@@ -134,6 +136,11 @@ impl Fetcher {
                             }
 
                             if status == StatusCode::NOT_MODIFIED {
+                                debug!(
+                                    url = %url_clone,
+                                    elapsed_ms = send_started.elapsed().as_millis() as u64,
+                                    "fetch: 304 (cached)"
+                                );
                                 Ok(FetchResult {
                                     status: status.as_u16(),
                                     body: Vec::new(),
@@ -170,6 +177,16 @@ impl Fetcher {
                                     .await
                                     .map(|b| b.to_vec())
                                     .unwrap_or_default();
+                                debug!(
+                                    url = %url_clone,
+                                    status = status.as_u16(),
+                                    body_bytes = body.len(),
+                                    encoding = ?content_encoding,
+                                    has_etag = etag.is_some(),
+                                    max_age = ?cache_control_max_age,
+                                    elapsed_ms = send_started.elapsed().as_millis() as u64,
+                                    "fetch: response"
+                                );
                                 Ok(FetchResult {
                                     status: status.as_u16(),
                                     body,
@@ -179,7 +196,15 @@ impl Fetcher {
                                 })
                             }
                         }
-                        Err(e) => Err(e.to_string()),
+                        Err(e) => {
+                            warn!(
+                                url = %url_clone,
+                                error = %e,
+                                elapsed_ms = send_started.elapsed().as_millis() as u64,
+                                "fetch: network error"
+                            );
+                            Err(e.to_string())
+                        }
                     };
 
                     let mut active = active_clone.lock().await;
@@ -484,7 +509,18 @@ async fn refresh_one_feed(
                     }
                 }
                 Err(e) => {
-                    error!("Parse failed for {}: {:?}", feed.url, e);
+                    // Helpful preview when the parser rejects the body —
+                    // most "UnknownFormat" failures are servers returning
+                    // an HTML challenge page or unexpected MIME.
+                    let preview_len = result.body.len().min(120);
+                    let preview = String::from_utf8_lossy(&result.body[..preview_len]);
+                    error!(
+                        url = %feed.url,
+                        body_bytes = result.body.len(),
+                        preview = %preview,
+                        error = ?e,
+                        "Parse failed"
+                    );
                 }
             }
 
