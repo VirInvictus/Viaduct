@@ -334,6 +334,31 @@ fn cached_icon_theme_path() -> Option<String> {
 
 fn install_tray_icon_theme() -> Option<String> {
     const ICON_NAME: &str = "org.virinvictus.Viaduct";
+    // v2.6.8: GTK's IconTheme spec requires a per-theme `index.theme`
+    // declaring which subdirs hold which size buckets. Without it,
+    // `St.IconTheme.lookup_icon_for_scale` (the GNOME Shell wrapper
+    // that AppIndicator drives — see `appIndicator.js _getIconData`)
+    // can't enumerate our 256x256 / 512x512 subdirs and falls back to
+    // the placeholder. `Hidden=true` keeps the theme out of any
+    // user-facing theme picker; `Type=Fixed` says "this directory
+    // holds icons at exactly this size" rather than threshold/scalable.
+    const INDEX_THEME: &str = "[Icon Theme]
+Name=Viaduct Tray
+Comment=viaduct tray indicator icons (auto-generated; safe to delete)
+Hidden=true
+Directories=256x256/apps,512x512/apps
+
+[256x256/apps]
+Size=256
+Context=Applications
+Type=Fixed
+
+[512x512/apps]
+Size=512
+Context=Applications
+Type=Fixed
+";
+
     let base = match crate::paths::cache_dir() {
         Ok(p) => p.join("tray-icons"),
         Err(e) => {
@@ -341,16 +366,28 @@ fn install_tray_icon_theme() -> Option<String> {
             return None;
         }
     };
+    let theme_root = base.join("hicolor");
+    if let Err(e) = std::fs::create_dir_all(&theme_root) {
+        tracing::warn!(?theme_root, ?e, "tray icon theme: create_dir_all failed");
+        return None;
+    }
+    let index_path = theme_root.join("index.theme");
+    let needs_index = match std::fs::read_to_string(&index_path) {
+        Ok(existing) => existing != INDEX_THEME,
+        Err(_) => true,
+    };
+    if needs_index && let Err(e) = std::fs::write(&index_path, INDEX_THEME) {
+        tracing::warn!(?index_path, ?e, "tray icon theme: index.theme write failed");
+        return None;
+    }
+
     for (size, bytes) in [(256, ICON_PNG_256), (512, ICON_PNG_512)] {
-        let dir = base.join(format!("hicolor/{size}x{size}/apps"));
+        let dir = theme_root.join(format!("{size}x{size}/apps"));
         if let Err(e) = std::fs::create_dir_all(&dir) {
             tracing::warn!(?dir, ?e, "tray icon theme: create_dir_all failed");
             return None;
         }
         let path = dir.join(format!("{ICON_NAME}.png"));
-        // Re-write only when missing or when content differs (size
-        // proxy is enough — these are static asset bytes). Avoids
-        // touching the file on every startup.
         let needs_write = match std::fs::metadata(&path) {
             Ok(m) => m.len() != bytes.len() as u64,
             Err(_) => true,

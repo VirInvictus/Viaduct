@@ -1,5 +1,41 @@
 # viaduct — Patch Notes
 
+## v2.6.8 — Tray icon on GNOME, take three (`index.theme`)
+
+Follow-up to v2.6.7. User reported the icon was still the placeholder after the v2.6.7 fix. On-disk verification: the PNGs were present at the right paths (`~/.cache/viaduct/tray-icons/hicolor/{256x256,512x512}/apps/org.virinvictus.Viaduct.png`), the SNI item was registered, the slot was allocated. So the install worked. So why still a placeholder?
+
+### Root cause
+
+GTK's icon-theme spec requires a per-theme `index.theme` file at the theme root declaring which subdirectories exist and what size each holds. The format is described in [the freedesktop spec](https://specifications.freedesktop.org/icon-theme-spec/latest/). Without it, `St.IconTheme.lookup_icon_for_scale` — the call AppIndicator's `_getIconData` makes — has no way to know that `256x256/apps/` is a valid icon directory at all, and the lookup fails. The system hicolor theme at `/usr/share/icons/hicolor/index.theme` is 8 KB enumerating every standard subdir for exactly this reason.
+
+### Fix
+
+`install_tray_icon_theme` now also writes a minimal `index.theme` at `<base>/hicolor/index.theme`:
+
+```ini
+[Icon Theme]
+Name=Viaduct Tray
+Comment=viaduct tray indicator icons (auto-generated; safe to delete)
+Hidden=true
+Directories=256x256/apps,512x512/apps
+
+[256x256/apps]
+Size=256
+Context=Applications
+Type=Fixed
+
+[512x512/apps]
+Size=512
+Context=Applications
+Type=Fixed
+```
+
+`Hidden=true` keeps the theme out of any user-facing theme picker. `Type=Fixed` says "this directory holds icons at exactly this size" rather than threshold/scalable — accurate for our two PNG buckets. Idempotent install (compares against the embedded const string).
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.7 — Tray icon on GNOME (AppIndicator extension)
 
 User report after v2.6.6: "It's still a box with three dots in it. It is not our logo." Screenshot confirmed the slot is allocated but rendered as the AppIndicator placeholder.
