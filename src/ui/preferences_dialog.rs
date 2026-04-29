@@ -34,10 +34,15 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
     notifications.set_title("Notifications");
     page.add(&notifications);
 
+    let playback = adw::PreferencesGroup::new();
+    playback.set_title("Video playback");
+    page.add(&playback);
+
     if let Some(settings) = crate::preferences::settings() {
         appearance.add(&color_scheme_row(&settings));
         appearance.add(&article_theme_row(&settings));
         notifications.add(&notifications_row(&settings));
+        playback.add(&video_playback_row(&settings));
     } else {
         let warn = adw::ActionRow::new();
         warn.set_title("Settings unavailable");
@@ -166,6 +171,67 @@ fn theme_index_to_nick(index: u32) -> &'static str {
         "tiqoe_dark" => "tiqoe-dark",
         "verdana_revival" => "verdana-revival",
         _ => "auto",
+    }
+}
+
+/// Picker for how YouTube / Vimeo videos play when detected on an article.
+/// In-pane spawns a transient WebKit dialog; External hands off to the
+/// system handler (xdg-open / mpv / browser); Disabled hides the play
+/// button entirely.
+fn video_playback_row(settings: &gio::Settings) -> adw::ComboRow {
+    let row = adw::ComboRow::builder()
+        .title("Video playback")
+        .subtitle("How YouTube / Vimeo videos play when one is detected on an article.")
+        .build();
+
+    let model = gtk::StringList::new(&[
+        "Play in app (sandboxed)",
+        "Open in default handler",
+        "Don’t show play button",
+    ]);
+    row.set_model(Some(&model));
+    row.set_selected(video_mode_nick_to_index(
+        &settings.string(keys::VIDEO_PLAYBACK_MODE),
+    ));
+
+    let settings_for_row = settings.clone();
+    row.connect_selected_notify(move |row| {
+        let nick = video_mode_index_to_nick(row.selected());
+        if settings_for_row.string(keys::VIDEO_PLAYBACK_MODE).as_str() != nick
+            && let Err(e) = settings_for_row.set_string(keys::VIDEO_PLAYBACK_MODE, nick)
+        {
+            tracing::warn!(?e, "failed to write video-playback-mode setting");
+        }
+    });
+
+    settings.connect_changed(
+        Some(keys::VIDEO_PLAYBACK_MODE),
+        glib::clone!(
+            #[weak]
+            row,
+            move |s, _| {
+                let nick = s.string(keys::VIDEO_PLAYBACK_MODE);
+                row.set_selected(video_mode_nick_to_index(&nick));
+            }
+        ),
+    );
+
+    row
+}
+
+fn video_mode_nick_to_index(nick: &str) -> u32 {
+    match nick {
+        "external" => 1,
+        "disabled" => 2,
+        _ => 0,
+    }
+}
+
+fn video_mode_index_to_nick(index: u32) -> &'static str {
+    match index {
+        1 => "external",
+        2 => "disabled",
+        _ => "in-pane",
     }
 }
 

@@ -207,6 +207,16 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                                 <property name="tooltip-text">Reader View</property>
                               </object>
                             </child>
+                            <child type="end">
+                              <object class="GtkButton" id="play_video_btn">
+                                <property name="icon-name">media-playback-start-symbolic</property>
+                                <property name="tooltip-text">Play video</property>
+                                <property name="visible">False</property>
+                                <style>
+                                  <class name="suggested-action"/>
+                                </style>
+                              </object>
+                            </child>
                           </object>
                         </child>
                         <property name="content">

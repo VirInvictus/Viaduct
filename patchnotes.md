@@ -1,5 +1,52 @@
 # viaduct — Patch Notes
 
+## v1.4.0 — In-pane video playback
+
+Closes the post-v1.3.0 follow-up — articles backed by a YouTube or Vimeo URL now play in-app, not just show a thumbnail. Picks up the user-noted feature ("recognize when YouTube videos are in the feed and allow them to be played there").
+
+### How it works
+
+1. Article gets selected in the timeline → `detect_video` runs against its body → window's `current_video` cell stores the result.
+2. Article-pane header bar gains a "▶ Play video" button (with `suggested-action` styling so it stands out). Visible only when a video was detected AND the playback mode isn't disabled.
+3. Click dispatches based on the new `video-playback-mode` GSetting.
+
+### Three playback modes
+
+- **In-pane (default)** — opens an `AdwDialog` (960×560) housing a *separate* `WebKitWebView` instance dedicated to the embed. JS is enabled on this instance (the YouTube / Vimeo iframe player needs it), but every persistent storage path stays off (no IndexedDB, LocalStorage, app cache, devtools, back-forward gestures, clipboard access, JS popup auto-open). When the dialog closes, `try_close()` runs on the embed WebView so the WebProcess shuts down promptly and audio doesn't keep playing during the dialog teardown gap. The article-pane WebView's lockdown profile is **completely unaffected** — playback is fully isolated to its own dialog instance.
+- **Open in default handler** — hands the canonical watch URL (`youtube.com/watch?v=…` / `vimeo.com/<id>`) to `gio::AppInfo::launch_default_for_uri`. Users with `mpv` / `yt-dlp` configured as their YouTube handler get those automatically; users without get their default browser. Same flow as the existing `Ctrl+Enter` enclosure handler.
+- **Don't show play button** — hides the button entirely. For users who want to ignore the feature.
+
+The mode picker lives in **Preferences → Video playback**. Live-flips: changing the mode immediately hides / shows the button on the current article without waiting for a fresh selection.
+
+### Privacy considerations
+
+- YouTube embeds use `youtube-nocookie.com` (Google's "privacy-enhanced" subdomain that defers cookie writes until playback). Always enabled, no toggle.
+- The embed WebView never gets storage that survives the dialog. Cookies set during playback die when the dialog closes.
+- The article-pane WebView still has JS off, no storage, strict CSP (`default-src 'none'`). This stays true forever — the playback dialog is a separate instance.
+
+### What the spec says about WebKit instance count
+
+The project's hard rule is "exactly ONE `WebKitWebView` for the reading pane" — the new playback dialog's WebView is intentionally NOT the reading pane. The reading pane's lockdown profile is unchanged and untouchable. This v1.4.0 dialog instance only exists while the user is actively watching a video, and is destroyed when they close the dialog.
+
+### Memory cost
+
+WebKit instance for the dialog spins up ~80–120 MB while the user is watching, drops back to baseline (~280 MB band) within a few seconds of dialog close. Peak still well under the 500 MB ceiling. No regression to the idle band — there's only ever a second WebView when something's actively playing.
+
+### Files
+
+- `data/org.virinvictus.Viaduct.gschema.xml` — new `VideoPlaybackMode` enum (`in-pane` / `external` / `disabled`) + `video-playback-mode` key, default `in-pane`.
+- `src/preferences.rs` — `keys::VIDEO_PLAYBACK_MODE` constant.
+- `src/network/video_thumbs.rs` — `VideoSource::embed_url` + `watch_url` helpers.
+- `src/ui/window.ui` — new `play_video_btn` template child in the article-pane `AdwHeaderBar`, hidden by default, `suggested-action` styled.
+- `src/ui/window.rs` — `current_video` RefCell on `ViaductWindow imp`; `wire_play_video_button`, `refresh_video_button_visibility`, `act_play_video`, `present_video_dialog` methods; file-scope `VideoPlaybackMode` enum + `current_video_playback_mode()` resolver. The timeline-selection handler now runs `detect_video` on every selection and toggles the button accordingly.
+- `src/ui/preferences_dialog.rs` — new "Video playback" preferences group with an `AdwComboRow` for the mode picker, two-way bound to the GSetting.
+
+### Testing
+
+- 4 new unit tests in `video_thumbs::tests` (embed URL hosts, autoplay flag, watch URL canonical form). 72 unit tests total (was 68).
+- All 73 tests pass; clippy clean; fmt clean.
+- Manual smoke: launching v1.4.0 release build opens cleanly. Selecting any feed-shaped article without a video keeps the button hidden; selecting a YouTube / Vimeo article exposes the button.
+
 ## v1.3.0 — Video thumbnail extraction
 
 Closes the "video thumbnail extractor" item that's been sitting open in Phase 16 since the v1.2.0 polish pass deferred it. Articles backed by a YouTube or Vimeo URL now show a 16:9 preview thumbnail in the timeline row.

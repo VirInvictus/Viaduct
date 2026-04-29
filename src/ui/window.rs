@@ -54,6 +54,8 @@ mod imp {
         #[template_child]
         pub reader_btn: TemplateChild<gtk::ToggleButton>,
         #[template_child]
+        pub play_video_btn: TemplateChild<gtk::Button>,
+        #[template_child]
         pub toast_overlay: TemplateChild<adw::ToastOverlay>,
         #[template_child]
         pub mark_all_read_btn: TemplateChild<gtk::Button>,
@@ -85,6 +87,9 @@ mod imp {
         /// completions don't need to re-derive everything.
         pub article_display: RefCell<ArticleDisplayState>,
         pub batch_update: crate::ui::batch::BatchUpdate,
+        /// Detected video source for the currently-rendered article, if any.
+        /// Drives `play_video_btn` visibility and the click handler.
+        pub current_video: RefCell<Option<crate::network::video_thumbs::VideoSource>>,
     }
 
     /// Captured state for whatever article is currently on-screen.
@@ -448,6 +453,12 @@ impl ViaductWindow {
             // Untoggle the reader button without re-firing its handler (we
             // want it to reflect `auto_reader` after the settings fetch).
             window.imp().reader_btn.set_active(false);
+            // Detect a video source on this article and update the play
+            // button's visibility. The actual click handler is wired in
+            // wire_play_video_button(); here we just refresh visibility.
+            let detected = crate::network::video_thumbs::detect_video(&article);
+            *window.imp().current_video.borrow_mut() = detected.clone();
+            window.refresh_video_button_visibility();
             window.render_article_body();
 
             // Auto-mark-read on selection — port of NNW
@@ -515,6 +526,117 @@ impl ViaductWindow {
         });
 
         self.wire_search(timeline_store);
+        self.wire_play_video_button();
+    }
+
+    /// Connect the Article-pane "▶ Play video" button to the dispatcher
+    /// in `act_play_video`. Visibility is driven by `current_video` and
+    /// the `video-playback-mode` GSetting (set in `refresh_video_button_visibility`).
+    fn wire_play_video_button(&self) {
+        let weak = self.downgrade();
+        self.imp().play_video_btn.connect_clicked(move |_| {
+            if let Some(window) = weak.upgrade() {
+                window.act_play_video();
+            }
+        });
+        // Track the GSetting so flipping playback mode in Preferences
+        // immediately hides / shows the button without waiting for the
+        // next article selection.
+        if let Some(settings) = crate::preferences::settings() {
+            let weak = self.downgrade();
+            settings.connect_changed(
+                Some(crate::preferences::keys::VIDEO_PLAYBACK_MODE),
+                move |_, _| {
+                    if let Some(window) = weak.upgrade() {
+                        window.refresh_video_button_visibility();
+                    }
+                },
+            );
+        }
+    }
+
+    /// Update the play-video button's visibility based on the current article's
+    /// detected video source AND the user's playback-mode preference.
+    pub(crate) fn refresh_video_button_visibility(&self) {
+        let imp = self.imp();
+        let has_video = imp.current_video.borrow().is_some();
+        let mode = current_video_playback_mode();
+        let visible = has_video && mode != VideoPlaybackMode::Disabled;
+        imp.play_video_btn.set_visible(visible);
+    }
+
+    /// Click handler for the play-video button. Dispatches to the in-pane
+    /// dialog or the system handler based on the GSetting.
+    pub(crate) fn act_play_video(&self) {
+        let Some(source) = self.imp().current_video.borrow().clone() else {
+            return;
+        };
+        match current_video_playback_mode() {
+            VideoPlaybackMode::InPane => self.present_video_dialog(&source),
+            VideoPlaybackMode::External => {
+                let _ = gio::AppInfo::launch_default_for_uri(
+                    &source.watch_url(),
+                    None::<&gio::AppLaunchContext>,
+                );
+            }
+            VideoPlaybackMode::Disabled => {}
+        }
+    }
+
+    /// Present a transient `AdwDialog` housing a fresh `WebKitWebView`
+    /// dedicated to the embed. The dialog's WebView is destroyed when the
+    /// dialog closes — keeps the article-pane WebView's lockdown profile
+    /// intact and lets the kernel reclaim the embed-WebView memory after
+    /// playback. JS is enabled on the playback view (required by YouTube /
+    /// Vimeo's player iframes); persistent storage and DevTools stay off.
+    fn present_video_dialog(&self, source: &crate::network::video_thumbs::VideoSource) {
+        use gtk::glib::object::ObjectExt;
+        use webkit6::prelude::*;
+
+        let dialog = adw::Dialog::new();
+        dialog.set_title("Video");
+        dialog.set_content_width(960);
+        dialog.set_content_height(560);
+
+        let toolbar = adw::ToolbarView::new();
+        let header = adw::HeaderBar::new();
+        toolbar.add_top_bar(&header);
+
+        let view = webkit6::WebView::new();
+        view.set_vexpand(true);
+        view.set_hexpand(true);
+
+        if let Some(settings) = webkit6::prelude::WebViewExt::settings(&view) {
+            settings.set_enable_javascript(true);
+            settings.set_javascript_can_access_clipboard(false);
+            settings.set_javascript_can_open_windows_automatically(false);
+            settings.set_enable_webgl(false);
+            settings.set_enable_developer_extras(false);
+            settings.set_enable_back_forward_navigation_gestures(false);
+            settings.set_enable_html5_database(false);
+            settings.set_enable_html5_local_storage(false);
+            settings.set_enable_offline_web_application_cache(false);
+            settings.set_enable_fullscreen(true);
+            settings.set_media_playback_requires_user_gesture(false);
+            settings.set_user_agent_with_application_details(Some("Viaduct"), Some("1.4"));
+        }
+
+        view.load_uri(&source.embed_url());
+        toolbar.set_content(Some(&view));
+        dialog.set_child(Some(&toolbar));
+
+        // Stop playback and free the underlying WebProcess as soon as the
+        // dialog closes. Without an explicit `try_close`, the WebView lives
+        // until the parent dialog is dropped — which can take a tick after
+        // the user dismisses it, leaving audio playing during the gap.
+        let view_for_close = view.downgrade();
+        dialog.connect_closed(move |_| {
+            if let Some(view) = view_for_close.upgrade() {
+                view.try_close();
+            }
+        });
+
+        dialog.present(Some(self));
     }
 
     /// Re-render the article pane based on the current display state +
@@ -1781,6 +1903,29 @@ fn html_escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// User preference for how to play YouTube / Vimeo videos detected in
+/// articles. Mirrored from the `video-playback-mode` GSetting.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum VideoPlaybackMode {
+    InPane,
+    External,
+    Disabled,
+}
+
+fn current_video_playback_mode() -> VideoPlaybackMode {
+    let Some(settings) = crate::preferences::settings() else {
+        return VideoPlaybackMode::InPane;
+    };
+    match settings
+        .string(crate::preferences::keys::VIDEO_PLAYBACK_MODE)
+        .as_str()
+    {
+        "external" => VideoPlaybackMode::External,
+        "disabled" => VideoPlaybackMode::Disabled,
+        _ => VideoPlaybackMode::InPane,
+    }
 }
 
 fn populate_timeline(store: &gio::ListStore, articles: Vec<crate::models::Article>) {

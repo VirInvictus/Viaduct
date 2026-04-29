@@ -23,6 +23,7 @@ pub mod keys {
     pub const FONT_MONOSPACE: &str = "font-monospace";
     pub const FONT_SERIF: &str = "font-serif";
     pub const ARTICLE_THEME: &str = "article-theme";
+    pub const VIDEO_PLAYBACK_MODE: &str = "video-playback-mode";
 }
 
 /// Open the user-visible preferences. Returns `None` when the schema isn't

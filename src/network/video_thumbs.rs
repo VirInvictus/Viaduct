@@ -46,6 +46,31 @@ impl VideoSource {
         }
         None
     }
+
+    /// Embed URL suitable for the in-pane playback dialog. YouTube uses
+    /// `youtube-nocookie.com` (privacy-respecting variant that still
+    /// honors video-ID lookups). Vimeo uses `player.vimeo.com`. Both
+    /// add `autoplay=1` so the user doesn't have to click play twice.
+    pub fn embed_url(&self) -> String {
+        match self {
+            VideoSource::YouTube { id } => format!(
+                "https://www.youtube-nocookie.com/embed/{id}?autoplay=1&rel=0&modestbranding=1"
+            ),
+            VideoSource::Vimeo { id } => {
+                format!("https://player.vimeo.com/video/{id}?autoplay=1")
+            }
+        }
+    }
+
+    /// Canonical watch URL for the video, suitable for the system handler
+    /// (xdg-open / mpv / browser fallback). For YouTube this is the public
+    /// `youtube.com/watch?v=…` form; for Vimeo, `vimeo.com/<id>`.
+    pub fn watch_url(&self) -> String {
+        match self {
+            VideoSource::YouTube { id } => format!("https://www.youtube.com/watch?v={id}"),
+            VideoSource::Vimeo { id } => format!("https://vimeo.com/{id}"),
+        }
+    }
 }
 
 /// Detect a primary video source for an article. Walks `external_url`, `url`,
@@ -284,6 +309,38 @@ mod tests {
         assert_eq!(
             youtube_thumbnail_url("dQw4w9WgXcQ"),
             "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+        );
+    }
+
+    #[test]
+    fn youtube_embed_url_uses_nocookie_domain() {
+        let src = VideoSource::YouTube {
+            id: "dQw4w9WgXcQ".into(),
+        };
+        let embed = src.embed_url();
+        assert!(embed.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"));
+        assert!(embed.contains("autoplay=1"));
+    }
+
+    #[test]
+    fn vimeo_embed_url_uses_player_subdomain() {
+        let src = VideoSource::Vimeo {
+            id: "123456789".into(),
+        };
+        let embed = src.embed_url();
+        assert!(embed.contains("player.vimeo.com/video/123456789"));
+        assert!(embed.contains("autoplay=1"));
+    }
+
+    #[test]
+    fn watch_urls_match_canonical_host() {
+        assert_eq!(
+            VideoSource::YouTube { id: "abc".into() }.watch_url(),
+            "https://www.youtube.com/watch?v=abc"
+        );
+        assert_eq!(
+            VideoSource::Vimeo { id: "123".into() }.watch_url(),
+            "https://vimeo.com/123"
         );
     }
 

@@ -19,6 +19,12 @@
     <value nick="verdana-revival" value="9"/>
   </enum>
 
+  <enum id="org.virinvictus.Viaduct.VideoPlaybackMode">
+    <value nick="in-pane" value="0"/>
+    <value nick="external" value="1"/>
+    <value nick="disabled" value="2"/>
+  </enum>
+
   <schema id="org.virinvictus.Viaduct" path="/org/virinvictus/Viaduct/">
     <key name="color-scheme" enum="org.virinvictus.Viaduct.ColorScheme">
       <default>"default"</default>
@@ -73,6 +79,19 @@
       <description>
         Optional font family name override for serif article content. Empty
         string means "follow system default".
+      </description>
+    </key>
+
+    <key name="video-playback-mode" enum="org.virinvictus.Viaduct.VideoPlaybackMode">
+      <default>"in-pane"</default>
+      <summary>How to play YouTube / Vimeo videos detected in articles</summary>
+      <description>
+        "in-pane" opens the video inside a sandboxed playback dialog backed by
+        a fresh WebKit instance scoped to the embed origin (destroyed when the
+        dialog closes so memory is reclaimed). "external" hands the URL off to
+        the system default handler (xdg-open). "disabled" hides the play button
+        entirely. The article-pane WebView's lockdown profile is unchanged in
+        every mode — playback is opt-in and isolated.
       </description>
     </key>
 
