@@ -1133,6 +1133,62 @@ impl ViaductWindow {
         }
     }
 
+    /// Copy the current article's preferred URL to the clipboard. Toast
+    /// confirmation so the user knows it worked. Same NNW preferredLink
+    /// fallback (`external_url` → `url`) as `act_open_in_browser`.
+    pub(crate) fn act_copy_url(&self) {
+        let Some(selection) = self.imp().timeline_selection.get() else {
+            return;
+        };
+        let Some(item) = selection.selected_item() else {
+            return;
+        };
+        let Some(node) = item.downcast_ref::<ArticleNode>() else {
+            return;
+        };
+        let Some(article) = node.article() else {
+            return;
+        };
+        let Some(url) = article.external_url.or(article.url) else {
+            self.imp()
+                .toast_overlay
+                .add_toast(adw::Toast::new("This article has no URL to copy."));
+            return;
+        };
+        self.clipboard().set_text(&url);
+        self.imp()
+            .toast_overlay
+            .add_toast(adw::Toast::new("Article URL copied."));
+    }
+
+    /// Programmatic toggle of the Reader View button. Lets users flip in
+    /// and out of reader mode via Ctrl+Shift+R without taking their hand
+    /// off the keyboard.
+    pub(crate) fn act_toggle_reader(&self) {
+        let btn = &self.imp().reader_btn;
+        btn.set_active(!btn.is_active());
+    }
+
+    /// Close the article pane in narrow / collapsed layouts so Escape
+    /// returns to the timeline. In wide layouts the inner split view
+    /// stays mounted (collapsing it would jolt the chrome), but the
+    /// timeline selection is cleared so the article pane shows the
+    /// "No article selected" empty state.
+    pub(crate) fn act_close_article(&self) {
+        let imp = self.imp();
+        if imp.inner_split_view.is_collapsed() {
+            // In collapsed (mobile-shaped) mode AdwNavigationSplitView
+            // exposes a back stack — pop it.
+            imp.inner_split_view.set_show_content(false);
+        }
+        // Always clear the article display so wide-layout users get the
+        // empty status page when they hit Escape too.
+        if let Some(selection) = imp.timeline_selection.get() {
+            selection.set_selected(gtk::INVALID_LIST_POSITION);
+        }
+        imp.article_stack.set_visible_child_name("empty");
+    }
+
     pub(crate) fn act_open_enclosure(&self) {
         let Some(selection) = self.imp().timeline_selection.get() else {
             return;
@@ -1221,7 +1277,11 @@ impl ViaductWindow {
     /// Toast feedback so a refresh that produces no visible state change
     /// is at least surfaced. Dismissed automatically by `AdwToast`.
     /// Flip the sync button's icon → spinner. Call at refresh start;
-    /// pair with `set_refresh_in_progress(false)` at completion.
+    /// pair with `set_refresh_in_progress(false)` at completion. Also
+    /// disables the `win.refresh` action while the cycle runs so a
+    /// double-click can't kick off a parallel refresher (which would
+    /// double the network load and produce mismatched batch_update
+    /// start/end pairs).
     pub(crate) fn set_refresh_in_progress(&self, on: bool) {
         let imp = self.imp();
         if on {
@@ -1230,6 +1290,11 @@ impl ViaductWindow {
         } else {
             imp.sync_btn_spinner.stop();
             imp.sync_btn_stack.set_visible_child_name("icon");
+        }
+        if let Some(action) = self.lookup_action("refresh")
+            && let Some(simple) = action.downcast_ref::<gio::SimpleAction>()
+        {
+            simple.set_enabled(!on);
         }
     }
 

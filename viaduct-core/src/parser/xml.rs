@@ -758,6 +758,7 @@ fn atom_handle_text_or_cdata(
     current_author: &mut Option<MutableAuthor>,
     current_item_title: &mut Option<String>,
     current_item_body: &mut Option<String>,
+    current_item_summary: &mut Option<String>,
     current_item_guid: &mut Option<String>,
     current_item_date: &mut Option<chrono::DateTime<chrono::Utc>>,
     current_item_date_modified: &mut Option<chrono::DateTime<chrono::Utc>>,
@@ -788,8 +789,13 @@ fn atom_handle_text_or_cdata(
             b"content" if current_item_body.is_none() => {
                 *current_item_body = Some(text_str);
             }
-            b"summary" if current_item_body.is_none() => {
-                *current_item_body = Some(text_str);
+            // NNW d6eb8df7d: <summary> goes into a SEPARATE summary field;
+            // it does NOT promote into body when content is missing. The
+            // article-render fallback chain in `window.rs` already prefers
+            // content_html → content_text → summary, so summary-only feeds
+            // still render correctly without the parser conflating fields.
+            b"summary" if current_item_summary.is_none() => {
+                *current_item_summary = Some(text_str);
             }
             b"id" if current_item_guid.is_none() => {
                 *current_item_guid = Some(text_str);
@@ -832,6 +838,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
     let mut current_item_guid = None;
     let mut current_item_title = None;
     let mut current_item_body = None;
+    let mut current_item_summary = None;
     let mut current_item_link = None;
     let mut current_item_permalink = None;
     let mut current_item_date = None;
@@ -867,6 +874,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                     current_item_guid = None;
                     current_item_title = None;
                     current_item_body = None;
+                    current_item_summary = None;
                     current_item_link = None;
                     current_item_permalink = None;
                     current_item_date = None;
@@ -884,11 +892,15 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                     // wrapped in a single <div xmlns="...">). Capture the raw
                     // inner XML and feed it to the renderer as HTML. Without
                     // this branch quick-xml hands us only the bare text nodes,
-                    // which loses every tag.
-                    if let Some(inner) = capture_atom_xhtml_inner(&mut reader)
-                        && current_item_body.is_none()
-                    {
-                        current_item_body = Some(inner);
+                    // which loses every tag. Per NNW d6eb8df7d: content goes
+                    // to body, summary goes to summary — they don't share a
+                    // slot anymore.
+                    if let Some(inner) = capture_atom_xhtml_inner(&mut reader) {
+                        if name_ref == b"content" && current_item_body.is_none() {
+                            current_item_body = Some(inner);
+                        } else if name_ref == b"summary" && current_item_summary.is_none() {
+                            current_item_summary = Some(inner);
+                        }
                     }
                     current_tag.clear();
                 } else if name_ref == b"author" {
@@ -936,6 +948,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                     &mut current_author,
                     &mut current_item_title,
                     &mut current_item_body,
+                    &mut current_item_summary,
                     &mut current_item_guid,
                     &mut current_item_date,
                     &mut current_item_date_modified,
@@ -961,6 +974,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                     &mut current_author,
                     &mut current_item_title,
                     &mut current_item_body,
+                    &mut current_item_summary,
                     &mut current_item_guid,
                     &mut current_item_date,
                     &mut current_item_date_modified,
@@ -1015,7 +1029,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                         content_text: None,
                         url: current_item_permalink.take(),
                         external_url: current_item_link.take(),
-                        summary: None,
+                        summary: current_item_summary.take(),
                         image_url: None,
                         date_published: current_item_date.take(),
                         date_modified: current_item_date_modified.take(),
@@ -1332,9 +1346,13 @@ mod tests {
     }
 
     #[test]
-    fn atom_xhtml_summary_used_when_content_absent() {
-        // Falls back to <summary type="xhtml"> when no <content> tag is
-        // present, matching our existing summary-as-body rule for type="text".
+    fn atom_xhtml_summary_lands_in_summary_field_not_body() {
+        // Per NNW d6eb8df7d (issue: <summary> being conflated with <content>):
+        // the summary, even when expressed as type="xhtml", goes into the
+        // ParsedItem.summary field. It does NOT promote into content_html
+        // even when content is absent — the article-render fallback chain
+        // in window.rs prefers content_html → content_text → summary, so
+        // summary-only feeds still render correctly downstream.
         let xml = br#"<?xml version="1.0"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <title>Site</title>
@@ -1346,11 +1364,34 @@ mod tests {
   </entry>
 </feed>"#;
         let feed = parse_atom(xml, "https://example.com/feed").unwrap();
-        let body = feed.items[0].content_html.as_deref().unwrap_or("");
+        let item = &feed.items[0];
+        assert!(item.content_html.is_none(), "content_html shouldn't be set");
+        let summary = item.summary.as_deref().unwrap_or("");
         assert!(
-            body.contains("<strong>Inline</strong>"),
-            "lost xhtml: {body}"
+            summary.contains("<strong>Inline</strong>"),
+            "lost xhtml summary: {summary}"
         );
+    }
+
+    #[test]
+    fn atom_summary_and_content_kept_separate() {
+        // Both elements present — each lands in its own field. Port of
+        // NNW's `summaryAndContentKeptSeparate` test (d6eb8df7d).
+        let xml = br#"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>t</title><id>urn:t</id>
+  <entry>
+    <id>urn:t:1</id>
+    <title>both</title>
+    <updated>2020-05-01T00:00:00Z</updated>
+    <summary>The summary.</summary>
+    <content>The content.</content>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "http://example.com/").unwrap();
+        let item = &feed.items[0];
+        assert_eq!(item.content_html.as_deref(), Some("The content."));
+        assert_eq!(item.summary.as_deref(), Some("The summary."));
     }
 
     #[test]

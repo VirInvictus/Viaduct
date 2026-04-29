@@ -73,9 +73,16 @@ pub fn apply_color_scheme(settings: &gio::Settings) {
 /// Apply typography overrides to the application using a global CSS provider.
 /// Syncs live when settings change.
 pub fn apply_fonts(settings: &gio::Settings) {
+    // No-op when there's no display attached (headless test runners,
+    // dev environments without a Wayland session). Without this guard
+    // a missing display crashes the whole app at startup.
+    let Some(display) = gtk::gdk::Display::default() else {
+        tracing::warn!("apply_fonts: no GDK display available — skipping CSS provider install");
+        return;
+    };
     let provider = gtk::CssProvider::new();
     gtk::style_context_add_provider_for_display(
-        &gtk::gdk::Display::default().unwrap(),
+        &display,
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );

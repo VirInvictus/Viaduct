@@ -72,6 +72,15 @@ pub enum ArticlesDbOp {
         retention_days: i64,
         reply: oneshot::Sender<Result<usize>>,
     },
+    /// Port of NNW `deleteOrphanedAuthorsLookupRows` (issue #5232 fix).
+    /// Sweeps `authorsLookup` rows whose article no longer exists, then
+    /// drops `authors` rows no longer referenced by any lookup. Catches
+    /// the slow leak where an author table accumulates rows from
+    /// long-deleted articles. Runs once at startup as part of
+    /// `cleanup_at_startup`. Returns the count of orphan author rows
+    /// removed (lookup rows are typically caught by the delete trigger;
+    /// this op is the safety net for any that escaped).
+    DeleteOrphanedAuthors(oneshot::Sender<Result<usize>>),
     /// Run `VACUUM` on the connection. Worker-thread-only; never call from
     /// inside another transaction.
     Vacuum(oneshot::Sender<Result<()>>),
@@ -162,6 +171,12 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
             author_id INTEGER NOT NULL,
             PRIMARY KEY(article_id, author_id)
         );
+
+        -- Speeds up the delete-trigger and the orphan-cleanup sweep, both of
+        -- which scan authorsLookup by article_id. Mirrors NNW's
+        -- `authorsLookup_articleID` index added alongside issue #5232.
+        CREATE INDEX IF NOT EXISTS authorsLookup_article_id_idx
+            ON authorsLookup (article_id);
 
         CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(
             article_id UNINDEXED,
@@ -300,6 +315,10 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
         } => {
             let res = delete_old_statuses(conn, retention_days);
             let _ = reply.send(res);
+        }
+        ArticlesDbOp::DeleteOrphanedAuthors(tx) => {
+            let res = delete_orphaned_authors(conn);
+            let _ = tx.send(res);
         }
         ArticlesDbOp::Vacuum(tx) => {
             let res = vacuum(conn);
@@ -935,6 +954,27 @@ fn vacuum(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// Port of NNW `deleteOrphanedAuthorsLookupRows` (issue #5232 fix). Wrapped
+/// in a single transaction. The `articles_ad_lookup` delete-trigger handles
+/// the live case where an article is deleted, but transactions that bypass
+/// the trigger (or pre-trigger DBs from older builds) can leave dangling
+/// rows. Returns the count of orphan author rows removed.
+fn delete_orphaned_authors(conn: &mut Connection) -> Result<usize> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "DELETE FROM authorsLookup
+             WHERE article_id NOT IN (SELECT article_id FROM articles)",
+        [],
+    )?;
+    let removed = tx.execute(
+        "DELETE FROM authors
+             WHERE author_id NOT IN (SELECT DISTINCT author_id FROM authorsLookup)",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1269,5 +1309,47 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM articles", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn delete_orphaned_authors_cleans_unreferenced_rows() {
+        // Drop an authorsLookup row out from under the trigger by inserting
+        // it manually after the article is deleted — simulates a pre-trigger
+        // DB or a transaction that bypassed the cascade. The cleanup op
+        // should sweep the lookup row AND the now-orphan author row.
+        let mut conn = in_memory();
+        // Seed an author + an orphan lookup row pointing at a non-existent
+        // article. Authors with no lookup also count as orphans.
+        conn.execute(
+            "INSERT INTO authors (author_id, name, url, avatar_url, email)
+             VALUES (1, 'Live Author', NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO authors (author_id, name, url, avatar_url, email)
+             VALUES (2, 'Orphan Author', NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO authorsLookup (article_id, author_id) VALUES ('ghost-article', 2)",
+            [],
+        )
+        .unwrap();
+
+        let removed = delete_orphaned_authors(&mut conn).unwrap();
+        // Orphan Author (2) and Live Author (1, because no lookup pointed
+        // at it) both gone — neither is referenced by any live article.
+        assert_eq!(removed, 2);
+
+        let lookup_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM authorsLookup", [], |r| r.get(0))
+            .unwrap();
+        let author_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM authors", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(lookup_count, 0);
+        assert_eq!(author_count, 0);
     }
 }

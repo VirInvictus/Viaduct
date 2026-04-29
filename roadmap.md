@@ -246,4 +246,4 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 4. FTS5 search across all cached articles returns results in under 50 ms on a 50k-article corpus.
 5. Full compliance with GNOME HIG and libadwaita 1.7 styling.
 6. Flathub-accepted Flatpak build running in a strict sandbox.
-ox.
+

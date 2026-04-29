@@ -96,6 +96,24 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                 <property name="accelerator">&lt;Ctrl&gt;Return</property>
               </object>
             </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title" translatable="yes">Copy Article URL</property>
+                <property name="accelerator">&lt;Ctrl&gt;&lt;Shift&gt;c</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title" translatable="yes">Toggle Reader View</property>
+                <property name="accelerator">&lt;Ctrl&gt;&lt;Shift&gt;r</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title" translatable="yes">Close Article</property>
+                <property name="accelerator">Escape</property>
+              </object>
+            </child>
           </object>
         </child>
         <child>

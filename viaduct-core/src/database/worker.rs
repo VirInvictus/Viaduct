@@ -155,6 +155,7 @@ fn articles_op_label(op: &crate::database::articles::ArticlesDbOp) -> &'static s
         UpdateFeed { .. } => "UpdateFeed",
         DeleteArticlesNotInFeeds(..) => "DeleteArticlesNotInFeeds",
         DeleteOldStatuses { .. } => "DeleteOldStatuses",
+        DeleteOrphanedAuthors(..) => "DeleteOrphanedAuthors",
         Vacuum(..) => "Vacuum",
     }
 }

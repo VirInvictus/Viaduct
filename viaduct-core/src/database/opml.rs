@@ -552,10 +552,18 @@ impl OpmlWriter {
                     _ = sleep(Duration::from_millis(500)), if pending_save.is_some() => {
                         if let Some(file) = pending_save.take() {
                             let res = Self::write_to_disk(&path, &file).await;
+                            // Coalesced save: every queued caller gets the
+                            // same flush result. The borrowing dance through
+                            // io::Error::other lets us hand each oneshot a
+                            // Result<()> without cloning ViaductError (which
+                            // wraps non-Clone source errors).
                             for reply_tx in save_txs.drain(..) {
-                                let _ = reply_tx.send(res.as_ref().map(|_| ()).map_err(|e| crate::error::ViaductError::Io(std::io::Error::other(e.to_string())))); // Needs proper clone of result.
-                                // Wait, to make it simpler, we just match on the result and send custom mapped errors or we don't return the result since it's a debounced save.
-                                // The original oneshot sender might just wait for completion.
+                                let send_res = res.as_ref().map(|_| ()).map_err(|e| {
+                                    crate::error::ViaductError::Io(std::io::Error::other(
+                                        e.to_string(),
+                                    ))
+                                });
+                                let _ = reply_tx.send(send_res);
                             }
                         }
                     }

@@ -413,6 +413,14 @@ impl Account {
             tracing::info!("Cleaned up {} orphan status rows", removed_statuses);
         }
 
+        let removed_authors = self.delete_orphaned_authors().await.unwrap_or_else(|e| {
+            tracing::warn!(?e, "delete_orphaned_authors failed");
+            0
+        });
+        if removed_authors > 0 {
+            tracing::info!("Cleaned up {} orphan author rows", removed_authors);
+        }
+
         if let Err(e) = self.vacuum_databases().await {
             tracing::warn!(?e, "vacuum_databases failed");
         }
@@ -451,6 +459,16 @@ impl Account {
                 retention_days,
                 reply,
             }))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    async fn delete_orphaned_authors(&self) -> Result<usize> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::DeleteOrphanedAuthors(tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

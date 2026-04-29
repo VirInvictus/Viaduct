@@ -1,5 +1,45 @@
 # viaduct — Patch Notes
 
+## v1.5.2 — Audit pass: NNW resync, bug fixes, UI touch-ups
+
+End-of-cycle audit. Compared the latest `.netnewswire/` and `.newsflash/` trees against our state, fixed real bugs, polished the UX. Patchnotes lead with the user-visible items, then the porting fidelity work.
+
+### User-facing
+
+- **Three new keyboard shortcuts**, surfaced in the Ctrl+? cheat sheet:
+  - `Ctrl+Shift+C` — Copy article URL. Toast confirms ("Article URL copied."). Same NNW `preferredLink` fallback chain (`external_url` → `url`); articles with no URL get a "no URL to copy" toast instead of silent failure.
+  - `Ctrl+Shift+R` — Toggle Reader View. Programmatically flips the reader-button state, so the affordance is keyboard-reachable.
+  - `Escape` — Close article. In narrow / collapsed window layouts, pops the inner navigation back to the timeline; in wide layouts, clears the timeline selection so the article pane shows its empty state.
+- **Refresh button disables during a refresh cycle.** Previously a double-click could spawn parallel refreshers, doubling network load and producing mismatched `batch_update` start/end pairs. The `win.refresh` action now sets `enabled=false` while the cycle runs and re-enables on completion or error.
+
+### NetNewsWire parity catch-up
+
+NNW's main branch had three fixes since our last sync that we hadn't ported. Caught all three:
+
+- **Atom `<summary>` and `<content>` are now kept strictly separate** *(NNW d6eb8df7d)*. Before: `<summary>` was promoted into `content_html` when `<content>` was absent. After: `<summary>` always lands in `ParsedItem.summary`; `<content>` always lands in `content_html`. They never share a slot. The article-render fallback chain in `window.rs` already prefers `content_html → content_text → summary`, so summary-only feeds still render correctly downstream — but feeds shipping both finally show both fields where downstream code expects them. Includes the `xhtml` capture path so `<summary type="xhtml">` lands in summary too, not body. Added `atom_summary_and_content_kept_separate` test covering the both-present case.
+- **Orphan author cleanup** *(NNW 200e5b19f, issue #5232)*. New `DeleteOrphanedAuthors` op runs on startup as part of the `cleanup_at_startup` chain. Sweeps `authorsLookup` rows whose article no longer exists, then drops `authors` rows no longer referenced by any lookup. The existing `articles_ad_lookup` delete-trigger handles the live case where an article is removed; this op is the safety net for any rows that escaped (pre-trigger DBs, transactions that bypassed the cascade). Plus a new `authorsLookup_article_id_idx` index speeding up both the trigger and the cleanup sweep.
+- **`url_host_matches_domain` already strips `www.`** — verified in sync with NNW 62c73d2c9 (we shipped this earlier so no change needed).
+- **Domain lists in sync**: the 18-domain `NO_MINIMUM_TIME_DOMAINS` list matches NNW's current `domainsWithNoMinimumTime` set.
+
+### Bug fixes
+
+- **`apply_fonts` no longer crashes when there's no GDK display.** Previously called `gtk::gdk::Display::default().unwrap()`, which would panic in a headless environment (test runners, dev sessions without a Wayland session). Now log-and-skip via a `let Some(display) = ... else { return; }` guard.
+- **OPML coalesced-save error path cleaned up.** The borrow dance through `io::Error::other` is now commented and tidied; previous code had a stale "Needs proper clone of result" comment trail.
+
+### Repo hygiene
+
+- Deleted the stray `test_menu.rs` file that had been sitting at the repo root since v1.0.1.
+- `.gitignore` deduplicated and reorganized; added `/builddir`, `/build`, `/_build` for Meson; removed the redundant Cargo template comments.
+- Trailing `ox.` typo at the end of `roadmap.md` removed.
+
+### NewsFlash comparison
+
+NewsFlash uses `html2gtk` to render articles as native GTK widget trees — no WebKit, no JavaScript, lower memory floor but lower typography fidelity. We deliberately chose the WebKit-with-strict-CSP path for typography, accepting the higher (but bounded) memory cost. NewsFlash's design is consistent and well-executed; the divergence is by design, not oversight.
+
+### CI / counts
+
+73 unit + 1 integration tests passing (61 viaduct-core after the new Atom + author tests, 12 viaduct, 1 integration). fmt + clippy clean across the workspace.
+
 ## v1.5.1 — Meson build wrapper
 
 Closes the last open Phase 0 / Phase 17 prep item: the project now builds via meson alongside cargo. Packagers and the Flatpak manifest no longer need hand-rolled `install -Dm755 …` invocations; a single `meson install` lays out the binary, gschema, themes, desktop entry, and AppStream metainfo into the canonical GNOME locations.

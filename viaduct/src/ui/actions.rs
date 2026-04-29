@@ -44,6 +44,9 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     // Open / external
     register(window, "open-in-browser", |w| w.act_open_in_browser());
     register(window, "open-enclosure", |w| w.act_open_enclosure());
+    register(window, "copy-url", |w| w.act_copy_url());
+    register(window, "toggle-reader", |w| w.act_toggle_reader());
+    register(window, "close-article", |w| w.act_close_article());
 
     // App chrome
     register(window, "refresh", |w| w.act_refresh());
@@ -84,6 +87,9 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     app.set_accels_for_action("win.mark-older-read", &["o"]);
     app.set_accels_for_action("win.open-in-browser", &["b", "Return"]);
     app.set_accels_for_action("win.open-enclosure", &["<Ctrl>Return"]);
+    app.set_accels_for_action("win.copy-url", &["<Ctrl><Shift>c"]);
+    app.set_accels_for_action("win.toggle-reader", &["<Ctrl><Shift>r"]);
+    app.set_accels_for_action("win.close-article", &["Escape"]);
     app.set_accels_for_action("win.refresh", &["<Ctrl>r"]);
     app.set_accels_for_action("win.focus-search", &["<Ctrl>f"]);
     app.set_accels_for_action("win.toggle-sidebar", &["F9"]);
