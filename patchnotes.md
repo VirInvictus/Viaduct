@@ -1,5 +1,37 @@
 # viaduct — Patch Notes
 
+## v1.5.4 — Icon + logo redesign
+
+The v1.5.3 icon shipped with three real bugs that I should have caught before tagging it. Brandon reviewed the actual rendered output and pushed back. This release fixes all three and rebuilds the banner so it works on dark themes.
+
+### What was broken
+
+1. **Pier-band line cutting through the open archway.** The horizontal "pier band" rectangle I drew at y=62 was 76px wide — full outer-arch width — which means it covered both the masonry legs *and* the open archway interior between them. Visually that read as an opaque horizontal beam crossing the open arch, which is architectural nonsense. Rectangle removed.
+
+2. **Springer rectangles creating asymmetric "broken leg" appearance.** The two corner overlays (at x=26-36 and x=92-102, y=58-64) were stamped over the leg masonry. At small render sizes they sometimes anti-aliased badly enough that the right leg looked shorter than the left. Removed entirely — they were detail that didn't survive small-size rendering anyway.
+
+3. **Wall thickness wrong at the apex.** The outer arc had its centre at (64, 56) with radius 38; the inner arc had its centre at (64, 64) with radius 28 — *different centres*, which produced a wall that was 18px thick at the top and 10px thick on the sides. That's the opposite of how real Roman aqueducts are built (heavy piers, thin arch ring), and it made the apex look squat. Both arcs now share the same centre at (64, 64) with radii 40 and 30 — uniform 10px wall thickness around the entire archway.
+
+### Icon redesign
+
+Concentric outer/inner arcs centred at (64, 64) with radii 40 and 30. Both arcs sit on top of straight legs that descend to y=110. Single keystone at the apex, sized to span exactly from the outer arc top (y=24) to the inner arc top (y=34) — sits *between* the masonry layers like a real keystone, not floating in the archway interior. RSS broadcast mark centred horizontally inside the inner arch, anchored low so the arcs sweep into the archway's head room.
+
+Reads cleanly at every render size from 16×16 (where the keystone collapses but the silhouette + RSS dot remain) up to 512×512 (where every detail crisps). Symbolic icon redrawn to match the same concentric geometry on a 16×16 grid.
+
+### Logo redesign
+
+The v1.5.3 banner used a transparent background with `#3E332A` (dark brown) wordmark. On dark host themes — GitHub dark, dark file viewers, dark social-card previews — the wordmark was nearly invisible. Brandon's screenshot from a dark file viewer made this immediately obvious; the wordmark was a black-on-near-black phantom.
+
+Fixed by giving the banner a unified cream-card rounded rectangle covering the full 480×144 canvas. The wordmark sits on cream regardless of host background, so it reads on every theme. The icon block is its own slightly-darker cream square inside the card so it still reads as the icon, not as part of the wordmark plate. Wordmark weight bumped from 600 to 700 for better presence.
+
+### Everything else
+
+73 unit + 1 integration tests still passing. fmt + clippy clean. `docs/icon-256.png` and `docs/icon-512.png` regenerated from the new SVG so the in-repo PNG fallbacks stay in sync.
+
+### Lesson
+
+I declared v1.5.3 done after rendering the icon at 64px and 128px and saying it looked good. I didn't render at 512px, didn't view the banner against a dark background, didn't sanity-check the geometry. Brandon caught what should have been caught at the source. Won't ship icon work again without rendering at the size people will actually look at it (512px+ for app icons, full-banner against multiple host backgrounds for logos).
+
 ## v1.5.3 — Visual identity: app icon, banner logo, README polish
 
 The project finally has a face. Up to now the desktop file referenced an icon name that didn't resolve to anything — gnome-software, the dock, the shell launcher all fell back to a generic-app placeholder. The README's banner image was a broken link.

@@ -1,47 +1,42 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Viaduct symbolic icon. Single-colour, designed to recolour with
-  `currentColor` at every place GTK uses symbolic icons (menu items,
-  notifications, dock indicators).
+  Viaduct symbolic icon — single-colour redraw matching the v1.5.4
+  icon redesign.
 
-  Same arch + RSS waves concept as the full-colour app icon, simplified
-  to a 16×16 grid for crisp small-size rendering. The arch is rendered
-  as a thick stroke instead of a filled silhouette so the symbolic
-  version reads cleanly even at 12×12 in tray areas.
+  Concentric arc geometry (uniform 1px wall on the 16×16 grid) so the
+  silhouette stays symmetric at every render size. Recolours via
+  `currentColor` for sidebars / menu items / notifications.
 -->
 <svg xmlns="http://www.w3.org/2000/svg"
      width="16" height="16"
      viewBox="0 0 16 16"
-     fill="none">
-  <g fill="#222222">
-    <!-- Arch silhouette: a single rounded-top shape with the inner
-         arch carved out. Drawn as one path with even-odd fill so the
-         inner curve subtracts cleanly. -->
-    <path fill-rule="evenodd"
-          d="
-            M 1.5 14
-            L 1.5 7
-            A 6.5 6.5 0 0 1 14.5 7
-            L 14.5 14
-            L 1.5 14
-            Z
-            M 3 14
-            L 3 7.5
-            A 5 5 0 0 1 13 7.5
-            L 13 14
-            L 3 14
-            Z
-          "/>
+     fill="#222222">
+  <!--
+    Arch silhouette. Concentric arcs centred at (8, 8): outer radius 6,
+    inner radius 5. Both arcs sit on top of straight legs descending to
+    y=14. Wall thickness 1px around the curve and on the sides.
+  -->
+  <path fill-rule="evenodd"
+        d="
+          M 2 14
+          L 2 8
+          A 6 6 0 0 1 14 8
+          L 14 14
+          Z
+          M 3 14
+          L 3 8
+          A 5 5 0 0 1 13 8
+          L 13 14
+          Z
+        "/>
 
-    <!-- RSS broadcast mark inside the inner arch. Dot + two arcs,
-         scaled down to fit the 16×16 grid. -->
-    <circle cx="6" cy="11.5" r="0.9"/>
-  </g>
-
-  <!-- The two RSS arcs are stroked (not filled) so they read as wave
-       fronts, like the full-colour version. -->
-  <g stroke="#222222" stroke-linecap="round" fill="none">
-    <path d="M 6 10 A 1.8 1.8 0 0 1 7.8 11.8" stroke-width="0.8"/>
-    <path d="M 6 8.4 A 3.4 3.4 0 0 1 9.4 11.8" stroke-width="0.8"/>
-  </g>
+  <!--
+    RSS broadcast dot — single anchor at the bottom-left of the arch
+    interior. Arcs are dropped at 16×16 because they collapse to noise
+    at this scale; the dot alone reads as "feed reader" cleanly when
+    paired with the arch silhouette.
+  -->
+  <circle cx="6.5" cy="11.5" r="0.9"/>
+  <path d="M 6 10 a 1.7 1.7 0 0 1 1.7 1.7" stroke="#222222" stroke-width="0.7"
+        fill="none" stroke-linecap="round"/>
 </svg>
