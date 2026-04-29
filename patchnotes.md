@@ -17,7 +17,8 @@ Visual unification + reading-pane upgrades. Built up across pre-release commits;
 
 ### Sub-arc 2 (in progress): empty states, sidebar polish, timeline polish
 
-Coming.
+- **Empty states for the article + timeline panes** (pre2). Both panes are now wrapped in a `GtkStack` with a content page (the WebView / list view) and an empty page (`AdwStatusPage`). When the timeline `ListStore` has zero rows the stack auto-flips to "No articles — Select a feed in the sidebar to view its articles, or hit Refresh to fetch new ones." When no article is selected (or `render_article_body` has nothing to render), the article pane shows "No article selected — Pick an article from the timeline to start reading." Crossfade transition (150 ms) so the swap doesn't feel abrupt.
+- **Wired via `connect_items_changed`** on the timeline store, so every populate path (sidebar selection, search results, refresh, OPML load) triggers the empty-state flip without per-call boilerplate. Initial state is `empty` for both panes; first populate brings them to `content`.
 
 ## v1.1.0 — Phase 6: Neutered WebKit Article Pane
 

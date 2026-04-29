@@ -123,10 +123,33 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                           </object>
                         </child>
                         <property name="content">
-                          <object class="GtkScrolledWindow">
-                            <property name="child">
-                              <object class="GtkListView" id="timeline_list_view"/>
-                            </property>
+                          <object class="GtkStack" id="timeline_stack">
+                            <property name="transition-type">crossfade</property>
+                            <property name="transition-duration">150</property>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">content</property>
+                                <property name="child">
+                                  <object class="GtkScrolledWindow">
+                                    <property name="child">
+                                      <object class="GtkListView" id="timeline_list_view"/>
+                                    </property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">empty</property>
+                                <property name="child">
+                                  <object class="AdwStatusPage" id="timeline_empty_status">
+                                    <property name="icon-name">document-open-recent-symbolic</property>
+                                    <property name="title">No articles</property>
+                                    <property name="description">Select a feed in the sidebar to view its articles, or hit Refresh to fetch new ones.</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
                           </object>
                         </property>
                       </object>
@@ -149,29 +172,52 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                           </object>
                         </child>
                         <property name="content">
-                          <object class="GtkOverlay">
-                            <property name="child">
-                              <object class="WebKitWebView" id="article_web_view">
-                                <property name="vexpand">True</property>
-                                <property name="hexpand">True</property>
+                          <object class="GtkStack" id="article_stack">
+                            <property name="transition-type">crossfade</property>
+                            <property name="transition-duration">150</property>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">content</property>
+                                <property name="child">
+                                  <object class="GtkOverlay">
+                                    <property name="child">
+                                      <object class="WebKitWebView" id="article_web_view">
+                                        <property name="vexpand">True</property>
+                                        <property name="hexpand">True</property>
+                                      </object>
+                                    </property>
+                                    <child type="overlay">
+                                      <object class="GtkLabel" id="url_overlay">
+                                        <property name="halign">start</property>
+                                        <property name="valign">end</property>
+                                        <property name="margin-start">12</property>
+                                        <property name="margin-end">12</property>
+                                        <property name="margin-top">12</property>
+                                        <property name="margin-bottom">12</property>
+                                        <property name="visible">False</property>
+                                        <property name="ellipsize">middle</property>
+                                        <property name="max-width-chars">80</property>
+                                        <property name="can-target">False</property>
+                                        <style>
+                                          <class name="caption"/>
+                                          <class name="osd"/>
+                                        </style>
+                                      </object>
+                                    </child>
+                                  </object>
+                                </property>
                               </object>
-                            </property>
-                            <child type="overlay">
-                              <object class="GtkLabel" id="url_overlay">
-                                <property name="halign">start</property>
-                                <property name="valign">end</property>
-                                <property name="margin-start">12</property>
-                                <property name="margin-end">12</property>
-                                <property name="margin-top">12</property>
-                                <property name="margin-bottom">12</property>
-                                <property name="visible">False</property>
-                                <property name="ellipsize">middle</property>
-                                <property name="max-width-chars">80</property>
-                                <property name="can-target">False</property>
-                                <style>
-                                  <class name="caption"/>
-                                  <class name="osd"/>
-                                </style>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">empty</property>
+                                <property name="child">
+                                  <object class="AdwStatusPage" id="article_empty_status">
+                                    <property name="icon-name">view-paged-symbolic</property>
+                                    <property name="title">No article selected</property>
+                                    <property name="description">Pick an article from the timeline to start reading.</property>
+                                  </object>
+                                </property>
                               </object>
                             </child>
                           </object>

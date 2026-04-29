@@ -40,6 +40,10 @@ mod imp {
         #[template_child]
         pub url_overlay: TemplateChild<gtk::Label>,
         #[template_child]
+        pub article_stack: TemplateChild<gtk::Stack>,
+        #[template_child]
+        pub timeline_stack: TemplateChild<gtk::Stack>,
+        #[template_child]
         pub search_bar: TemplateChild<gtk::SearchBar>,
         #[template_child]
         pub search_entry: TemplateChild<gtk::SearchEntry>,
@@ -254,6 +258,26 @@ impl ViaductWindow {
             setup_timeline_list_view(&imp.timeline_list_view, &timeline_store, feed_names.clone());
 
         self.install_timeline_capture_shortcuts();
+
+        // Empty-state plumbing — keep the timeline stack page in sync
+        // with whether the store has any rows. Listens on items_changed
+        // so every populate path (sidebar selection, search, refresh)
+        // updates the visible page automatically.
+        let win_for_timeline_empty = self.downgrade();
+        timeline_store.connect_items_changed(move |store, _pos, _removed, _added| {
+            if let Some(win) = win_for_timeline_empty.upgrade() {
+                let name = if store.n_items() == 0 {
+                    "empty"
+                } else {
+                    "content"
+                };
+                win.imp().timeline_stack.set_visible_child_name(name);
+            }
+        });
+        // Initial state — empty until the first populate.
+        imp.timeline_stack.set_visible_child_name("empty");
+        // Article pane likewise starts in the empty state.
+        imp.article_stack.set_visible_child_name("empty");
 
         // Persist references so they outlive `wire_models` and the GC.
         imp.sidebar_delegate.set(delegate.clone()).ok();
@@ -507,10 +531,13 @@ impl ViaductWindow {
         };
         let Some(body_html) = body_html else {
             drop(state);
-            // Nothing to render — clear the pane.
-            article_renderer::render(&view, "", None);
+            // Nothing to render — flip the stack to the empty status page.
+            // Don't bother re-rendering the WebView since it's hidden.
+            imp.article_stack.set_visible_child_name("empty");
             return;
         };
+        // Article body present — make sure the stack is showing the WebView.
+        imp.article_stack.set_visible_child_name("content");
 
         // Pick a theme: user's GSettings choice wins, "auto" pairs Sepia
         // (light) with Tiqoe Dark (dark). v1.2.0 wired the article-theme
