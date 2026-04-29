@@ -88,14 +88,22 @@ fn update_fonts(settings: &gio::Settings, provider: &gtk::CssProvider) {
 
     let serif = font_serif(settings);
     if !serif.is_empty() {
-        css.push_str(&format!("#article_text_view {{ font-family: \"{}\", serif; }}\n", serif));
+        css.push_str(&format!(
+            "#article_text_view {{ font-family: \"{}\", serif; }}\n",
+            serif
+        ));
     } else {
-        css.push_str("#article_text_view { font-family: \"Source Serif 4\", \"Georgia\", serif; }\n");
+        css.push_str(
+            "#article_text_view { font-family: \"Source Serif 4\", \"Georgia\", serif; }\n",
+        );
     }
 
     let mono = font_monospace(settings);
     if !mono.is_empty() {
-        css.push_str(&format!("code, pre {{ font-family: \"{}\", monospace; }}\n", mono));
+        css.push_str(&format!(
+            "code, pre {{ font-family: \"{}\", monospace; }}\n",
+            mono
+        ));
     } else {
         css.push_str("code, pre { font-family: \"JetBrains Mono\", monospace; }\n");
     }

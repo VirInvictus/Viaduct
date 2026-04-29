@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-use crate::error::{Result, NetworkError, ViaductError};
+use crate::error::{NetworkError, Result, ViaductError};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -87,7 +87,11 @@ pub struct ReaderAPIEntry {
 impl ReaderAPIEntry {
     pub fn unique_id(&self) -> String {
         // Should look something like "tag:google.com,2005:reader/item/00058b10ce338909"
-        let id_part = self.article_id.split('/').last().unwrap_or(&self.article_id);
+        let id_part = self
+            .article_id
+            .split('/')
+            .next_back()
+            .unwrap_or(&self.article_id);
 
         // Convert hex representation back to integer and then a string representation
         if let Ok(id_number) = u64::from_str_radix(id_part, 16) {
@@ -192,24 +196,32 @@ impl ReaderAPICaller {
     }
 
     pub async fn validate_credentials(&self, username: &str, password: &str) -> Result<String> {
-        let url = self.api_base_url().join(ReaderAPIEndpoints::Login.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
-        
-        let mut request = self.client.post(url)
-            .form(&[
-                ("Email", username),
-                ("Passwd", password),
-            ]);
-        
+        let url = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::Login.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+
+        let mut request = self
+            .client
+            .post(url)
+            .form(&[("Email", username), ("Passwd", password)]);
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 })); // Simplified error
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            })); // Simplified error
         }
 
-        let body = resp.text().await
+        let body = resp
+            .text()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
         for line in body.lines() {
@@ -218,7 +230,9 @@ impl ReaderAPICaller {
             }
         }
 
-        Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 })) // Simplified error
+        Err(ViaductError::Network(NetworkError::RateLimited {
+            retry_after_secs: 0,
+        })) // Simplified error
     }
 
     pub async fn request_authorization_token(&self, auth_token: &str) -> Result<String> {
@@ -229,16 +243,25 @@ impl ReaderAPICaller {
             }
         }
 
-        let url = self.api_base_url().join(ReaderAPIEndpoints::Token.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
-        let mut request = self.client.get(url)
+        let url = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::Token.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let mut request = self
+            .client
+            .get(url)
             .header("Authorization", format!("GoogleLogin auth={}", auth_token));
-        
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
-        let token = resp.text().await
+
+        let token = resp
+            .text()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?
             .trim()
             .to_string();
@@ -248,92 +271,139 @@ impl ReaderAPICaller {
         Ok(token)
     }
 
-    pub async fn retrieve_subscriptions(&self, auth_token: &str) -> Result<Vec<ReaderAPISubscription>> {
-        let url = self.api_base_url().join(ReaderAPIEndpoints::SubscriptionList.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
-        let mut request = self.client.get(url)
+    pub async fn retrieve_subscriptions(
+        &self,
+        auth_token: &str,
+    ) -> Result<Vec<ReaderAPISubscription>> {
+        let url = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::SubscriptionList.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let mut request = self
+            .client
+            .get(url)
             .query(&[("output", "json")])
             .header("Authorization", format!("GoogleLogin auth={}", auth_token));
-        
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
-        let container: ReaderAPISubscriptionContainer = resp.json().await
+
+        let container: ReaderAPISubscriptionContainer = resp
+            .json()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
         Ok(container.subscriptions)
     }
 
     pub async fn retrieve_tags(&self, auth_token: &str) -> Result<Vec<ReaderAPITag>> {
-        let url = self.api_base_url().join(ReaderAPIEndpoints::TagList.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
-        let mut request = self.client.get(url)
+        let url = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::TagList.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let mut request = self
+            .client
+            .get(url)
             .query(&[("output", "json")])
             .header("Authorization", format!("GoogleLogin auth={}", auth_token));
-        
+
         if self.variant == ReaderAPIVariant::Inoreader {
             request = request.query(&[("types", "1")]);
         }
-        
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
-        let container: ReaderAPITagContainer = resp.json().await
+
+        let container: ReaderAPITagContainer = resp
+            .json()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
         Ok(container.tags)
     }
 
-    pub async fn create_subscription(&self, auth_token: &str, url: &str) -> Result<ReaderAPISubscription> {
+    pub async fn create_subscription(
+        &self,
+        auth_token: &str,
+        url: &str,
+    ) -> Result<ReaderAPISubscription> {
         let auth_token_str = auth_token.to_string();
         let token = self.request_authorization_token(&auth_token_str).await?;
-        let endpoint = self.api_base_url().join(ReaderAPIEndpoints::SubscriptionAdd.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let endpoint = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::SubscriptionAdd.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
 
-        let mut request = self.client.post(endpoint)
+        let mut request = self
+            .client
+            .post(endpoint)
             .header("Authorization", format!("GoogleLogin auth={}", auth_token))
-            .form(&[
-                ("T", &token),
-                ("quickadd", &url.to_string()),
-            ]);
-        
+            .form(&[("T", &token), ("quickadd", &url.to_string())]);
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
-        let result: ReaderAPIQuickAddResult = resp.json().await
+
+        let result: ReaderAPIQuickAddResult = resp
+            .json()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
+
         if result.num_results == 0 {
-            return Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 })); // Simplified error
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            })); // Simplified error
         }
 
         let subscriptions = self.retrieve_subscriptions(auth_token).await?;
-        subscriptions.into_iter()
+        subscriptions
+            .into_iter()
             .find(|s| s.feed_id == result.stream_id)
-            .ok_or_else(|| ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 })) // Simplified error
+            .ok_or_else(|| {
+                ViaductError::Network(NetworkError::RateLimited {
+                    retry_after_secs: 0,
+                })
+            }) // Simplified error
     }
 
     pub async fn delete_subscription(&self, auth_token: &str, subscription_id: &str) -> Result<()> {
         let auth_token_str = auth_token.to_string();
         let token = self.request_authorization_token(&auth_token_str).await?;
-        let endpoint = self.api_base_url().join(ReaderAPIEndpoints::SubscriptionEdit.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let endpoint = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::SubscriptionEdit.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
 
-        let mut request = self.client.post(endpoint)
+        let mut request = self
+            .client
+            .post(endpoint)
             .header("Authorization", format!("GoogleLogin auth={}", auth_token))
             .form(&[
                 ("T", &token),
                 ("s", &subscription_id.to_string()),
                 ("ac", &"unsubscribe".to_string()),
             ]);
-        
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
+
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 }));
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            }));
         }
         Ok(())
     }
@@ -344,11 +414,14 @@ impl ReaderAPICaller {
         subscription_id: &str,
         remove_tag_name: Option<&str>,
         add_tag_name: Option<&str>,
-        title: Option<&str>
+        title: Option<&str>,
     ) -> Result<()> {
         let auth_token_str = auth_token.to_string();
         let token = self.request_authorization_token(&auth_token_str).await?;
-        let endpoint = self.api_base_url().join(ReaderAPIEndpoints::SubscriptionEdit.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let endpoint = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::SubscriptionEdit.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
 
         let mut params = vec![
             ("T", token),
@@ -366,57 +439,103 @@ impl ReaderAPICaller {
             params.push(("t", t.to_string()));
         }
 
-        let mut request = self.client.post(endpoint)
+        let mut request = self
+            .client
+            .post(endpoint)
             .header("Authorization", format!("GoogleLogin auth={}", auth_token))
             .form(&params);
-        
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
+
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 }));
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            }));
         }
         Ok(())
     }
 
-    pub async fn rename_subscription(&self, auth_token: &str, subscription_id: &str, new_name: &str) -> Result<()> {
-        self.change_subscription(auth_token, subscription_id, None, None, Some(new_name)).await
+    pub async fn rename_subscription(
+        &self,
+        auth_token: &str,
+        subscription_id: &str,
+        new_name: &str,
+    ) -> Result<()> {
+        self.change_subscription(auth_token, subscription_id, None, None, Some(new_name))
+            .await
     }
 
-    pub async fn create_tagging(&self, auth_token: &str, subscription_id: &str, tag_name: &str) -> Result<()> {
-        self.change_subscription(auth_token, subscription_id, None, Some(tag_name), None).await
+    pub async fn create_tagging(
+        &self,
+        auth_token: &str,
+        subscription_id: &str,
+        tag_name: &str,
+    ) -> Result<()> {
+        self.change_subscription(auth_token, subscription_id, None, Some(tag_name), None)
+            .await
     }
 
-    pub async fn delete_tagging(&self, auth_token: &str, subscription_id: &str, tag_name: &str) -> Result<()> {
-        self.change_subscription(auth_token, subscription_id, Some(tag_name), None, None).await
+    pub async fn delete_tagging(
+        &self,
+        auth_token: &str,
+        subscription_id: &str,
+        tag_name: &str,
+    ) -> Result<()> {
+        self.change_subscription(auth_token, subscription_id, Some(tag_name), None, None)
+            .await
     }
 
-    pub async fn move_subscription(&self, auth_token: &str, subscription_id: &str, source_tag: &str, dest_tag: &str) -> Result<()> {
-        self.change_subscription(auth_token, subscription_id, Some(source_tag), Some(dest_tag), None).await
+    pub async fn move_subscription(
+        &self,
+        auth_token: &str,
+        subscription_id: &str,
+        source_tag: &str,
+        dest_tag: &str,
+    ) -> Result<()> {
+        self.change_subscription(
+            auth_token,
+            subscription_id,
+            Some(source_tag),
+            Some(dest_tag),
+            None,
+        )
+        .await
     }
 
     pub async fn rename_tag(&self, auth_token: &str, old_name: &str, new_name: &str) -> Result<()> {
         let auth_token_str = auth_token.to_string();
         let token = self.request_authorization_token(&auth_token_str).await?;
-        let endpoint = self.api_base_url().join(ReaderAPIEndpoints::RenameTag.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let endpoint = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::RenameTag.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
 
-        let mut request = self.client.post(endpoint)
+        let mut request = self
+            .client
+            .post(endpoint)
             .header("Authorization", format!("GoogleLogin auth={}", auth_token))
             .form(&[
                 ("T", &token),
                 ("s", &format!("user/-/label/{}", old_name)),
                 ("dest", &format!("user/-/label/{}", new_name)),
             ]);
-        
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
+
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 }));
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            }));
         }
         Ok(())
     }
@@ -424,34 +543,47 @@ impl ReaderAPICaller {
     pub async fn delete_tag(&self, auth_token: &str, folder_external_id: &str) -> Result<()> {
         let auth_token_str = auth_token.to_string();
         let token = self.request_authorization_token(&auth_token_str).await?;
-        let endpoint = self.api_base_url().join(ReaderAPIEndpoints::DisableTag.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let endpoint = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::DisableTag.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
 
-        let mut request = self.client.post(endpoint)
+        let mut request = self
+            .client
+            .post(endpoint)
             .header("Authorization", format!("GoogleLogin auth={}", auth_token))
-            .form(&[
-                ("T", &token),
-                ("s", &folder_external_id.to_string()),
-            ]);
-        
+            .form(&[("T", &token), ("s", &folder_external_id.to_string())]);
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
+
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 }));
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            }));
         }
         Ok(())
     }
 
-    pub async fn retrieve_entries(&self, auth_token: &str, article_ids: &[String]) -> Result<Vec<ReaderAPIEntry>> {
+    pub async fn retrieve_entries(
+        &self,
+        auth_token: &str,
+        article_ids: &[String],
+    ) -> Result<Vec<ReaderAPIEntry>> {
         if article_ids.is_empty() {
             return Ok(Vec::new());
         }
 
         let auth_token_str = auth_token.to_string();
         let token = self.request_authorization_token(&auth_token_str).await?;
-        let endpoint = self.api_base_url().join(ReaderAPIEndpoints::Contents.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let endpoint = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::Contents.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
 
         let mut params = vec![
             ("T".to_string(), token),
@@ -462,35 +594,49 @@ impl ReaderAPICaller {
             // Inoreader (and others) often want hex IDs for some reason in these calls.
             // NNW converts decimal IDs to hex.
             if let Ok(val) = id.parse::<u64>() {
-                params.push(("i".to_string(), format!("tag:google.com,2005:reader/item/{:016x}", val)));
+                params.push((
+                    "i".to_string(),
+                    format!("tag:google.com,2005:reader/item/{:016x}", val),
+                ));
             } else {
-                params.push(("i".to_string(), format!("tag:google.com,2005:reader/item/{}", id)));
+                params.push((
+                    "i".to_string(),
+                    format!("tag:google.com,2005:reader/item/{}", id),
+                ));
             }
         }
 
-        let mut request = self.client.post(endpoint)
+        let mut request = self
+            .client
+            .post(endpoint)
             .header("Authorization", format!("GoogleLogin auth={}", auth_token))
             .form(&params);
-        
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
-        let wrapper: ReaderAPIEntryWrapper = resp.json().await
+
+        let wrapper: ReaderAPIEntryWrapper = resp
+            .json()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
         Ok(wrapper.entries)
     }
 
-    pub async fn retrieve_item_ids(&self, auth_token: &str, request_type: ItemIDType, feed_id: Option<&str>) -> Result<Vec<String>> {
+    pub async fn retrieve_item_ids(
+        &self,
+        auth_token: &str,
+        request_type: ItemIDType,
+        feed_id: Option<&str>,
+    ) -> Result<Vec<String>> {
         let mut results = Vec::new();
         let mut continuation: Option<String> = None;
 
         loop {
-            let mut query = vec![
-                ("n", "1000".to_string()),
-                ("output", "json".to_string()),
-            ];
+            let mut query = vec![("n", "1000".to_string()), ("output", "json".to_string())];
 
             match request_type {
                 ItemIDType::AllForAccount => {
@@ -500,7 +646,9 @@ impl ReaderAPICaller {
                     if let Some(fid) = feed_id {
                         query.push(("s", fid.to_string()));
                     } else {
-                        return Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 }));
+                        return Err(ViaductError::Network(NetworkError::RateLimited {
+                            retry_after_secs: 0,
+                        }));
                     }
                 }
                 ItemIDType::Unread => {
@@ -516,19 +664,28 @@ impl ReaderAPICaller {
                 query.push(("c", c.clone()));
             }
 
-            let url = self.api_base_url().join(ReaderAPIEndpoints::ItemIds.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
-            let mut request = self.client.get(url)
+            let url = self
+                .api_base_url()
+                .join(ReaderAPIEndpoints::ItemIds.path())
+                .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+            let mut request = self
+                .client
+                .get(url)
                 .query(&query)
                 .header("Authorization", format!("GoogleLogin auth={}", auth_token));
-            
+
             request = self.add_variant_headers(request);
 
-            let resp = request.send().await
+            let resp = request
+                .send()
+                .await
                 .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-            
-            let wrapper: ReaderAPIReferenceWrapper = resp.json().await
+
+            let wrapper: ReaderAPIReferenceWrapper = resp
+                .json()
+                .await
                 .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-            
+
             for reference in wrapper.item_refs {
                 results.push(reference.item_id);
             }
@@ -542,14 +699,23 @@ impl ReaderAPICaller {
         Ok(results)
     }
 
-    pub async fn update_state_to_entries(&self, auth_token: &str, article_ids: &[String], state: &str, add: bool) -> Result<()> {
+    pub async fn update_state_to_entries(
+        &self,
+        auth_token: &str,
+        article_ids: &[String],
+        state: &str,
+        add: bool,
+    ) -> Result<()> {
         if article_ids.is_empty() {
             return Ok(());
         }
 
         let auth_token_str = auth_token.to_string();
         let token = self.request_authorization_token(&auth_token_str).await?;
-        let endpoint = self.api_base_url().join(ReaderAPIEndpoints::EditTag.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+        let endpoint = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::EditTag.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
 
         let action = if add { "a" } else { "r" };
         let mut params = vec![
@@ -559,42 +725,63 @@ impl ReaderAPICaller {
 
         for id in article_ids {
             if let Ok(val) = id.parse::<u64>() {
-                params.push(("i".to_string(), format!("tag:google.com,2005:reader/item/{:016x}", val)));
+                params.push((
+                    "i".to_string(),
+                    format!("tag:google.com,2005:reader/item/{:016x}", val),
+                ));
             } else {
-                params.push(("i".to_string(), format!("tag:google.com,2005:reader/item/{}", id)));
+                params.push((
+                    "i".to_string(),
+                    format!("tag:google.com,2005:reader/item/{}", id),
+                ));
             }
         }
 
-        let mut request = self.client.post(endpoint)
+        let mut request = self
+            .client
+            .post(endpoint)
             .header("Authorization", format!("GoogleLogin auth={}", auth_token))
             .form(&params);
-        
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
+
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 }));
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            }));
         }
         Ok(())
     }
 
     pub async fn import_opml(&self, auth_token: &str, opml_data: &[u8]) -> Result<()> {
-        let endpoint = self.api_base_url().join(ReaderAPIEndpoints::SubscriptionImport.path()).map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
-        
-        let mut request = self.client.post(endpoint)
+        let endpoint = self
+            .api_base_url()
+            .join(ReaderAPIEndpoints::SubscriptionImport.path())
+            .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
+
+        let mut request = self
+            .client
+            .post(endpoint)
             .header("Authorization", format!("GoogleLogin auth={}", auth_token))
             .header("Content-Type", "text/xml")
             .body(opml_data.to_vec());
-        
+
         request = self.add_variant_headers(request);
 
-        let resp = request.send().await
+        let resp = request
+            .send()
+            .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        
+
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited { retry_after_secs: 0 }));
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            }));
         }
         Ok(())
     }

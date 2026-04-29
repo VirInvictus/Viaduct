@@ -32,11 +32,15 @@ impl Account {
         let opml_file_path = opml_path()?;
         let opml_writer = OpmlWriter::spawn(opml_file_path.clone());
 
-        let delegate: Arc<dyn AccountDelegate> = if crate::network::credentials::fetch_credentials("inoreader").await?.is_some() {
-            Arc::new(crate::database::delegate::InoreaderAccountDelegate::new())
-        } else {
-            Arc::new(LocalAccountDelegate)
-        };
+        let delegate: Arc<dyn AccountDelegate> =
+            if crate::network::credentials::fetch_credentials("inoreader")
+                .await?
+                .is_some()
+            {
+                Arc::new(crate::database::delegate::InoreaderAccountDelegate::new())
+            } else {
+                Arc::new(LocalAccountDelegate)
+            };
 
         let account = Self {
             db_tx,
@@ -149,7 +153,9 @@ impl Account {
     pub async fn update_statuses_read(&self, ids: Vec<String>, read: bool) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::UpdateStatusesRead(ids, read, tx)))
+            .send(DbOp::Articles(ArticlesDbOp::UpdateStatusesRead(
+                ids, read, tx,
+            )))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
@@ -159,7 +165,9 @@ impl Account {
     pub async fn update_statuses_starred(&self, ids: Vec<String>, starred: bool) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::UpdateStatusesStarred(ids, starred, tx)))
+            .send(DbOp::Articles(ArticlesDbOp::UpdateStatusesStarred(
+                ids, starred, tx,
+            )))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
@@ -315,8 +323,14 @@ impl Account {
     /// 4. Persist the merged file via the debounced `OpmlWriter`.
     /// 5. Return the list of newly-added feeds so the UI can kick a refresh
     ///    against just those.
-    pub async fn import_opml(self: &std::sync::Arc<Self>, path: impl AsRef<Path>) -> Result<Vec<Feed>> {
-        self.delegate.clone().import_opml(self.clone(), path.as_ref()).await
+    pub async fn import_opml(
+        self: &std::sync::Arc<Self>,
+        path: impl AsRef<Path>,
+    ) -> Result<Vec<Feed>> {
+        self.delegate
+            .clone()
+            .import_opml(self.clone(), path.as_ref())
+            .await
     }
 
     pub async fn import_opml_internal(&self, path: impl AsRef<Path>) -> Result<Vec<Feed>> {
@@ -466,7 +480,10 @@ impl Account {
 
     // --- SyncDatabase API ---
 
-    pub async fn insert_sync_statuses(&self, statuses: Vec<crate::database::sync::SyncStatus>) -> Result<()> {
+    pub async fn insert_sync_statuses(
+        &self,
+        statuses: Vec<crate::database::sync::SyncStatus>,
+    ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.sync_tx
             .send(SyncDbOp::InsertStatuses(statuses, tx))
@@ -476,7 +493,10 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
-    pub async fn select_sync_statuses_for_processing(&self, limit: Option<usize>) -> Result<Vec<crate::database::sync::SyncStatus>> {
+    pub async fn select_sync_statuses_for_processing(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<Vec<crate::database::sync::SyncStatus>> {
         let (tx, rx) = oneshot::channel();
         self.sync_tx
             .send(SyncDbOp::SelectForProcessing(limit, tx))
@@ -486,7 +506,10 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
-    pub async fn delete_sync_statuses_selected_for_processing(&self, ids: Vec<String>) -> Result<()> {
+    pub async fn delete_sync_statuses_selected_for_processing(
+        &self,
+        ids: Vec<String>,
+    ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.sync_tx
             .send(SyncDbOp::DeleteSelectedForProcessing(ids, tx))

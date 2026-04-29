@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-use ashpd::desktop::background::Background;
 use crate::error::Result;
+use ashpd::desktop::background::Background;
 
 pub async fn request_background_permission() -> Result<bool> {
     let response = Background::request()

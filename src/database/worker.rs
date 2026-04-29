@@ -32,7 +32,7 @@ pub fn spawn_sync_worker(mut rx: mpsc::Receiver<crate::database::sync::SyncDbOp>
             let sync_path_ref = std::panic::AssertUnwindSafe(&sync_path);
 
             let res = std::panic::catch_unwind(move || {
-                let mut sync_conn = match Connection::open(&*sync_path_ref) {
+                let mut sync_conn = match Connection::open(*sync_path_ref) {
                     Ok(conn) => conn,
                     Err(e) => {
                         tracing::error!("Failed to init sync db: {}", e);
@@ -78,7 +78,7 @@ pub fn spawn_db_worker(mut rx: mpsc::Receiver<DbOp>) -> Result<()> {
             let settings_path_ref = std::panic::AssertUnwindSafe(&settings_path);
 
             let res = std::panic::catch_unwind(move || {
-                let mut articles_conn = match init_articles_db(&*articles_path_ref) {
+                let mut articles_conn = match init_articles_db(&articles_path_ref) {
                     Ok(conn) => conn,
                     Err(e) => {
                         tracing::error!("Failed to init articles db: {}", e);
@@ -86,7 +86,7 @@ pub fn spawn_db_worker(mut rx: mpsc::Receiver<DbOp>) -> Result<()> {
                     }
                 };
 
-                let mut settings_conn = match init_settings_db(&*settings_path_ref) {
+                let mut settings_conn = match init_settings_db(&settings_path_ref) {
                     Ok(conn) => conn,
                     Err(e) => {
                         tracing::error!("Failed to init settings db: {}", e);

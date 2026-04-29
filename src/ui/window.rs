@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-use adw::subclass::prelude::*;
 use adw::prelude::*;
+use adw::subclass::prelude::*;
 use gtk::{gio, glib};
 use std::sync::Arc;
 
@@ -143,7 +143,10 @@ impl ViaductWindow {
         if crate::is_debug_mode() {
             let debug_section = gio::Menu::new();
             debug_section.append(Some("Crash (Panic)"), Some("win.debug-crash"));
-            window.imp().primary_menu.append_submenu(Some("Debug"), &debug_section);
+            window
+                .imp()
+                .primary_menu
+                .append_submenu(Some("Debug"), &debug_section);
         }
 
         window
@@ -300,23 +303,29 @@ impl ViaductWindow {
             let feed_id = article.feed_id.clone();
 
             // Populate Header Labels
-            window.imp().article_title_label.set_text(article.title.as_deref().unwrap_or("Untitled"));
-            
+            window
+                .imp()
+                .article_title_label
+                .set_text(article.title.as_deref().unwrap_or("Untitled"));
+
             let mut meta_parts = Vec::new();
-            if let Some(names) = window.imp().feed_names.get() {
-                if let Some(name) = names.borrow().get(&feed_id) {
-                    meta_parts.push(name.clone());
-                }
+            if let Some(names) = window.imp().feed_names.get()
+                && let Some(name) = names.borrow().get(&feed_id)
+            {
+                meta_parts.push(name.clone());
             }
             if let Some(date) = article.date_published {
                 meta_parts.push(date.format("%B %e, %Y at %l:%M %p").to_string());
             }
-            if let Some(author) = article.authors.first() {
-                if let Some(ref name) = author.name {
-                    meta_parts.push(format!("by {}", name));
-                }
+            if let Some(author) = article.authors.first()
+                && let Some(ref name) = author.name
+            {
+                meta_parts.push(format!("by {}", name));
             }
-            window.imp().article_meta_label.set_text(&meta_parts.join(" • "));
+            window
+                .imp()
+                .article_meta_label
+                .set_text(&meta_parts.join(" • "));
 
             // Prefer content_html → content_text → summary, in order. NNW
             // does the equivalent fall-through. If everything is empty
@@ -390,7 +399,8 @@ impl ViaductWindow {
                     .ok()
                     .flatten()
                     .map(|s| s.reader_view_always_enabled)
-                    .unwrap_or(false) || (is_stub && has_url);
+                    .unwrap_or(false)
+                    || (is_stub && has_url);
                 if let Some(window) = window_weak.upgrade() {
                     window.imp().article_display.borrow_mut().auto_reader = auto;
                     if auto {

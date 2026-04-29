@@ -1,5 +1,13 @@
 # viaduct — Patch Notes
 
+## v1.0.3 — CI Hygiene
+
+CI was red on `main` — `cargo clippy --all-targets -- -D warnings` had 13 standing errors and `cargo fmt --check` flagged trailing whitespace. Both blockers cleared so future feature commits land on a green baseline.
+
+- **Clippy auto-fixes** applied across `src/database/{delegate,opml,worker}.rs`, `src/network/inoreader.rs`, `src/ui/window.rs`, and `tests/integration_refresh.rs`. The 13 errors broke down as: collapsible `if let && let` chains (Rust 1.95-era lint), `Iterator::last` on `DoubleEndedIterator` (use `next_back`), redundant `&` references, deref-already-by-auto-deref, and a missing `Default` impl on `InoreaderAccountDelegate`.
+- **Trailing whitespace** in `src/database/sync.rs:80` removed.
+- **No behavior change.** All 36 tests still pass (35 lib unit + 1 integration).
+
 ## v1.0.2 — Housekeeping & WebKit Pivot Prep
 
 Doc-only release that re-opens Phase 6 around a single neutered `WebKitWebView` instead of the original `GtkTextView` + `GtkTextTag` renderer. No code changes shipped — the implementation lands in v1.1.0.

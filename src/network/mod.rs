@@ -10,4 +10,4 @@ pub mod fetcher;
 pub mod inoreader;
 
 pub use cache::{ImageCache, color_for};
-pub use fetcher::{Fetcher, AccountRefresher};
+pub use fetcher::{AccountRefresher, Fetcher};

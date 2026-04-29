@@ -30,7 +30,7 @@ pub fn setup_schema(conn: &Connection) -> Result<()> {
             flag BOOL NOT NULL DEFAULT 0, 
             selected BOOL NOT NULL DEFAULT 0, 
             PRIMARY KEY (articleID, key)
-        );"
+        );",
     )?;
     Ok(())
 }
@@ -77,7 +77,7 @@ pub fn handle_op(conn: &mut Connection, op: SyncDbOp) {
                         });
                     }
                 }
-                
+
                 if !results.is_empty() {
                     let mut stmt = tx.prepare("UPDATE syncStatus SET selected = 1 WHERE articleID = ? AND key = ?")?;
                     for s in &results {
@@ -94,18 +94,21 @@ pub fn handle_op(conn: &mut Connection, op: SyncDbOp) {
             let res = (|| -> rusqlite::Result<()> {
                 let tx = conn.transaction()?;
                 {
-                    let mut stmt = tx.prepare("DELETE FROM syncStatus WHERE articleID = ? AND selected = 1")?;
+                    let mut stmt =
+                        tx.prepare("DELETE FROM syncStatus WHERE articleID = ? AND selected = 1")?;
                     for id in &ids {
                         stmt.execute(rusqlite::params![id])?;
                     }
                 }
                 tx.commit()?;
                 Ok(())
-            })().map_err(Into::into);
+            })()
+            .map_err(Into::into);
             let _ = reply.send(res);
         }
         SyncDbOp::ResetAllSelectedForProcessing(reply) => {
-            let res = conn.execute("UPDATE syncStatus SET selected = 0", [])
+            let res = conn
+                .execute("UPDATE syncStatus SET selected = 0", [])
                 .map(|_| ())
                 .map_err(Into::into);
             let _ = reply.send(res);

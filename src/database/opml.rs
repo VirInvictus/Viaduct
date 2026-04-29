@@ -279,13 +279,13 @@ pub fn sync_inoreader_account(
     // 1. Process tags into folders
     for tag in tags {
         // Inoreader folders have IDs like "user/123/label/FolderName"
-        if let Some(name) = tag.id.split('/').last() {
-            if !tag.id.contains("/state/") {
-                folders.push(Folder {
-                    name: name.to_string(),
-                    feeds: Vec::new(),
-                });
-            }
+        if let Some(name) = tag.id.split('/').next_back()
+            && !tag.id.contains("/state/")
+        {
+            folders.push(Folder {
+                name: name.to_string(),
+                feeds: Vec::new(),
+            });
         }
     }
 
@@ -304,10 +304,10 @@ pub fn sync_inoreader_account(
             standalone_feeds.push(feed);
         } else {
             for category in sub.categories {
-                if let Some(folder_name) = category.id.split('/').last() {
-                    if let Some(folder) = folders.iter_mut().find(|f| f.name == folder_name) {
-                        folder.feeds.push(feed.clone());
-                    }
+                if let Some(folder_name) = category.id.split('/').next_back()
+                    && let Some(folder) = folders.iter_mut().find(|f| f.name == folder_name)
+                {
+                    folder.feeds.push(feed.clone());
                 }
             }
         }

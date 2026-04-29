@@ -1,10 +1,9 @@
-use std::sync::Arc;
+use chrono::Utc;
 use tokio::sync::mpsc;
 use viaduct::database::accounts::Account;
-use viaduct::database::worker::{DbOp, spawn_db_worker};
+use viaduct::database::worker::spawn_db_worker;
 use viaduct::database::worker::spawn_sync_worker;
-use viaduct::models::{ParsedItem};
-use chrono::Utc;
+use viaduct::models::ParsedItem;
 
 #[tokio::test]
 async fn test_account_update_feed_integration() {
@@ -14,53 +13,57 @@ async fn test_account_update_feed_integration() {
     let (sync_tx, sync_rx) = mpsc::channel(256);
     spawn_sync_worker(sync_rx).expect("Failed to spawn sync worker");
 
-    // Note: Account::new might try to create XDG directories. 
-    // In a test environment, we might want to override these, 
+    // Note: Account::new might try to create XDG directories.
+    // In a test environment, we might want to override these,
     // but for now let's hope it works in the CI/Test environment.
-    let account = Account::new(db_tx, sync_tx).await.expect("Failed to create account");
+    let account = Account::new(db_tx, sync_tx)
+        .await
+        .expect("Failed to create account");
 
     let feed_id = "test-feed".to_string();
-    let items = vec![
-        ParsedItem {
-            id: "article-1".to_string(),
-            title: Some("Article 1".to_string()),
-            content_html: Some("<p>Hello</p>".to_string()),
-            content_text: None,
-            url: None,
-            external_url: None,
-            summary: None,
-            image_url: None,
-            date_published: Some(Utc::now()),
-            date_modified: None,
-            authors: Vec::new(),
-            attachments: Vec::new(),
-        }
-    ];
+    let items = vec![ParsedItem {
+        id: "article-1".to_string(),
+        title: Some("Article 1".to_string()),
+        content_html: Some("<p>Hello</p>".to_string()),
+        content_text: None,
+        url: None,
+        external_url: None,
+        summary: None,
+        image_url: None,
+        date_published: Some(Utc::now()),
+        date_modified: None,
+        authors: Vec::new(),
+        attachments: Vec::new(),
+    }];
 
-    let changes = account.update_feed(feed_id.clone(), items, false, 30).await.expect("Failed to update feed");
-    
+    let changes = account
+        .update_feed(feed_id.clone(), items, false, 30)
+        .await
+        .expect("Failed to update feed");
+
     assert_eq!(changes.new_articles.len(), 1);
     assert_eq!(changes.new_articles[0].title, Some("Article 1".to_string()));
 
     // Second update with same item should result in 0 new articles
-    let items2 = vec![
-        ParsedItem {
-            id: "article-1".to_string(),
-            title: Some("Article 1".to_string()),
-            content_html: Some("<p>Hello</p>".to_string()),
-            content_text: None,
-            url: None,
-            external_url: None,
-            summary: None,
-            image_url: None,
-            date_published: Some(Utc::now()),
-            date_modified: None,
-            authors: Vec::new(),
-            attachments: Vec::new(),
-        }
-    ];
+    let items2 = vec![ParsedItem {
+        id: "article-1".to_string(),
+        title: Some("Article 1".to_string()),
+        content_html: Some("<p>Hello</p>".to_string()),
+        content_text: None,
+        url: None,
+        external_url: None,
+        summary: None,
+        image_url: None,
+        date_published: Some(Utc::now()),
+        date_modified: None,
+        authors: Vec::new(),
+        attachments: Vec::new(),
+    }];
 
-    let changes2 = account.update_feed(feed_id, items2, false, 30).await.expect("Failed to update feed again");
+    let changes2 = account
+        .update_feed(feed_id, items2, false, 30)
+        .await
+        .expect("Failed to update feed again");
     assert_eq!(changes2.new_articles.len(), 0);
     assert_eq!(changes2.updated_articles.len(), 0);
 }

@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (db_tx, db_rx) = mpsc::channel(256);
     database::spawn_db_worker(db_rx)?;
-    
+
     let (sync_tx, sync_rx) = mpsc::channel(256);
     database::spawn_sync_worker(sync_rx)?;
 

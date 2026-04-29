@@ -82,7 +82,7 @@ impl BatchUpdate {
         // since that's the most common need after a batch update.
         glib::idle_add_local_once(|| {
             // We need a way to reach the window or a global notifier.
-            // For now, we'll assume the window will eventually subscribe 
+            // For now, we'll assume the window will eventually subscribe
             // to some global state or we'll pass a callback.
         });
     }

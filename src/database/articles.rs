@@ -515,7 +515,11 @@ fn update_statuses_read(conn: &mut Connection, ids: &[String], read: bool) -> Re
             placeholders
         );
         let mut params = vec![rusqlite::types::Value::from(if read { 1i64 } else { 0i64 })];
-        params.extend(chunk.iter().map(|s| rusqlite::types::Value::from(s.clone())));
+        params.extend(
+            chunk
+                .iter()
+                .map(|s| rusqlite::types::Value::from(s.clone())),
+        );
         conn.execute(&sql, rusqlite::params_from_iter(params))?;
     }
     Ok(())
@@ -532,15 +536,25 @@ fn update_statuses_starred(conn: &mut Connection, ids: &[String], starred: bool)
             "UPDATE statuses SET starred = ? WHERE article_id IN ({})",
             placeholders
         );
-        let mut params = vec![rusqlite::types::Value::from(if starred { 1i64 } else { 0i64 })];
-        params.extend(chunk.iter().map(|s| rusqlite::types::Value::from(s.clone())));
+        let mut params = vec![rusqlite::types::Value::from(if starred {
+            1i64
+        } else {
+            0i64
+        })];
+        params.extend(
+            chunk
+                .iter()
+                .map(|s| rusqlite::types::Value::from(s.clone())),
+        );
         conn.execute(&sql, rusqlite::params_from_iter(params))?;
     }
     Ok(())
 }
 
 fn fetch_missing_article_ids(conn: &mut Connection) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT article_id FROM statuses WHERE article_id NOT IN (SELECT article_id FROM articles)")?;
+    let mut stmt = conn.prepare(
+        "SELECT article_id FROM statuses WHERE article_id NOT IN (SELECT article_id FROM articles)",
+    )?;
     let rows = stmt.query_map([], |row| row.get(0))?;
     let mut ids = Vec::new();
     for row in rows {
@@ -798,7 +812,11 @@ fn update_feed(
                     .optional()?;
                 if let Some((starred, date_arrived)) = status
                     && !starred
-                    && Utc.timestamp_opt(date_arrived, 0).single().map(|t| t < retention_cutoff).unwrap_or(true)
+                    && Utc
+                        .timestamp_opt(date_arrived, 0)
+                        .single()
+                        .map(|t| t < retention_cutoff)
+                        .unwrap_or(true)
                 {
                     deleted_ids.insert(id.clone());
                 }
