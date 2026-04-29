@@ -40,7 +40,11 @@ Visual unification + reading-pane upgrades. Built up across pre-release commits;
       │   └── preview_label
       └── date_label  (valign=Start, 80 px min, right-aligned)
       ```
-- **Pane width constraints (pre4.6).** With pre4.5's `hscrollbar-policy="never"`, the timeline pane was free to auto-size based on row natural width — so smart-feed views (with their long aggregated titles) made the timeline grow much wider than the per-feed view, eating into the article pane. Added `min-sidebar-width` / `max-sidebar-width` / `sidebar-width-fraction` constraints to both `AdwNavigationSplitView`s: outer (Feeds) clamps 220–360 px at 22 %; inner (Timeline) clamps 320–480 px at 32 %. The article pane now keeps its real estate regardless of which feed is selected. Defaults match GNOME app convention (Geary, Polari, etc.).
+- **Pane width constraints (pre4.6 → pre4.8).** With pre4.5's `hscrollbar-policy="never"`, the timeline pane was free to auto-size based on row natural width — so smart-feed views (with their long aggregated titles) made the timeline grow much wider than the per-feed view, eating into the article pane.
+  - **pre4.6**: added `min/max-sidebar-width` + `sidebar-width-fraction` to both `AdwNavigationSplitView`s. Didn't help — those caps are advisory; content's natural-width request can override.
+  - **pre4.7**: capped `title_label` natural width via `set_max_width_chars(32)`. Helped some, but the preview and feed-name labels still had unbounded natural widths.
+  - **pre4.8 (real fix)**: capped natural width on every label in the row — title 32 chars, feed-name 32 chars + ellipsize, preview 48 chars. The row's total natural width is now bounded at ~140 character widths regardless of source feed. Per-feed and smart-feed views finally allocate the same timeline pane.
+- **Refresh-in-progress spinner (pre5)**: the refresh button's icon swaps to a `GtkSpinner` while feeds are being fetched, swaps back to `view-refresh-symbolic` when the cycle completes. Implementation: `sync_btn`'s child became a `GtkStack` with two pages (`icon` / `spinner`), `set_refresh_in_progress(bool)` on the window flips the visible-child-name and starts/stops the spinner. Wired into both `act_refresh` and the post-import `refresh_specific_feeds` so any user-initiated refresh shows progress.
 
 ## v1.1.0 — Phase 6: Neutered WebKit Article Pane
 

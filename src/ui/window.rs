@@ -59,6 +59,10 @@ mod imp {
         pub mark_all_read_btn: TemplateChild<gtk::Button>,
         #[template_child]
         pub primary_menu: TemplateChild<gio::Menu>,
+        #[template_child]
+        pub sync_btn_stack: TemplateChild<gtk::Stack>,
+        #[template_child]
+        pub sync_btn_spinner: TemplateChild<gtk::Spinner>,
 
         pub account: OnceCell<Arc<Account>>,
         pub image_cache: OnceCell<Arc<ImageCache>>,
@@ -1059,10 +1063,12 @@ impl ViaductWindow {
             let _ = done_tx.send(tally);
         });
         self.imp().batch_update.start();
+        self.set_refresh_in_progress(true);
         glib::spawn_future_local(async move {
             let Ok(tally) = done_rx.await else {
                 if let Some(window) = window_weak.upgrade() {
                     window.imp().batch_update.end();
+                    window.set_refresh_in_progress(false);
                 }
                 return;
             };
@@ -1076,12 +1082,26 @@ impl ViaductWindow {
                 // stale (often empty) results until the next sidebar click.
                 window.reload_current_timeline();
                 window.imp().batch_update.end();
+                window.set_refresh_in_progress(false);
             }
         });
     }
 
     /// Toast feedback so a refresh that produces no visible state change
     /// is at least surfaced. Dismissed automatically by `AdwToast`.
+    /// Flip the sync button's icon → spinner. Call at refresh start;
+    /// pair with `set_refresh_in_progress(false)` at completion.
+    pub(crate) fn set_refresh_in_progress(&self, on: bool) {
+        let imp = self.imp();
+        if on {
+            imp.sync_btn_spinner.start();
+            imp.sync_btn_stack.set_visible_child_name("spinner");
+        } else {
+            imp.sync_btn_spinner.stop();
+            imp.sync_btn_stack.set_visible_child_name("icon");
+        }
+    }
+
     fn show_refresh_toast(&self, tally: RefreshTally) {
         let msg = if tally.feeds_attempted == 0 {
             "No feeds in subscription list.".to_string()
@@ -1555,6 +1575,7 @@ impl ViaductWindow {
         let window_weak = self.downgrade();
         let retention_days = current_retention_days();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<RefreshTally>();
+        self.set_refresh_in_progress(true);
         crate::spawn_on_runtime(async move {
             let paired = pair_feeds_with_settings(&account, feeds).await;
             // Force=true: post-import re-fetch is also an explicit user
@@ -1563,11 +1584,17 @@ impl ViaductWindow {
             let _ = done_tx.send(tally);
         });
         glib::spawn_future_local(async move {
-            let Ok(tally) = done_rx.await else { return };
+            let Ok(tally) = done_rx.await else {
+                if let Some(window) = window_weak.upgrade() {
+                    window.set_refresh_in_progress(false);
+                }
+                return;
+            };
             if let Some(window) = window_weak.upgrade() {
                 window.dispatch_refresh_notification(tally.new_articles);
                 window.refresh_unread_counts();
                 window.reload_current_timeline();
+                window.set_refresh_in_progress(false);
             }
         });
     }

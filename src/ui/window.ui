@@ -52,9 +52,36 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                     </child>
                     <child type="start">
                       <object class="GtkButton" id="sync_btn">
-                        <property name="icon-name">view-refresh-symbolic</property>
                         <property name="tooltip-text">Sync Now</property>
                         <property name="action-name">win.refresh</property>
+                        <property name="child">
+                          <object class="GtkStack" id="sync_btn_stack">
+                            <property name="transition-type">crossfade</property>
+                            <property name="transition-duration">120</property>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">icon</property>
+                                <property name="child">
+                                  <object class="GtkImage">
+                                    <property name="icon-name">view-refresh-symbolic</property>
+                                    <property name="pixel-size">16</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkStackPage">
+                                <property name="name">spinner</property>
+                                <property name="child">
+                                  <object class="GtkSpinner" id="sync_btn_spinner">
+                                    <property name="width-request">16</property>
+                                    <property name="height-request">16</property>
+                                  </object>
+                                </property>
+                              </object>
+                            </child>
+                          </object>
+                        </property>
                       </object>
                     </child>
                     <child type="end">
