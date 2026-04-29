@@ -17,6 +17,8 @@
 
 Viaduct translates NetNewsWire's local-account architecture, parsing pipeline, and refresh engine to GNOME 50+, faithfully enough that Brent's CSS themes drop in byte-for-byte. The name is the metaphor: a viaduct carries something across a gap. This one carries NetNewsWire across to Linux.
 
+**Author's Note**: I am a broke college student in my late-30s. This was an experiment and not all-encompassing. It only supports local and Inoreader because that's what I use. I've only tested this up to 150 actual feeds because that's how many I follow. I use Fedora 44, my laptop is a Thinkpad T14 AMD Gen 6. I welcome contributions but can only truly test for my specific use-case.
+
 ## Why this exists
 
 Modern feed readers tend to be Electron / browser-engine apps with sprawling memory footprints. The closest comparable Linux RSS reader idles at **600 MB** with the same OPML file Viaduct peaks at under **300 MB**. Viaduct gets there by porting NetNewsWire's discipline — single-writer SQLite worker, OPML on disk as the source of truth, FTS5 search, hard 250-entry per-kind LRU caches, exactly one neutered WebKit instance for the article pane — into Rust + tokio + GTK4. Idle target: 100–300 MB. Hard peak ceiling: 500 MB, enforced by an in-tree `mem_check` harness.
