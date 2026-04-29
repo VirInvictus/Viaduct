@@ -481,17 +481,37 @@ fn format_relative_date(d: chrono::DateTime<chrono::Utc>) -> String {
 /// Drop tags, decode the most common HTML entities, and collapse whitespace
 /// so a feed-supplied HTML preview lands as a clean two-line string in
 /// the timeline row. Skipped when the input is already plain text.
+///
+/// **v1.9.1 hard cap at 400 output chars.** The preview label only
+/// shows two lines, but Pango shapes the *entire* text to compute
+/// line breaks before ellipsizing. Setting a 60-KB stripped article
+/// onto the label costs hundreds of milliseconds of Pango shaping per
+/// row bind, which is what made Digital Antiquarian (5000-word
+/// essays) take seconds to display in the timeline. Capping the
+/// output means Pango shapes at most ~400 chars regardless of
+/// article length.
+const PREVIEW_MAX_CHARS: usize = 400;
+
 fn strip_html_for_preview(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
+    let mut out = String::with_capacity(PREVIEW_MAX_CHARS * 2);
     let mut in_tag = false;
     let mut last_was_space = false;
+    let mut counted: usize = 0;
     for ch in input.chars() {
+        // Early-exit when we've collected enough output. Real article
+        // content can run to 60–100 KB; the preview only renders ~120
+        // visible chars, so 400 leaves generous headroom for entity
+        // decoding without scanning more than necessary.
+        if counted >= PREVIEW_MAX_CHARS {
+            break;
+        }
         if in_tag {
             if ch == '>' {
                 in_tag = false;
                 if !last_was_space {
                     out.push(' ');
                     last_was_space = true;
+                    counted += 1;
                 }
             }
             continue;
@@ -504,10 +524,12 @@ fn strip_html_for_preview(input: &str) -> String {
             if !last_was_space && !out.is_empty() {
                 out.push(' ');
                 last_was_space = true;
+                counted += 1;
             }
             continue;
         }
         out.push(ch);
+        counted += 1;
         last_was_space = false;
     }
     decode_common_entities(out.trim())
@@ -662,5 +684,33 @@ mod tests {
     fn relative_date_hours_within_day() {
         let d = chrono::Utc::now() - chrono::Duration::hours(5);
         assert_eq!(format_relative_date(d), "5h ago");
+    }
+
+    #[test]
+    fn strip_html_caps_long_input_at_400_chars() {
+        // The Digital Antiquarian regression: 5000-word essays would
+        // pass 60+ KB of stripped text into Pango via set_text(). Cap
+        // ensures Pango shapes at most ~PREVIEW_MAX_CHARS regardless
+        // of article length.
+        let long = "<p>".to_string() + &"abcdefghij ".repeat(2000) + "</p>";
+        // 2000 × 11 = 22 000 input chars before tag stripping.
+        let out = strip_html_for_preview(&long);
+        assert!(
+            out.chars().count() <= PREVIEW_MAX_CHARS + 4,
+            "preview len = {} chars; expected <= {}",
+            out.chars().count(),
+            PREVIEW_MAX_CHARS + 4
+        );
+    }
+
+    #[test]
+    fn strip_html_short_input_passes_through_uncapped() {
+        // Inputs already shorter than the cap shouldn't be touched —
+        // the cap is a regression guard, not a forced truncation.
+        let short = "<p>Hello <strong>world</strong>.</p>";
+        let out = strip_html_for_preview(short);
+        assert!(out.contains("Hello"));
+        assert!(out.contains("world"));
+        assert!(out.contains('.'));
     }
 }

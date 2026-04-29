@@ -130,8 +130,31 @@ async fn fetch_vimeo_thumbnail_url(client: &reqwest::Client, id: &str) -> Option
         .map(|s| s.to_string())
 }
 
+/// Bytes of HTML body to scan when looking for a video URL.
+///
+/// A video-bearing article almost always references the embed in the
+/// first paragraph (lead image / "watch this:" intro) — there's no
+/// realistic reason a writer would bury a YouTube link 10 KB into a
+/// 100 KB essay and expect the reader-app preview to surface it. So
+/// scanning more than the first ~8 KB is wasted work.
+///
+/// Why this matters: `scan_html_for_video` runs on every timeline row
+/// bind via `spawn_video_thumbnail_fetch`. Without the cap, a feed of
+/// 100 KB essays paid the full scan cost per visible row on every feed
+/// change, even though every one of those scans would return None.
+/// The cap turns it into ~8 KB of work per row regardless of article
+/// length.
+const VIDEO_SCAN_MAX_BYTES: usize = 8192;
+
 fn scan_html_for_video(html: &str) -> Option<VideoSource> {
-    for token in extract_url_candidates(html) {
+    // Truncate to the first VIDEO_SCAN_MAX_BYTES, backing off to a
+    // valid UTF-8 char boundary so the substring slice stays sound.
+    let mut limit = html.len().min(VIDEO_SCAN_MAX_BYTES);
+    while limit > 0 && !html.is_char_boundary(limit) {
+        limit -= 1;
+    }
+    let prefix = &html[..limit];
+    for token in extract_url_candidates(prefix) {
         if let Some(src) = VideoSource::from_url(token) {
             return Some(src);
         }
@@ -395,5 +418,37 @@ mod tests {
             attachments: vec![],
         };
         assert_eq!(detect_video(&a), None);
+    }
+
+    #[test]
+    fn scan_html_for_video_only_reads_first_8kb() {
+        // v1.9.1 perf cap: the scan now bails after VIDEO_SCAN_MAX_BYTES
+        // (8 KB) of input. A YouTube link buried 10 KB into a 100 KB
+        // essay should be intentionally missed — that's the trade we
+        // make so non-video long-form articles don't pay the full
+        // scan cost on every timeline-row bind.
+        let mut html = String::with_capacity(110_000);
+        // Pad to ~10 KB with non-URL text.
+        html.push_str(&"x".repeat(10_000));
+        html.push_str(" https://www.youtube.com/watch?v=dQw4w9WgXcQ ");
+        // No URL in the first 8 KB of input → scan misses it.
+        assert_eq!(scan_html_for_video(&html), None);
+    }
+
+    #[test]
+    fn scan_html_for_video_finds_url_within_first_8kb() {
+        // Sanity check the inverse: when the URL IS within the first
+        // 8 KB, the scan must still find it. Otherwise the cap is
+        // pessimistic and we'd be regressing video-bearing articles.
+        let mut html = String::with_capacity(10_000);
+        html.push_str(&"x".repeat(2_000));
+        html.push_str(" https://www.youtube.com/watch?v=dQw4w9WgXcQ ");
+        html.push_str(&"y".repeat(5_000));
+        assert_eq!(
+            scan_html_for_video(&html),
+            Some(VideoSource::YouTube {
+                id: "dQw4w9WgXcQ".to_string()
+            })
+        );
     }
 }

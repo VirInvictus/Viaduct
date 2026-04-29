@@ -197,6 +197,32 @@ impl ViaductWindow {
         window.wire_models();
         crate::ui::actions::install(&window, app);
 
+        // Clean shutdown for the v1.7.1 right-click popovers. The
+        // popovers are parented to the list views via `set_parent` in
+        // `wire_context_menus`; without explicit unparenting, GTK emits
+        // a "Finalizing GtkListView, but it still has children left:
+        // GtkPopoverMenu …" warning during teardown. Non-fatal but
+        // ugly in the logs. close_request fires before the widget
+        // tree starts unwinding, so unparenting here keeps cleanup
+        // ordered.
+        let weak_for_close = window.downgrade();
+        window.connect_close_request(move |_| {
+            if let Some(window) = weak_for_close.upgrade() {
+                let imp = window.imp();
+                for popover in [
+                    imp.timeline_popover.get(),
+                    imp.sidebar_feed_popover.get(),
+                    imp.sidebar_folder_popover.get(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    popover.unparent();
+                }
+            }
+            glib::Propagation::Proceed
+        });
+
         if crate::is_debug_mode() {
             let debug_section = gio::Menu::new();
             debug_section.append(Some("Crash (Panic)"), Some("win.debug-crash"));

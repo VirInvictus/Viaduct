@@ -1,5 +1,41 @@
 # viaduct — Patch Notes
 
+## v1.9.1 — The Digital Antiquarian fix (Pango shaping + URL scan caps)
+
+The v1.9.0 instrumentation paid off immediately. Brandon's logs:
+
+```
+INFO viaduct::perf: selection navigation
+  item=The Digital Antiquarian
+  articles=10 fetch_ms=13 populate_ms=12 status_ms=0 total_ms=25
+```
+
+Twenty-five milliseconds end-to-end on our side. But the user perceived a 2-second wait before the timeline rendered. **The slow part was happening AFTER our `populate_timeline` returned** — in GTK's per-row `connect_bind` callbacks for the visible rows. Two hot paths inside bind both scaled with `content_html` length, and Digital Antiquarian writes 5000-word essays.
+
+### Root cause #1 — Pango shaping the entire stripped article
+
+`strip_html_for_preview(content_html)` produced the full plain-text body (60 KB+ for long essays), which we passed directly to `preview_label.set_text()`. **Pango shapes the entire input** to compute line breaks before deciding which 2 lines to display and ellipsize. The remaining 60 KB of text never appears on screen but Pango paid the shaping cost anyway.
+
+Fix: hard cap on `strip_html_for_preview` output at 400 chars. The function now early-exits its loop after collecting that many output chars, so it scans at most ~600–800 chars of input regardless of article length. Two new tests lock the cap.
+
+### Root cause #2 — `detect_video` scanning entire article body
+
+`spawn_video_thumbnail_fetch` runs `detect_video` on every row bind. For non-video articles, that scan walks the entire `content_html` looking for YouTube/Vimeo URLs and finds nothing — pure wasted main-thread work proportional to article size.
+
+Fix: `scan_html_for_video` truncates input to the first 8 KB before scanning, backing off to a UTF-8 char boundary so the slice stays sound. Rationale: a video-bearing article references the embed in the lead paragraph 99% of the time. No realistic feed buries a YouTube link 10 KB into a 100 KB essay and expects the timeline preview to surface a thumbnail. Two new tests: one confirms the cap (URL at byte 10000 isn't found), one confirms the inverse (URL within 8 KB still found).
+
+### Bonus fix — `Finalizing GtkListView, but it still has children left` warnings
+
+The v1.7.1 right-click popovers attach via `set_parent(&list_view)` to live as children of the timeline / sidebar list views. Without explicit `unparent()` before the window tears down, GTK warns about the dangling parent-child relationship at finalize time. Non-fatal but ugly in the logs. New `connect_close_request` handler unparents all three popovers before propagation; clean shutdown.
+
+### What this should look like in your logs
+
+Re-run the app and click Digital Antiquarian. Per-row bind cost is now bounded by the 400-char preview cap and the 8-KB video scan cap. **If the click still feels slow**, the new perf log will show whether time is going to fetch (DB), populate (splice), status (status), or — what we suspect now — to GTK layout / Pango that's still happening outside our instrumentation. Either way the logs will tell us.
+
+### Test status
+
+22 viaduct + 71 viaduct-core + 1 integration tests passing (was 20 + 69 + 1 — added the 4 new perf-cap tests). fmt + clippy clean.
+
 ## v1.9.0 — Timeline navigation perf + debug instrumentation
 
 Brandon reported sidebar feed-clicking taking up to 3 seconds and the UI sometimes refusing further clicks. This release adds the instrumentation you'd want to diagnose that, plus the two structural fixes that explain most of the latency.
