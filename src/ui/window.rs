@@ -40,10 +40,6 @@ mod imp {
         #[template_child]
         pub article_scroll: TemplateChild<gtk::ScrolledWindow>,
         #[template_child]
-        pub article_title_label: TemplateChild<gtk::Label>,
-        #[template_child]
-        pub article_meta_label: TemplateChild<gtk::Label>,
-        #[template_child]
         pub search_bar: TemplateChild<gtk::SearchBar>,
         #[template_child]
         pub search_entry: TemplateChild<gtk::SearchEntry>,
@@ -87,13 +83,19 @@ mod imp {
     /// `raw_html` is the feed-provided body, `extracted_html` caches a
     /// Reader-View extraction result. `auto_reader` is the feed's
     /// `reader_view_always_enabled` setting; when true the reader button
-    /// is pre-toggled on article selection.
+    /// is pre-toggled on article selection. Metadata fields feed the NNW
+    /// theme macros and are populated by the timeline-selection handler.
     #[derive(Default)]
     pub struct ArticleDisplayState {
         pub raw_html: Option<String>,
         pub extracted_html: Option<String>,
         pub article_url: Option<String>,
         pub auto_reader: bool,
+        pub title: String,
+        pub byline: String,
+        pub feed_link: String,
+        pub feed_link_title: String,
+        pub date_published: Option<chrono::DateTime<chrono::Utc>>,
     }
 
     #[glib::object_subclass]
@@ -312,30 +314,25 @@ impl ViaductWindow {
             let external = article.external_url.clone().or(article.url.clone());
             let feed_id = article.feed_id.clone();
 
-            // Populate Header Labels
-            window
+            // Build the metadata that the NNW theme template wants:
+            // title, byline, feed name + URL, publication date. The actual
+            // string formatting / HTML escaping happens in render_article_body
+            // when the substitutions dict is constructed.
+            let title = article.title.clone().unwrap_or_else(|| "Untitled".into());
+            let feed_link_title = window
                 .imp()
-                .article_title_label
-                .set_text(article.title.as_deref().unwrap_or("Untitled"));
-
-            let mut meta_parts = Vec::new();
-            if let Some(names) = window.imp().feed_names.get()
-                && let Some(name) = names.borrow().get(&feed_id)
-            {
-                meta_parts.push(name.clone());
-            }
-            if let Some(date) = article.date_published {
-                meta_parts.push(date.format("%B %e, %Y at %l:%M %p").to_string());
-            }
-            if let Some(author) = article.authors.first()
-                && let Some(ref name) = author.name
-            {
-                meta_parts.push(format!("by {}", name));
-            }
-            window
-                .imp()
-                .article_meta_label
-                .set_text(&meta_parts.join(" • "));
+                .feed_names
+                .get()
+                .and_then(|names| names.borrow().get(&feed_id).cloned())
+                .unwrap_or_default();
+            let byline = article
+                .authors
+                .first()
+                .and_then(|a| a.name.clone())
+                .unwrap_or_default();
+            // feed_link is filled in by the post-load fetch_feed_settings path
+            // below if the feed has a home_page_url; for now stub to empty.
+            let feed_link = String::new();
 
             // Prefer content_html → content_text → summary, in order. NNW
             // does the equivalent fall-through. If everything is empty
@@ -367,6 +364,11 @@ impl ViaductWindow {
                 state.extracted_html = None;
                 state.article_url = external;
                 state.auto_reader = false;
+                state.title = title;
+                state.byline = byline;
+                state.feed_link = feed_link;
+                state.feed_link_title = feed_link_title;
+                state.date_published = article.date_published;
             }
             // Untoggle the reader button without re-firing its handler (we
             // want it to reflect `auto_reader` after the settings fetch).
@@ -447,66 +449,123 @@ impl ViaductWindow {
         let imp = self.imp();
         let view = imp.article_web_view.get();
 
-        let (reader_mode, raw, extracted, url) = {
-            let state = imp.article_display.borrow();
-            (
-                imp.reader_btn.is_active(),
-                state.raw_html.clone(),
-                state.extracted_html.clone(),
-                state.article_url.clone(),
-            )
+        // Pull display state and metadata under one borrow.
+        let state = imp.article_display.borrow();
+        let reader_mode = imp.reader_btn.is_active();
+        let raw = state.raw_html.clone();
+        let extracted = state.extracted_html.clone();
+        let url = state.article_url.clone();
+
+        // Pick which body the active reader-button mode wants. Falls back
+        // to raw HTML when extraction hasn't completed; the async kick-off
+        // sits below and re-enters this function on completion.
+        let body_html = if reader_mode {
+            extracted.clone().or_else(|| raw.clone())
+        } else {
+            raw.clone()
+        };
+        let Some(body_html) = body_html else {
+            drop(state);
+            // Nothing to render — clear the pane.
+            article_renderer::render(&view, "", None);
+            return;
         };
 
-        if !reader_mode {
-            if let Some(raw) = raw {
-                article_renderer::render(&view, &raw, url.as_deref());
-            }
-            return;
-        }
+        // Pick a theme based on the current libadwaita color scheme.
+        // Phase 6 ships hardcoded Sepia (light) / Tiqoe Dark (dark);
+        // a user-facing theme picker is queued for v1.2.0.
+        let is_dark = adw::StyleManager::default().is_dark();
+        let theme = article_renderer::select_for_dark_mode(is_dark);
 
-        // Reader mode from here on.
-        if let Some(extracted) = extracted {
-            article_renderer::render(&view, &extracted, url.as_deref());
-            return;
-        }
+        let subs = article_renderer::ArticleSubstitutions {
+            title: article_renderer::escape_html(&state.title),
+            body: body_html,
+            preferred_link: state.article_url.clone().unwrap_or_default(),
+            feed_link: state.feed_link.clone(),
+            feed_link_title: article_renderer::escape_html(&state.feed_link_title),
+            byline: article_renderer::escape_html(&state.byline),
+            datetime_long: state
+                .date_published
+                .map(|d| d.format("%A, %B %e, %Y at %l:%M:%S %p").to_string())
+                .unwrap_or_default(),
+            datetime_medium: state
+                .date_published
+                .map(|d| d.format("%b %e, %Y at %l:%M %p").to_string())
+                .unwrap_or_default(),
+            datetime_short: state
+                .date_published
+                .map(|d| d.format("%-m/%-d/%y, %l:%M %p").to_string())
+                .unwrap_or_default(),
+            date_long: state
+                .date_published
+                .map(|d| d.format("%A, %B %e, %Y").to_string())
+                .unwrap_or_default(),
+            date_medium: state
+                .date_published
+                .map(|d| d.format("%b %e, %Y").to_string())
+                .unwrap_or_default(),
+            date_short: state
+                .date_published
+                .map(|d| d.format("%-m/%-d/%y").to_string())
+                .unwrap_or_default(),
+            time_long: state
+                .date_published
+                .map(|d| d.format("%l:%M:%S %p").to_string())
+                .unwrap_or_default(),
+            time_medium: state
+                .date_published
+                .map(|d| d.format("%l:%M:%S %p").to_string())
+                .unwrap_or_default(),
+            time_short: state
+                .date_published
+                .map(|d| d.format("%l:%M %p").to_string())
+                .unwrap_or_default(),
+            avatar_src: String::new(),
+            external_link: String::new(),
+            external_link_label: String::new(),
+            external_link_stripped: String::new(),
+        };
+        drop(state);
 
-        // No cached extraction — run one. Show the raw body as a fallback
-        // until extraction completes so the pane isn't blank.
-        if let Some(ref raw_body) = raw {
-            article_renderer::render(&view, raw_body, url.as_deref());
-        }
+        article_renderer::render_themed(&view, theme, subs, url.as_deref());
 
-        let Some(url) = url else { return };
-        let window_weak = self.downgrade();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        crate::spawn_on_runtime(async move {
-            let result = crate::ui::reader_view::extract(&url, raw.as_deref()).await;
-            let _ = tx.send(result);
-        });
-        glib::spawn_future_local(async move {
-            match rx.await {
-                Ok(Ok(extracted)) => {
-                    if let Some(window) = window_weak.upgrade() {
-                        window.imp().article_display.borrow_mut().extracted_html = Some(extracted);
-                        // Only re-render if the user hasn't since toggled
-                        // off or advanced to a different article.
-                        if window.imp().reader_btn.is_active() {
-                            window.render_article_body();
+        // Reader-mode: if the user toggled in but extracted_html is still
+        // None, kick off the extractor. The fallback render above already
+        // showed raw body so the pane isn't blank during the wait.
+        if reader_mode && extracted.is_none() {
+            let Some(url) = url else { return };
+            let window_weak = self.downgrade();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            crate::spawn_on_runtime(async move {
+                let result = crate::ui::reader_view::extract(&url, raw.as_deref()).await;
+                let _ = tx.send(result);
+            });
+            glib::spawn_future_local(async move {
+                match rx.await {
+                    Ok(Ok(extracted)) => {
+                        if let Some(window) = window_weak.upgrade() {
+                            window.imp().article_display.borrow_mut().extracted_html =
+                                Some(extracted);
+                            // Only re-render if the user hasn't since toggled
+                            // off or advanced to a different article.
+                            if window.imp().reader_btn.is_active() {
+                                window.render_article_body();
+                            }
                         }
                     }
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!(?e, "reader view extraction failed");
-                    if let Some(window) = window_weak.upgrade() {
-                        window.imp().reader_btn.set_active(false);
+                    Ok(Err(e)) => {
+                        tracing::warn!(?e, "reader view extraction failed");
+                        if let Some(window) = window_weak.upgrade() {
+                            window.imp().reader_btn.set_active(false);
+                        }
+                    }
+                    Err(_) => {
+                        // Oneshot sender dropped — extraction task panicked.
+                        tracing::warn!("reader view extraction task aborted");
                     }
                 }
-                Err(_) => {
-                    // Oneshot sender dropped — extraction task panicked.
-                    tracing::warn!("reader view extraction task aborted");
-                }
-            }
-        });
+            });
+        }
     }
 
     fn wire_search(&self, timeline_store: gio::ListStore) {

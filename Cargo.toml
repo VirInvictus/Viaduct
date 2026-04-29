@@ -4,6 +4,7 @@ version = "1.0.7"
 edition = "2024"
 description = "A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire."
 license = "MIT"
+default-run = "viaduct"
 
 [dependencies]
 gtk = { version = "0.9", package = "gtk4", features = ["v4_16"] }

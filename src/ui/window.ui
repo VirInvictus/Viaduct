@@ -151,51 +151,9 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                         <property name="content">
                           <object class="GtkScrolledWindow" id="article_scroll">
                             <property name="child">
-                              <object class="AdwClamp">
-                                <property name="maximum-size">800</property>
-                                <property name="child">
-                                  <object class="GtkBox">
-                                    <property name="orientation">vertical</property>
-                                    <property name="spacing">12</property>
-                                    <property name="margin-top">32</property>
-                                    <property name="margin-bottom">32</property>
-                                    <property name="margin-start">12</property>
-                                    <property name="margin-end">12</property>
-                                    <child>
-                                      <object class="GtkLabel" id="article_title_label">
-                                        <property name="wrap">True</property>
-                                        <property name="xalign">0</property>
-                                        <property name="selectable">True</property>
-                                        <style>
-                                          <class name="title-1"/>
-                                        </style>
-                                      </object>
-                                    </child>
-                                    <child>
-                                      <object class="GtkLabel" id="article_meta_label">
-                                        <property name="wrap">True</property>
-                                        <property name="xalign">0</property>
-                                        <property name="selectable">True</property>
-                                        <style>
-                                          <class name="caption"/>
-                                          <class name="dim-label"/>
-                                        </style>
-                                      </object>
-                                    </child>
-                                    <child>
-                                      <object class="GtkSeparator">
-                                        <property name="margin-top">12</property>
-                                        <property name="margin-bottom">12</property>
-                                      </object>
-                                    </child>
-                                    <child>
-                                      <object class="WebKitWebView" id="article_web_view">
-                                        <property name="vexpand">True</property>
-                                        <property name="hexpand">True</property>
-                                      </object>
-                                    </child>
-                                  </object>
-                                </property>
+                              <object class="WebKitWebView" id="article_web_view">
+                                <property name="vexpand">True</property>
+                                <property name="hexpand">True</property>
                               </object>
                             </property>
                           </object>
