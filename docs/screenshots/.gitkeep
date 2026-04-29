@@ -1,0 +1,14 @@
+# Screenshots ship here.
+#
+# Recommended captures:
+#   main.png                   1280×800 — three-pane wide layout, Sepia theme
+#   reading-pane-dark.png      1280×800 — Tiqoe Dark theme on dark mode
+#   adaptive-mobile.png         400×800 — collapsed mobile layout
+#   smart-feeds.png            1280×800 — Today / All Unread / Starred
+#   preferences.png             900×600 — Preferences dialog
+#
+# References:
+#   * docs/screenshots/<file>.png      → README.md
+#   * raw.githubusercontent.com/.../   → data/org.virinvictus.Viaduct.appdata.xml
+#
+# Keep both in sync when adding new captures.

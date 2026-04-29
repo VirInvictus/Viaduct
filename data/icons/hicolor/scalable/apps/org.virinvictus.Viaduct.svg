@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Viaduct app icon.
+
+  Concept: a stone arch — the structure a viaduct is named for — with
+  RSS feed waves flowing through it, signalling that the bridge is
+  carrying news between places. The arch's silhouette honours the Roman
+  aqueduct shape; the warm cream background and slate-brown stone tone
+  are deliberate references to NetNewsWire's macOS icon palette, which
+  itself uses warm parchment / paper tones rather than pure neutrals.
+
+  Drawn on a 128×128 base canvas with a 12px safe margin (per the GNOME
+  HIG icon guidelines), so the visible art occupies the central 104px
+  square with rounded corners.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="128" height="128"
+     viewBox="0 0 128 128"
+     fill="none"
+     stroke="none">
+  <defs>
+    <!-- Subtle vertical gradient on the cream background so the icon
+         doesn't read as flat on dark window chrome. -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#F5EEE0"/>
+      <stop offset="100%" stop-color="#E8DCC8"/>
+    </linearGradient>
+
+    <!-- Stone gradient for the arch — warm slate, lifted at the top
+         so the arch reads as carved from real stone, not painted flat. -->
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#7A6A55"/>
+      <stop offset="100%" stop-color="#5A4D3D"/>
+    </linearGradient>
+
+    <!-- RSS-orange gradient. Slightly warmer than the stock RSS orange
+         (#F26522) to harmonise with the cream background. -->
+    <linearGradient id="rss" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"  stop-color="#F08A2C"/>
+      <stop offset="100%" stop-color="#D86F1A"/>
+    </linearGradient>
+
+    <!-- Soft drop shadow under the arch so the bridge reads as sitting
+         on a surface. Modest blur — GNOME flat aesthetic, not material. -->
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="1.4"/>
+      <feOffset dx="0" dy="1.2" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.35"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Rounded-square background with cream gradient. Inset 12px on
+       every side for the standard GNOME safe zone. -->
+  <rect x="12" y="12" width="104" height="104" rx="22" ry="22"
+        fill="url(#bg)"/>
+
+  <!-- Arch + supporting masonry, drawn as one path so the inner
+       arched cutout reads cleanly against the background. The path
+       uses even-odd fill so the inner curve cuts a hole through the
+       solid block. -->
+  <g filter="url(#shadow)">
+    <path fill="url(#stone)" fill-rule="evenodd"
+          d="
+            M 26 100
+            L 26 56
+            A 38 38 0 0 1 102 56
+            L 102 100
+            L 26 100
+            Z
+            M 36 100
+            L 36 64
+            A 28 28 0 0 1 92 64
+            L 92 100
+            L 36 100
+            Z
+          "/>
+
+    <!-- Pier band: a horizontal stripe across the arch base, suggesting
+         the masonry course where the arch springers meet the piers.
+         Just a thin highlight to give the stone some structure. -->
+    <rect x="26" y="62" width="76" height="2.5" fill="#3E332A" opacity="0.45"/>
+
+    <!-- Springer line on each side — the structural transition where
+         the curve begins. Subtle, but it sells the "this is masonry"
+         read at small sizes. -->
+    <rect x="26" y="58" width="10" height="6" fill="#3E332A" opacity="0.25"/>
+    <rect x="92" y="58" width="10" height="6" fill="#3E332A" opacity="0.25"/>
+
+    <!-- Keystone at the apex of the inner arch — the wedge-shaped stone
+         that locks a Roman arch together. Gives the arch a focal point. -->
+    <path d="M 60 36 L 68 36 L 70 44 L 58 44 Z"
+          fill="#9A8870" stroke="#3E332A" stroke-width="0.6" opacity="0.85"/>
+  </g>
+
+  <!-- RSS broadcast symbol nested inside the inner arch's negative
+       space. Dot + two arcs, the universal feed mark, oriented so the
+       waves emerge toward the upper-right (suggesting flow / direction).
+
+       Sized to fit within the inner arch's clear area: dot at
+       approximately (50, 86), arcs sweeping up and to the right. -->
+  <g transform="translate(50 86)" stroke="url(#rss)" stroke-linecap="round"
+     fill="none">
+    <!-- Center dot of the RSS mark — the broadcast point. -->
+    <circle cx="0" cy="0" r="4" fill="url(#rss)" stroke="none"/>
+
+    <!-- Inner arc — short broadcast wave. -->
+    <path d="M 0 -10 A 10 10 0 0 1 10 0"
+          stroke-width="4.5"/>
+
+    <!-- Outer arc — longer broadcast wave. -->
+    <path d="M 0 -20 A 20 20 0 0 1 20 0"
+          stroke-width="4.5"/>
+  </g>
+</svg>

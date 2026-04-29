@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Horizontal Viaduct logo: app icon + wordmark, for README banners and
+  social cards. The icon block is the same arch + RSS waves design used
+  for the application icon (data/icons/hicolor/scalable/apps/...). The
+  wordmark uses the typeface stack we ship for the article themes
+  (Atkinson Hyperlegible Next falls back to system humanist sans), so
+  the README banner echoes the in-app reading typography.
+
+  Designed at 420×128 viewBox so embeds with width=420 are pixel-perfect.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="420" height="128"
+     viewBox="0 0 420 128"
+     fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#F5EEE0"/>
+      <stop offset="100%" stop-color="#E8DCC8"/>
+    </linearGradient>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#7A6A55"/>
+      <stop offset="100%" stop-color="#5A4D3D"/>
+    </linearGradient>
+    <linearGradient id="rss" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"  stop-color="#F08A2C"/>
+      <stop offset="100%" stop-color="#D86F1A"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="1.4"/>
+      <feOffset dx="0" dy="1.2" result="offsetblur"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.35"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Icon block: copy of the app icon, scaled down to 96px on the
+       128px logo canvas with a 16px vertical margin top/bottom. -->
+  <g transform="translate(0 16)">
+    <rect x="9" y="9" width="78" height="78" rx="16.5" ry="16.5"
+          fill="url(#bg)"/>
+    <g filter="url(#shadow)">
+      <path fill="url(#stone)" fill-rule="evenodd" transform="scale(0.75) translate(0 0)"
+            d="
+              M 26 100
+              L 26 56
+              A 38 38 0 0 1 102 56
+              L 102 100
+              L 26 100
+              Z
+              M 36 100
+              L 36 64
+              A 28 28 0 0 1 92 64
+              L 92 100
+              L 36 100
+              Z
+            "/>
+      <rect x="19.5" y="46.5" width="57" height="1.875"
+            fill="#3E332A" opacity="0.45"/>
+      <rect x="19.5" y="43.5" width="7.5" height="4.5"
+            fill="#3E332A" opacity="0.25"/>
+      <rect x="69" y="43.5" width="7.5" height="4.5"
+            fill="#3E332A" opacity="0.25"/>
+      <path d="M 45 27 L 51 27 L 52.5 33 L 43.5 33 Z"
+            fill="#9A8870" stroke="#3E332A" stroke-width="0.45" opacity="0.85"/>
+    </g>
+    <g transform="translate(37.5 64.5)" stroke="url(#rss)" stroke-linecap="round"
+       fill="none">
+      <circle cx="0" cy="0" r="3" fill="url(#rss)" stroke="none"/>
+      <path d="M 0 -7.5 A 7.5 7.5 0 0 1 7.5 0" stroke-width="3.4"/>
+      <path d="M 0 -15 A 15 15 0 0 1 15 0" stroke-width="3.4"/>
+    </g>
+  </g>
+
+  <!-- Wordmark: "viaduct" in a humanist sans, weight 600. Slate-stone
+       fill so the type harmonises with the icon's masonry, not fights
+       it. Letter-spacing 0 — typography is already evenly proportioned. -->
+  <text x="120" y="82"
+        font-family="'Atkinson Hyperlegible Next', 'Atkinson Hyperlegible',
+                     'Inter', system-ui, -apple-system, sans-serif"
+        font-size="56"
+        font-weight="600"
+        fill="#3E332A"
+        letter-spacing="-1">viaduct</text>
+
+  <!-- Tagline under the wordmark — small, dim, italic. Reads as
+       authorship attribution rather than a marketing slogan. -->
+  <text x="122" y="104"
+        font-family="'Atkinson Hyperlegible Next', 'Atkinson Hyperlegible',
+                     'Inter', system-ui, -apple-system, sans-serif"
+        font-size="13"
+        font-weight="400"
+        font-style="italic"
+        fill="#7A6A55"
+        letter-spacing="0.3">a Linux port of NetNewsWire</text>
+</svg>

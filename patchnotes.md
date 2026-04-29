@@ -1,5 +1,38 @@
 # viaduct — Patch Notes
 
+## v1.5.3 — Visual identity: app icon, banner logo, README polish
+
+The project finally has a face. Up to now the desktop file referenced an icon name that didn't resolve to anything — gnome-software, the dock, the shell launcher all fell back to a generic-app placeholder. The README's banner image was a broken link.
+
+### What ships
+
+- **Application icon** at `data/icons/hicolor/scalable/apps/org.virinvictus.Viaduct.svg`. Single-file SVG, scalable from 16×16 (the smallest GTK uses) up to whatever size GNOME asks for. Concept: a stone arch — the structure a viaduct is named for — with RSS broadcast waves emerging from the inner archway. Warm cream rounded-square background, slate-stone arch with keystone and springer detailing, NetNewsWire-orange RSS mark inside. Visible elements: outer arch silhouette (carved as a single even-odd-fill path so the inner arch reads as cleanly cut masonry), keystone wedge at the apex, springer blocks on the lateral piers, pier band across the spring line, RSS dot + two broadcast arcs nested in the negative space. Designed at 128×128 with the standard 12px GNOME safe margin.
+
+- **Symbolic icon** at `data/icons/hicolor/symbolic/apps/org.virinvictus.Viaduct-symbolic.svg`. Single-color, redrawn at 16×16 grid for crisp small-size rendering — used by GTK in places that draw monochrome glyphs (sidebars, menu items, notification indicators).
+
+- **Banner logo** at `logo.svg` (workspace root). Horizontal 420×128 layout: app icon on the left, "viaduct" wordmark in a humanist sans, tagline "a Linux port of NetNewsWire" underneath. Used by the README header. Replaces the previous broken `<img src="logo.svg">` reference.
+
+- **Meson `install_data` blocks** for both icon SVGs into `$prefix/share/icons/hicolor/{scalable,symbolic}/apps/`. Confirmed end-to-end with `meson setup` + `--dry-run` install. Once the package is installed system-wide (or via Flatpak), the desktop file's `Icon=org.virinvictus.Viaduct` line resolves correctly and gnome-software / the dock / the shell launcher all show the real icon.
+
+- **AppStream metainfo screenshot reference fixed.** Was pointing at `https://raw.githubusercontent.com/virinvictus/Viaduct/main/screenshots/main.png` (lowercase org name, wrong path, never existed). Now points at `https://raw.githubusercontent.com/VirInvictus/Viaduct/main/docs/screenshots/main.png`. Path matches the real repo case + a real in-tree directory. Caption updated to describe what the screenshot will show ("Reading pane with the Sepia theme on GNOME 50").
+
+- **`docs/screenshots/.gitkeep`** with a comment block listing the recommended captures (main wide layout, dark mode, mobile collapse, smart feeds, preferences) and reminding contributors to keep `appdata.xml` and the README in sync.
+
+### README rewrite
+
+Reorganized end-to-end:
+
+- **Lead with the framing.** First sentence under the project name is now "A Linux port of NetNewsWire — the macOS RSS reader by Brent Simmons — in Rust and GTK4." Previously this was buried five sentences in.
+- **Why-this-exists section** now leads with the empirical comparison: the closest comparable Linux RSS reader idles at ~600 MB on the same OPML where Viaduct peaks under 300 MB. That's the headline number, and it should be readable in the first 30 seconds someone spends on the page.
+- **Features table** rewritten to be specific. Each row names what's actually in the codebase ("Single-writer DB worker", "All 8 NetNewsWire themes — bundled byte-for-byte via `include_str!`", "Locked-down WebKit pane — JS / WebGL / WebRTC / DevTools / LocalStorage / IndexedDB all OFF") rather than vague marketing-shaped bullets.
+- **Architecture section** updated for the v1.5.0 Cargo workspace split, the three-database layout, and the `viaduct-img://` URI scheme.
+- **New Acknowledgements section** at the bottom that explicitly thanks Brent and the NetNewsWire team, links to the upstream repo, and recommends NetNewsWire for users on macOS / iOS. The closing line: "Viaduct is what NetNewsWire would feel like if it ran on Linux."
+- **New "Inspired by NetNewsWire" badge** in the header strip alongside Rust / MIT / Ko-fi.
+
+### Test status
+
+73 unit + 1 integration tests still passing across the workspace. fmt + clippy clean. Meson dry-run install confirms icons land at the canonical hicolor paths.
+
 ## v1.5.2 — Audit pass: NNW resync, bug fixes, UI touch-ups
 
 End-of-cycle audit. Compared the latest `.netnewswire/` and `.newsflash/` trees against our state, fixed real bugs, polished the UX. Patchnotes lead with the user-visible items, then the porting fidelity work.

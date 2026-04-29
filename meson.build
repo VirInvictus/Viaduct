@@ -18,7 +18,7 @@
 project(
   'viaduct',
   'rust',
-  version: '1.5.2',
+  version: '1.5.3',
   meson_version: '>= 0.59.0',
   license: 'MIT',
 )
@@ -91,11 +91,19 @@ install_data(
   rename: application_id + '.metainfo.xml',
 )
 
-# Icon installation is conditional — the project doesn't yet ship icon assets
-# at the standard hicolor sizes. Once `data/icons/<size>/apps/<id>.png` lands,
-# add an `install_subdir('data/icons', install_dir: datadir / 'icons' / 'hicolor')`
-# block here. Until then the desktop file references an icon name that the
-# system will resolve to a fallback.
+# Application icon. Scalable SVG covers every desktop-environment size; the
+# symbolic SVG is for places GTK draws monochrome glyphs (sidebars, menus,
+# tray indicators). hicolor is the freedesktop fallback theme that every
+# real icon theme inherits from, so installing here makes the icon available
+# regardless of the user's active theme.
+install_data(
+  'data/icons/hicolor/scalable/apps/' + application_id + '.svg',
+  install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'apps',
+)
+install_data(
+  'data/icons/hicolor/symbolic/apps/' + application_id + '-symbolic.svg',
+  install_dir: datadir / 'icons' / 'hicolor' / 'symbolic' / 'apps',
+)
 
 summary({
   'prefix': prefix,
