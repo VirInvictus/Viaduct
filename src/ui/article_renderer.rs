@@ -49,6 +49,38 @@ use webkit6::prelude::*;
 /// Substitutions: `[[title]]`, `[[style]]`, `[[baseURL]]`, `[[body]]`.
 const PAGE_HTML: &str = include_str!("../../data/themes/page.html");
 
+/// CSS appended after every theme stylesheet so the WebKitWebView in the
+/// article pane behaves correctly inside the GtkOverlay container that
+/// hosts it. Each NNW `.nnwtheme` ships `html { overflow: hidden;
+/// ::-webkit-scrollbar { display: none; }` because NNW's `WKWebView` is
+/// wrapped in a parent `NSScrollView` that owns scrolling. We removed
+/// the equivalent `GtkScrolledWindow` in v1.1.0-pre1.6 (it was
+/// silently clipping long articles), so WebKit needs to scroll itself.
+/// This override re-enables overflow + restores the scrollbar so long
+/// articles are reachable. Last in the cascade, so theme stylesheets
+/// can't unset it accidentally.
+const VIADUCT_PANE_OVERRIDE_CSS: &str = "\
+html, body {\n\
+  overflow: auto !important;\n\
+  height: auto !important;\n\
+}\n\
+::-webkit-scrollbar {\n\
+  display: initial !important;\n\
+  width: 8px;\n\
+  height: 8px;\n\
+}\n\
+::-webkit-scrollbar-thumb {\n\
+  background-color: rgba(128, 128, 128, 0.45);\n\
+  border-radius: 4px;\n\
+}\n\
+::-webkit-scrollbar-thumb:hover {\n\
+  background-color: rgba(128, 128, 128, 0.7);\n\
+}\n\
+::-webkit-scrollbar-track {\n\
+  background: transparent;\n\
+}\n\
+";
+
 /// One bundled NetNewsWire theme. `template.html` is the inner article
 /// shell (header / byline / body / footer); `stylesheet.css` is its CSS.
 /// Both embed at compile time so production builds don't need disk access
@@ -859,11 +891,23 @@ pub fn render_themed(
     // 'Atkinson Hyperlegible' etc.) → byte-perfect NNW theme stylesheet
     // → optional dark-mode adaptation overlay (per-theme, hand-tuned
     // prefers-color-scheme block that activates when the system color
-    // scheme is dark). Themes that adapt to dark mode internally
-    // (Adwaita) or are dark-only (Tiqoe Dark) carry None.
+    // scheme is dark) → viaduct GTK-pane override (last so it wins).
+    // Themes that adapt to dark mode internally (Adwaita) or are
+    // dark-only (Tiqoe Dark) carry None for the overlay slot.
     let style = match theme.dark_overlay {
-        Some(overlay) => format!("{}\n{}\n{}", font_face_css(), theme.stylesheet, overlay),
-        None => format!("{}\n{}", font_face_css(), theme.stylesheet),
+        Some(overlay) => format!(
+            "{}\n{}\n{}\n{}",
+            font_face_css(),
+            theme.stylesheet,
+            overlay,
+            VIADUCT_PANE_OVERRIDE_CSS,
+        ),
+        None => format!(
+            "{}\n{}\n{}",
+            font_face_css(),
+            theme.stylesheet,
+            VIADUCT_PANE_OVERRIDE_CSS,
+        ),
     };
     outer_subs.insert("style", style);
     outer_subs.insert(
