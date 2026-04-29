@@ -183,6 +183,14 @@ listview > row:selected .viaduct-unread-badge {\n\
 .viaduct-row-read {\n\
     opacity: 0.55;\n\
 }\n\
+/* DIAGNOSTIC pre4.4 — bright red, bold, large to verify date_label\n\
+ * is even getting allocated space in smart-feed timelines. */\n\
+.viaduct-debug-date {\n\
+    color: red;\n\
+    font-weight: 800;\n\
+    font-size: 1.1em;\n\
+    background-color: yellow;\n\
+}\n\
 ";
     let provider = gtk::CssProvider::new();
     provider.load_from_string(css);
