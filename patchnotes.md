@@ -1,5 +1,45 @@
 # viaduct — Patch Notes
 
+## v1.8.0 — Sync on open, periodic refresh, plus the background daemon plan
+
+Two new preferences and a written architecture plan for the background-refresh feature.
+
+### Sync feeds when viaduct opens
+
+New `refresh-on-startup` boolean GSetting (default off). When enabled, viaduct fires a refresh cycle ~1500 ms after the OPML load completes — long enough for the sidebar / timeline to render so the user sees something before the spinner takes over the sync button.
+
+Surfaced in **Preferences → Sync** as a switch row.
+
+### Sync feeds periodically
+
+The existing `refresh-interval-minutes` GSetting (which had been declared back in v0.8.0 but never wired) now actually drives a `glib::timeout_add_seconds_local`. Schema range was tightened — lower bound moved from 10 to 0, with 0 acting as the "disabled" sentinel.
+
+Surfaced in **Preferences → Sync** as a combo row with discrete choices: Never / Every 15 minutes / Every 30 minutes / Every hour / Every 2 hours / Every 6 hours / Once a day. Snaps the closest preset on load if dconf-editor was used to set an off-preset value.
+
+Re-arms automatically when the user changes the dropdown — the previous timer is cancelled before the new one starts, so toggling the dropdown a few times can't pile up overlapping cycles. Brandon's request was specifically "every 30 minutes" — that maps to one of the presets, which is now the default cadence we'd recommend in the README.
+
+### Background daemon — the plan
+
+`docs/background-service-plan.md` (new) documents the design for refreshing while the main window is closed. The short version:
+
+- **Architecture chosen: window-hide pattern + xdg-desktop-portal Background.** Process keeps running after window close, periodic refresh continues to fire, dock-icon click re-summons the existing window. Portal permission requested via `ashpd::desktop::background::Background` (helper already exists in `viaduct-core/src/network/background.rs` since v0.5).
+
+- **Architectures rejected**: separate `viaduct-daemon` binary (over-engineered for a reader app, doubles SQLite-write contention surface) and `systemd --user` timers firing CLI invocations (cold-start cost dwarfs refresh time, doesn't compose with Flatpak).
+
+- **Work breakdown** (~3 focused days):
+  1. `gtk::ApplicationWindow::connect_close_request` → hide instead of quit, gated on a new `run-in-background` GSetting.
+  2. Switch row in Preferences → Sync to flip that setting; on flip-to-true, fire the portal request via `spawn_on_runtime`. On portal denial, flip back off + toast.
+  3. Flatpak manifest gains `--talk-name=org.freedesktop.portal.Background`.
+  4. D-Bus activation routes a launcher click while hidden to "present the existing window" instead of starting a second process.
+  5. (Optional, deferred) System-tray indicator. GNOME doesn't ship one stock; KDE / XFCE do. Wait for users to ask.
+  6. Idle-memory reduction when hidden: flush the `ImageCache` LRU, load `about:blank` on the article WebView, splice the timeline store empty. Budget: ≤ 100 MB resident while hidden. New `mem_check --background-cycle` mode to lock the budget in CI.
+
+The plan is concrete enough that the next release can pick it up directly. Tagged for a v1.9.0 or v2.0.0 banner depending on how big a marketing beat we want it to be.
+
+### Test status
+
+89 unit + 1 integration tests still passing. fmt + clippy clean.
+
 ## v1.7.1 — Right-click context menus
 
 The other half of v1.7.0's "obvious missing UI" round.

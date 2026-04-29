@@ -30,6 +30,13 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
     appearance.set_title("Appearance");
     page.add(&appearance);
 
+    let sync = adw::PreferencesGroup::new();
+    sync.set_title("Sync");
+    sync.set_description(Some(
+        "Automatic refresh while viaduct is running. A background daemon for refreshing while the window is closed is tracked separately.",
+    ));
+    page.add(&sync);
+
     let notifications = adw::PreferencesGroup::new();
     notifications.set_title("Notifications");
     page.add(&notifications);
@@ -41,6 +48,8 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
     if let Some(settings) = crate::preferences::settings() {
         appearance.add(&color_scheme_row(&settings));
         appearance.add(&article_theme_row(&settings));
+        sync.add(&refresh_on_startup_row(&settings));
+        sync.add(&refresh_interval_row(&settings));
         notifications.add(&notifications_row(&settings));
         playback.add(&video_playback_row(&settings));
     } else {
@@ -244,6 +253,91 @@ fn notifications_row(settings: &gio::Settings) -> adw::SwitchRow {
         .bind(keys::NOTIFICATIONS_ON_REFRESH, &row, "active")
         .build();
     row
+}
+
+fn refresh_on_startup_row(settings: &gio::Settings) -> adw::SwitchRow {
+    let row = adw::SwitchRow::builder()
+        .title("Sync feeds when viaduct opens")
+        .subtitle("Run a refresh cycle automatically when the main window is shown.")
+        .build();
+    settings
+        .bind(keys::REFRESH_ON_STARTUP, &row, "active")
+        .build();
+    row
+}
+
+/// Periodic-refresh interval picker. Discrete options map to integer
+/// minute values stored in `refresh-interval-minutes` (0 = disabled).
+const REFRESH_INTERVAL_OPTIONS: &[(i32, &str)] = &[
+    (0, "Never"),
+    (15, "Every 15 minutes"),
+    (30, "Every 30 minutes"),
+    (60, "Every hour"),
+    (120, "Every 2 hours"),
+    (360, "Every 6 hours"),
+    (1440, "Once a day"),
+];
+
+fn refresh_interval_row(settings: &gio::Settings) -> adw::ComboRow {
+    let row = adw::ComboRow::builder()
+        .title("Sync feeds periodically")
+        .subtitle("How often viaduct refreshes while running.")
+        .build();
+
+    let labels: Vec<&str> = REFRESH_INTERVAL_OPTIONS.iter().map(|(_, l)| *l).collect();
+    let model = gtk::StringList::new(&labels);
+    row.set_model(Some(&model));
+    row.set_selected(refresh_interval_to_index(
+        settings.int(keys::REFRESH_INTERVAL_MINUTES),
+    ));
+
+    let settings_for_row = settings.clone();
+    row.connect_selected_notify(move |row| {
+        let value = REFRESH_INTERVAL_OPTIONS
+            .get(row.selected() as usize)
+            .map(|(v, _)| *v)
+            .unwrap_or(0);
+        if settings_for_row.int(keys::REFRESH_INTERVAL_MINUTES) != value
+            && let Err(e) = settings_for_row.set_int(keys::REFRESH_INTERVAL_MINUTES, value)
+        {
+            tracing::warn!(?e, "failed to write refresh-interval-minutes");
+        }
+    });
+
+    settings.connect_changed(
+        Some(keys::REFRESH_INTERVAL_MINUTES),
+        glib::clone!(
+            #[weak]
+            row,
+            move |s, _| {
+                row.set_selected(refresh_interval_to_index(
+                    s.int(keys::REFRESH_INTERVAL_MINUTES),
+                ));
+            }
+        ),
+    );
+
+    row
+}
+
+/// Pick the closest discrete dropdown index for an arbitrary minute
+/// value. Values that don't exactly match a preset (e.g. someone set
+/// it to `45` via `dconf-editor`) snap to the nearest representable
+/// option so the dropdown still shows something coherent.
+fn refresh_interval_to_index(minutes: i32) -> u32 {
+    if let Some(idx) = REFRESH_INTERVAL_OPTIONS
+        .iter()
+        .position(|(v, _)| *v == minutes)
+    {
+        return idx as u32;
+    }
+    // No exact match — find the option whose value is closest.
+    REFRESH_INTERVAL_OPTIONS
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, (v, _))| (v - minutes).abs())
+        .map(|(i, _)| i as u32)
+        .unwrap_or(0)
 }
 
 fn nick_to_index(nick: &str) -> u32 {

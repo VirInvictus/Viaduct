@@ -44,13 +44,26 @@
       </description>
     </key>
 
-    <key name="refresh-interval-minutes" type="i">
-      <default>60</default>
-      <range min="10" max="1440"/>
-      <summary>Background refresh interval in minutes</summary>
+    <key name="refresh-on-startup" type="b">
+      <default>false</default>
+      <summary>Sync feeds when viaduct opens</summary>
       <description>
-        How often viaduct fetches new articles in the background. Wired in a
-        future phase that adds the xdg-desktop-portal Background daemon.
+        When enabled, viaduct kicks off a refresh cycle automatically the
+        first time the main window is shown after launch. Combine with
+        the periodic-refresh interval below to keep articles fresh without
+        ever pressing the refresh button manually.
+      </description>
+    </key>
+
+    <key name="refresh-interval-minutes" type="i">
+      <default>0</default>
+      <range min="0" max="1440"/>
+      <summary>Periodic refresh interval in minutes (0 = disabled)</summary>
+      <description>
+        How often viaduct kicks off a refresh cycle while the application
+        is running. 0 disables periodic refresh. Wired through a glib
+        timeout in the main window; a separate background daemon for
+        when the window is closed is tracked under Phase 17.
       </description>
     </key>
 

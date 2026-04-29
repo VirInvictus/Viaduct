@@ -19,6 +19,8 @@ pub const SCHEMA_ID: &str = "org.virinvictus.Viaduct";
 pub mod keys {
     pub const COLOR_SCHEME: &str = "color-scheme";
     pub const NOTIFICATIONS_ON_REFRESH: &str = "notifications-on-refresh";
+    pub const REFRESH_ON_STARTUP: &str = "refresh-on-startup";
+    pub const REFRESH_INTERVAL_MINUTES: &str = "refresh-interval-minutes";
     pub const RETENTION_DAYS: &str = "retention-days";
     pub const FONT_MONOSPACE: &str = "font-monospace";
     pub const FONT_SERIF: &str = "font-serif";
@@ -155,6 +157,20 @@ fn update_style_manager(settings: &gio::Settings, manager: &adw::StyleManager) {
 /// effect on the next refresh without restart.
 pub fn notifications_enabled(settings: &gio::Settings) -> bool {
     settings.boolean(keys::NOTIFICATIONS_ON_REFRESH)
+}
+
+/// Whether the app should auto-fire a refresh cycle the first time the
+/// main window is shown after launch. Read fresh on each call.
+pub fn refresh_on_startup(settings: &gio::Settings) -> bool {
+    settings.boolean(keys::REFRESH_ON_STARTUP)
+}
+
+/// Periodic refresh interval in minutes. `0` means "disabled" — the
+/// schema range is `[0, 1440]`. Read fresh on each call so the
+/// `wire_periodic_refresh` watcher can re-arm the timer when the user
+/// changes the dropdown.
+pub fn refresh_interval_minutes(settings: &gio::Settings) -> i32 {
+    settings.int(keys::REFRESH_INTERVAL_MINUTES).clamp(0, 1440)
 }
 
 /// Article retention in days, used by the per-update prune in

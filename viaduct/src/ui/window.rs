@@ -106,6 +106,15 @@ mod imp {
         pub sidebar_feed_popover: OnceCell<gtk::PopoverMenu>,
         pub sidebar_folder_popover: OnceCell<gtk::PopoverMenu>,
         pub timeline_popover: OnceCell<gtk::PopoverMenu>,
+        /// Periodic-refresh `glib::timeout` source ID (v1.8.0). Replaced
+        /// when the user changes `refresh-interval-minutes` in
+        /// preferences — the previous timeout is removed first so we
+        /// don't end up with overlapping cycles after a few flips.
+        pub periodic_refresh_timeout: RefCell<Option<glib::SourceId>>,
+        /// Whether `refresh_on_startup_if_enabled` has run. Belt-and-
+        /// braces guard against the GTK Application activating twice
+        /// (single-instance handoff or similar) double-refreshing.
+        pub did_startup_refresh: std::cell::Cell<bool>,
     }
 
     /// Captured state for whatever article is currently on-screen.
@@ -603,6 +612,85 @@ impl ViaductWindow {
         self.wire_search(timeline_store);
         self.wire_play_video_button();
         self.wire_context_menus();
+        self.wire_auto_refresh();
+    }
+
+    /// Wire the v1.8.0 sync-on-open + periodic-refresh preferences.
+    ///
+    /// `refresh-on-startup` (default false): when true, fires one
+    /// `act_refresh()` shortly after the OPML load completes. The
+    /// 1500 ms delay gives the sidebar / timeline a chance to render
+    /// first so the user isn't staring at an empty UI while the
+    /// network round-trips.
+    ///
+    /// `refresh-interval-minutes` (default 0 = disabled, range 0..=1440):
+    /// when > 0, installs a `glib::timeout_add_seconds_local` that calls
+    /// `act_refresh()` every `interval * 60` seconds. Re-arms when the
+    /// user changes the interval in preferences (cancels the old timer
+    /// first so we don't pile up handlers).
+    fn wire_auto_refresh(&self) {
+        let Some(settings) = crate::preferences::settings() else {
+            return;
+        };
+
+        // --- Startup refresh ---
+        if crate::preferences::refresh_on_startup(&settings) {
+            let weak = self.downgrade();
+            // 1500 ms gives the OPML load + sidebar binding time to
+            // finish so the user sees something before the spinner
+            // takes over the sync button.
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+                if let Some(window) = weak.upgrade() {
+                    if window.imp().did_startup_refresh.get() {
+                        return;
+                    }
+                    window.imp().did_startup_refresh.set(true);
+                    window.act_refresh();
+                }
+            });
+        }
+
+        // --- Periodic refresh ---
+        self.arm_periodic_refresh(&settings);
+        let weak = self.downgrade();
+        settings.connect_changed(
+            Some(crate::preferences::keys::REFRESH_INTERVAL_MINUTES),
+            move |s, _| {
+                if let Some(window) = weak.upgrade() {
+                    window.arm_periodic_refresh(s);
+                }
+            },
+        );
+    }
+
+    /// Cancel any active periodic-refresh timer and start a new one
+    /// based on the current `refresh-interval-minutes` setting. A value
+    /// of 0 leaves the timer cancelled.
+    fn arm_periodic_refresh(&self, settings: &gio::Settings) {
+        // Always cancel the previous timer first; otherwise toggling
+        // the dropdown a few times piles up handlers and we end up
+        // refreshing more often than the user asked for.
+        if let Some(prev) = self.imp().periodic_refresh_timeout.borrow_mut().take() {
+            prev.remove();
+        }
+        let minutes = crate::preferences::refresh_interval_minutes(settings);
+        if minutes <= 0 {
+            return;
+        }
+        let secs = (minutes as u32).saturating_mul(60);
+        let weak = self.downgrade();
+        let source_id = glib::timeout_add_seconds_local(secs, move || {
+            if let Some(window) = weak.upgrade() {
+                window.act_refresh();
+                glib::ControlFlow::Continue
+            } else {
+                glib::ControlFlow::Break
+            }
+        });
+        self.imp()
+            .periodic_refresh_timeout
+            .borrow_mut()
+            .replace(source_id);
     }
 
     /// Build the three right-click popover menus (timeline rows,
