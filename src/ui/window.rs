@@ -186,6 +186,9 @@ impl ViaductWindow {
         // Lock down the article-pane WebView before any HTML can be loaded.
         // Idempotent; settings stay applied for the window's lifetime.
         article_renderer::apply_locked_down_settings(&imp.article_web_view.get());
+        // Link clicks must route to the system browser instead of
+        // navigating the WebView away from our rendered article.
+        article_renderer::install_link_interceptor(&imp.article_web_view.get());
 
         // Sidebar: delegate → controller → data source → list view.
         let delegate = Rc::new(RefCell::new(SidebarTreeControllerDelegate::new()));

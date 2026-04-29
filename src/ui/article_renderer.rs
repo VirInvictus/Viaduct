@@ -271,6 +271,66 @@ pub fn escape_html(s: &str) -> String {
     out
 }
 
+/// Wires the navigation-policy interceptor: every link click in the
+/// article body routes to `xdg-open` instead of navigating the WebView
+/// away from our rendered HTML. Without this hook the user can click the
+/// feed link in the article header, lose the rendered article, and have
+/// no way to return — there's no back/forward chrome on the pane.
+///
+/// Blocks `LinkClicked` and `FormSubmitted` navigations; allows `Other`
+/// (the synthetic about:blank that backs `load_html`) and `Reload` /
+/// `BackForward` (no-ops in our case since we never push history).
+/// `NewWindowAction` and `NavigationAction` are handled the same way:
+/// extract URL → `gio::AppInfo::launch_default_for_uri`.
+///
+/// Idempotent; safe to call once during window construction.
+pub fn install_link_interceptor(view: &webkit6::WebView) {
+    use webkit6::{NavigationType, PolicyDecisionType};
+
+    view.connect_decide_policy(|_view, decision, decision_type| {
+        // We only care about navigations and new-window requests. Response
+        // policies (MIME-type display) hit our CSP; let those pass through.
+        if !matches!(
+            decision_type,
+            PolicyDecisionType::NavigationAction | PolicyDecisionType::NewWindowAction
+        ) {
+            return false;
+        }
+        let Some(nav) = decision.downcast_ref::<webkit6::NavigationPolicyDecision>() else {
+            return false;
+        };
+        let Some(mut action) = nav.navigation_action() else {
+            return false;
+        };
+        let nav_type = action.navigation_type();
+
+        // Allow the synthetic about:blank load that backs load_html().
+        if matches!(
+            nav_type,
+            NavigationType::Other | NavigationType::Reload | NavigationType::BackForward
+        ) {
+            return false;
+        }
+
+        // Link clicks, form submits, NewWindow → system browser.
+        if let Some(req) = action.request()
+            && let Some(uri) = req.uri()
+        {
+            let uri_str = uri.to_string();
+            // about:blank is what about:blank looks like to us — never
+            // a real link, never worth shelling out for.
+            if !uri_str.starts_with("about:") {
+                let _ = gtk::gio::AppInfo::launch_default_for_uri(
+                    &uri_str,
+                    gtk::gio::AppLaunchContext::NONE,
+                );
+            }
+        }
+        webkit6::prelude::PolicyDecisionExt::ignore(decision);
+        true
+    });
+}
+
 /// Applies the locked-down `WebKitSettings` profile to the supplied view.
 /// Idempotent; safe to call repeatedly. Should be called once during window
 /// construction before the first `render`.
