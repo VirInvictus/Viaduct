@@ -5,18 +5,24 @@
 //! Phase 7 memory checkpoint harness.
 //!
 //! Runs `LocalAccount::update_feed` through the real single-writer worker
-//! against a synthetic 500-feed × 10-article corpus, then reads `VmHWM`
-//! (peak resident set, kB) from `/proc/self/status` and reports pass/fail
-//! against the roadmap's 500 MB peak / 100–300 MB idle targets.
+//! against a synthetic 500-feed × 10-article corpus, then warms the favicon
+//! and image cache against an in-process HTTP fixture (500 favicons + 50
+//! images), then reads `VmHWM` (peak resident set, kB) from
+//! `/proc/self/status` and reports pass/fail against the roadmap's 500 MB
+//! peak / 100–300 MB idle targets.
 //!
-//! This exercises the DB + parser + serde path end-to-end. It does **not**
-//! warm the favicon / image cache — that would require a live network or a
-//! synthetic stub, both out of scope for port-first. The idle target is
-//! therefore a lower bound; real-world idle after image-cache warm will be
-//! higher but must still land inside 100–300 MB.
+//! Two checkpoints are reported:
+//!
+//! - **post-DB peak** — exercises DB + parser + serde end-to-end.
+//! - **post-image-warmup peak** — adds 500 favicons (1 KB) + 50 images
+//!   (50 KB) routed through the real `ImageCache`, hitting LRU eviction
+//!   (cap is 250/kind so 500 favicons exercise the eviction path).
 //!
 //! Usage:
-//!   cargo run --release --bin mem_check
+//!
+//! ```sh
+//! cargo run --release --bin mem_check
+//! ```
 //!
 //! Run in release mode — debug builds carry enough instrumentation that the
 //! reported peak will be misleading.
@@ -24,20 +30,39 @@
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use viaduct::database::accounts::Account;
 use viaduct::database::{self};
 use viaduct::models::{Author, ParsedItem};
+use viaduct::network::cache::ImageCache;
 
 const FEED_COUNT: usize = 500;
 const ARTICLES_PER_FEED: usize = 10;
+
+const FAVICONS_TO_WARM: usize = 500;
+const IMAGES_TO_WARM: usize = 50;
+const SYNTH_FAVICON_BYTES: usize = 1024;
+const SYNTH_IMAGE_BYTES: usize = 50 * 1024;
 
 const PEAK_BUDGET_MB: u64 = 500;
 const IDLE_TARGET_LOW_MB: u64 = 100;
 const IDLE_TARGET_HIGH_MB: u64 = 300;
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The library's ImageCache routes through `viaduct::spawn_on_runtime`,
+    // which expects the global runtime to be installed. Match `main.rs` and
+    // build the runtime explicitly so the cache can use it.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let handle = rt.handle().clone();
+    viaduct::init_runtime(rt);
+    handle.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Route the DBs into a tempdir instead of touching the user's XDG state.
     // Best-effort cleanup on exit; not critical if it lingers on crash.
     let tmp = make_tempdir()?;
@@ -76,41 +101,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
     }
-    let elapsed = start.elapsed();
+    let db_elapsed = start.elapsed();
 
-    let peak = read_vm_hwm_mb().unwrap_or(0);
-    let rss = read_vm_rss_mb().unwrap_or(0);
+    let post_db_peak = read_vm_hwm_mb().unwrap_or(0);
+    let post_db_rss = read_vm_rss_mb().unwrap_or(0);
+
+    println!("-- post-DB checkpoint --");
+    println!("insert time: {:?}", db_elapsed);
+    println!("peak RSS (VmHWM): {} MB", post_db_peak);
+    println!("current RSS (VmRSS): {} MB", post_db_rss);
+
+    // ---------- Image cache warmup ----------
+    let warm_start = std::time::Instant::now();
+    let port = spawn_synth_image_server().await?;
+    let cache = ImageCache::new(
+        viaduct::paths::favicon_cache_dir()?,
+        viaduct::paths::image_cache_dir()?,
+    );
+    let mut handles = Vec::with_capacity(FAVICONS_TO_WARM + IMAGES_TO_WARM);
+    for i in 0..FAVICONS_TO_WARM {
+        let cache = cache.clone();
+        handles.push(tokio::spawn(async move {
+            cache
+                .favicon(&format!("http://127.0.0.1:{}/fav-{}", port, i))
+                .await
+        }));
+    }
+    for i in 0..IMAGES_TO_WARM {
+        let cache = cache.clone();
+        handles.push(tokio::spawn(async move {
+            cache
+                .image(&format!("http://127.0.0.1:{}/img-{}", port, i))
+                .await
+        }));
+    }
+    let mut hits = 0usize;
+    for h in handles {
+        if let Ok(Some(_)) = h.await {
+            hits += 1;
+        }
+    }
+    let warm_elapsed = warm_start.elapsed();
+
+    let post_warm_peak = read_vm_hwm_mb().unwrap_or(0);
+    let post_warm_rss = read_vm_rss_mb().unwrap_or(0);
+
+    println!("-- post-image-warmup checkpoint --");
+    println!(
+        "warmup time: {:?} ({} of {} hits)",
+        warm_elapsed,
+        hits,
+        FAVICONS_TO_WARM + IMAGES_TO_WARM,
+    );
+    println!("peak RSS (VmHWM): {} MB", post_warm_peak);
+    println!("current RSS (VmRSS): {} MB", post_warm_rss);
 
     println!("== results ==");
-    println!("insert time: {:?}", elapsed);
-    println!("peak RSS (VmHWM): {} MB", peak);
-    println!("current RSS (VmRSS): {} MB", rss);
-
     let mut failed = false;
-    if peak > PEAK_BUDGET_MB {
+    if post_warm_peak > PEAK_BUDGET_MB {
         eprintln!(
             "FAIL: peak RSS {} MB exceeds hard budget of {} MB",
-            peak, PEAK_BUDGET_MB
+            post_warm_peak, PEAK_BUDGET_MB
         );
         failed = true;
     } else {
-        println!("PASS: peak RSS under {} MB budget", PEAK_BUDGET_MB);
-    }
-    if rss < IDLE_TARGET_LOW_MB {
         println!(
-            "NOTE: current RSS {} MB is below the {} MB lower idle target — expected because the image/favicon cache hasn't been warmed.",
-            rss, IDLE_TARGET_LOW_MB
+            "PASS: peak RSS {} MB under {} MB budget",
+            post_warm_peak, PEAK_BUDGET_MB
         );
-    } else if rss > IDLE_TARGET_HIGH_MB {
+    }
+    if post_warm_rss < IDLE_TARGET_LOW_MB {
+        println!(
+            "NOTE: current RSS {} MB is below the {} MB lower idle target — synthetic corpus is smaller than a real-world subscription list.",
+            post_warm_rss, IDLE_TARGET_LOW_MB
+        );
+    } else if post_warm_rss > IDLE_TARGET_HIGH_MB {
         eprintln!(
             "FAIL: current RSS {} MB exceeds idle target of {} MB",
-            rss, IDLE_TARGET_HIGH_MB
+            post_warm_rss, IDLE_TARGET_HIGH_MB
         );
         failed = true;
     } else {
         println!(
             "PASS: current RSS {} MB within idle band ({}–{} MB)",
-            rss, IDLE_TARGET_LOW_MB, IDLE_TARGET_HIGH_MB
+            post_warm_rss, IDLE_TARGET_LOW_MB, IDLE_TARGET_HIGH_MB
+        );
+    }
+    if hits < FAVICONS_TO_WARM + IMAGES_TO_WARM {
+        eprintln!(
+            "WARN: {} of {} cache fetches missed (synth server lossy?)",
+            (FAVICONS_TO_WARM + IMAGES_TO_WARM) - hits,
+            FAVICONS_TO_WARM + IMAGES_TO_WARM,
         );
     }
 
@@ -121,6 +202,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Spawns a tiny in-process HTTP/1.1 server on an ephemeral port serving
+/// canned PNG-shaped bytes per path-prefix (`/fav-*` → 1 KB, `/img-*` → 50 KB).
+/// Returns the bound port. Survives until the process exits.
+async fn spawn_synth_image_server() -> std::io::Result<u16> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = match listener.accept().await {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            tokio::spawn(async move {
+                let mut req = [0u8; 4096];
+                let n = sock.read(&mut req).await.unwrap_or(0);
+                let is_favicon = n > 8 && req[..n.min(64)].windows(8).any(|w| w == b"GET /fav");
+                let body = if is_favicon {
+                    vec![0xABu8; SYNTH_FAVICON_BYTES]
+                } else {
+                    vec![0xCDu8; SYNTH_IMAGE_BYTES]
+                };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(header.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    Ok(port)
 }
 
 fn make_tempdir() -> std::io::Result<PathBuf> {

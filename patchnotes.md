@@ -1,5 +1,15 @@
 # viaduct — Patch Notes
 
+## v1.0.5 — Image-Cache Memory Checkpoint (Phase 7 close-out)
+
+Closes the last unchecked Phase 7 item. `mem_check` now exercises the favicon + image cache end-to-end so the 500 MB peak budget covers the full warmed-cache scenario, not just the DB insert path.
+
+- **In-process HTTP fixture** in `src/bin/mem_check.rs`: `tokio::net::TcpListener` on `127.0.0.1:0` (ephemeral port) handling minimal HTTP/1.1, path-prefix routing `/fav-*` → 1 KB body and `/img-*` → 50 KB body. Zero new deps.
+- **Warmup**: 500 favicons + 50 images fetched concurrently through the real `ImageCache`. 500 exceeds the 250-entry per-kind LRU cap, so the eviction path is exercised. Total bytes through cache: ~3 MB (500 KB favicons + 2.5 MB images).
+- **Two reported checkpoints**: post-DB peak (DB + parser + serde) and post-image-warmup peak (full idle scenario). Current release-build numbers: 36 MB → 59 MB peak. Comfortably under the 500 MB ceiling.
+- **Runtime fix**: previous `mem_check` used `#[tokio::main]` which builds a local-scope runtime that isn't visible to the library's `viaduct::spawn_on_runtime`. Refactored to build the runtime explicitly, install via `viaduct::init_runtime`, and `block_on` `async_main`. Without this, every `ImageCache::favicon` / `image` call panics with "tokio runtime not initialized".
+- **Doc rewrite** in `src/bin/mem_check.rs` module docs covers both checkpoints and the synthetic fixture. Clippy pass on rust 1.95+ also required reformatting the doc list as standard Markdown bullets.
+
 ## v1.0.4 — Atom `type="xhtml"` Raw Inner HTML Capture
 
 Closes the last unchecked item under Phase 11 "Parser fidelity follow-ups". Atom feeds that publish their content as inline XHTML (per RFC 4287, wrapped in a single `<div xmlns="http://www.w3.org/1999/xhtml">…</div>`) now render with structure intact instead of collapsing to bare text nodes.
