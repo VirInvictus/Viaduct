@@ -272,5 +272,18 @@ Licensed under the MIT License. See LICENSE in the project root for details.
         </property>
       </object>
     </property>
+    <child>
+      <object class="AdwBreakpoint">
+        <condition>max-width: 900sp</condition>
+        <setter object="inner_split_view" property="collapsed">True</setter>
+      </object>
+    </child>
+    <child>
+      <object class="AdwBreakpoint">
+        <condition>max-width: 600sp</condition>
+        <setter object="inner_split_view" property="collapsed">True</setter>
+        <setter object="outer_split_view" property="collapsed">True</setter>
+      </object>
+    </child>
   </template>
 </interface>

@@ -45,6 +45,11 @@ Visual unification + reading-pane upgrades. Built up across pre-release commits;
   - **pre4.7**: capped `title_label` natural width via `set_max_width_chars(32)`. Helped some, but the preview and feed-name labels still had unbounded natural widths.
   - **pre4.8 (real fix)**: capped natural width on every label in the row — title 32 chars, feed-name 32 chars + ellipsize, preview 48 chars. The row's total natural width is now bounded at ~140 character widths regardless of source feed. Per-feed and smart-feed views finally allocate the same timeline pane.
 - **Refresh-in-progress spinner (pre5)**: the refresh button's icon swaps to a `GtkSpinner` while feeds are being fetched, swaps back to `view-refresh-symbolic` when the cycle completes. Implementation: `sync_btn`'s child became a `GtkStack` with two pages (`icon` / `spinner`), `set_refresh_in_progress(bool)` on the window flips the visible-child-name and starts/stops the spinner. Wired into both `act_refresh` and the post-import `refresh_specific_feeds` so any user-initiated refresh shows progress.
+- **Article-pane scroll restored (pre5.1)**: pre1.6 removed the `GtkScrolledWindow` wrapper around the `WebKitWebView` to fix a different bug, but the NNW themes set `html { overflow: hidden }` so without a parent scroller WebKit had no way to scroll either — long articles got clipped silently. Added a `VIADUCT_PANE_OVERRIDE_CSS` block appended last in the style cascade: `html, body { overflow: auto !important; height: auto !important }` plus a styled scrollbar (8 px wide, subtle gray thumb, transparent track). NNW byte-perfect stylesheets stay UNCHANGED — the override piggybacks on top. Mouse wheel + Space + Shift+Space all work via WebKit's native handlers.
+- **Adaptive layout via `AdwBreakpoint` (pre6)**: two breakpoints on the `AdwApplicationWindow` so narrow windows reflow gracefully:
+  - `max-width: 900sp` collapses the inner split view (Timeline + Article become a navigation stack — pick a feed, see the timeline; pick an article, see the article; back-button to return).
+  - `max-width: 600sp` collapses both split views (full mobile-style three-page navigation: Feeds → Timeline → Article).
+  - At wide widths everything stays as the classic three-pane layout. Default window remains 1200×800.
 
 ## v1.1.0 — Phase 6: Neutered WebKit Article Pane
 
