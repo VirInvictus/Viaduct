@@ -27,11 +27,13 @@
 //! main thread, where a `glib::spawn_future_local` task awaits and
 //! dispatches.
 
+use gtk::gdk_pixbuf::PixbufLoader;
 use gtk::glib;
 use gtk::prelude::*;
 use ksni::menu::StandardItem;
 use ksni::{MenuItem, Tray, TrayMethods};
 use std::cell::RefCell;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy)]
 enum TrayAction {
@@ -41,6 +43,11 @@ enum TrayAction {
 
 struct ViaductTray {
     tx: tokio::sync::mpsc::UnboundedSender<TrayAction>,
+    /// Pre-decoded ARGB32 pixmaps, one entry per resolution. SNI hosts
+    /// pick the closest size to their tray slot. Empty when decoding
+    /// failed (we still install `icon_name` so themable hosts have a
+    /// fallback). v2.6.6.
+    icons: Vec<ksni::Icon>,
 }
 
 impl Tray for ViaductTray {
@@ -53,12 +60,18 @@ impl Tray for ViaductTray {
     }
 
     fn icon_name(&self) -> String {
-        // Resolves against the system icon theme. After Flatpak / Meson
-        // install the desktop entry's `Icon=org.virinvictus.Viaduct`
-        // resolves; in dev builds without install the SNI host falls
-        // back to a default placeholder. Acceptable trade — tray work
-        // is primarily for shipped installs.
+        // Resolves against the system icon theme. Works for installed
+        // builds (Flatpak / `meson install`) where the SVG at
+        // `data/icons/hicolor/scalable/apps/` lands in the runtime's
+        // theme dir. Pre-v2.6.6 dev builds fell back to the SNI host's
+        // placeholder here; v2.6.6 also implements `icon_pixmap` below
+        // with bytes embedded at compile time, so the tray icon
+        // renders correctly regardless of install state.
         "org.virinvictus.Viaduct".into()
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        self.icons.clone()
     }
 
     fn category(&self) -> ksni::Category {
@@ -178,7 +191,8 @@ fn start_service(tx: tokio::sync::mpsc::UnboundedSender<TrayAction>) {
             // Already running — flip-on-while-on is a no-op.
             return;
         }
-        let tray = ViaductTray { tx };
+        let icons = cached_icons();
+        let tray = ViaductTray { tx, icons };
         // ksni's `spawn` consumes the tray and yields a Handle on the
         // current Tokio runtime (the global one we install in `main`).
         // Has to run from a Tokio context; the wire() call site is on
@@ -193,6 +207,82 @@ fn start_service(tx: tokio::sync::mpsc::UnboundedSender<TrayAction>) {
         };
         cell.borrow_mut().replace(handle);
     });
+}
+
+/// v2.6.6: app icon bytes embedded at compile time. Two resolutions
+/// give SNI hosts a choice — KDE / XFCE trays usually pick the smaller,
+/// HiDPI extensions tend to want the larger. Stored at `docs/` rather
+/// than `data/` because the meson install for shipped builds relies on
+/// the SVG (themable, scalable) — the PNGs are exclusively the dev /
+/// fallback path used by `icon_pixmap`.
+const ICON_PNG_256: &[u8] = include_bytes!("../../docs/icon-256.png");
+const ICON_PNG_512: &[u8] = include_bytes!("../../docs/icon-512.png");
+
+/// Decode the embedded PNGs once per process and cache the resulting
+/// `ksni::Icon` vec. `gtk::gdk_pixbuf::PixbufLoader` is `!Send`, so the
+/// decode has to happen on the GTK main thread — `wire()` calls
+/// `start_service()` from there, so we're safe. The returned `Icon`
+/// struct is plain data (Vec<u8> + i32s) and crosses freely to the
+/// tokio thread that ksni runs on.
+///
+/// Returns an empty Vec on decode failure; the SNI host falls back to
+/// `icon_name` lookup in that case (works for installed builds).
+fn cached_icons() -> Vec<ksni::Icon> {
+    static ICONS: OnceLock<Vec<ksni::Icon>> = OnceLock::new();
+    ICONS
+        .get_or_init(|| {
+            let mut out = Vec::with_capacity(2);
+            for (label, bytes) in [("icon-256", ICON_PNG_256), ("icon-512", ICON_PNG_512)] {
+                match decode_icon(bytes) {
+                    Ok(icon) => out.push(icon),
+                    Err(e) => {
+                        tracing::warn!(label, error = %e, "tray icon decode failed");
+                    }
+                }
+            }
+            out
+        })
+        .clone()
+}
+
+/// PNG → ARGB32. PixbufLoader gives RGBA bytes plus dimensions; the
+/// SNI spec wants ARGB in network byte order (big-endian), which on
+/// little-endian hosts means swapping each pixel to BGRA in memory —
+/// equivalent to `rotate_right(1)` on the four-byte pixel.
+fn decode_icon(png_bytes: &[u8]) -> Result<ksni::Icon, String> {
+    let loader = PixbufLoader::with_type("png").map_err(|e| e.to_string())?;
+    loader.write(png_bytes).map_err(|e| e.to_string())?;
+    loader.close().map_err(|e| e.to_string())?;
+    let pixbuf = loader.pixbuf().ok_or("PixbufLoader returned no pixbuf")?;
+    let width = pixbuf.width();
+    let height = pixbuf.height();
+    if !pixbuf.has_alpha() {
+        // The bundled PNGs are RGBA. If a future asset drops alpha
+        // we'd need a different conversion path — bail loudly.
+        return Err("pixbuf is missing alpha channel".into());
+    }
+    if pixbuf.bits_per_sample() != 8 {
+        return Err("pixbuf bits_per_sample is not 8".into());
+    }
+    // SAFETY: read_pixel_bytes returns a glib::Bytes owning the pixel
+    // buffer; we copy out of it before the Pixbuf drops.
+    let rgba = pixbuf.read_pixel_bytes();
+    let mut data = rgba.to_vec();
+    if data.len() % 4 != 0 {
+        return Err(format!(
+            "pixel buffer length {} not multiple of 4",
+            data.len()
+        ));
+    }
+    // RGBA → ARGB (network byte order). Per ksni docs + the SNI spec.
+    for px in data.chunks_exact_mut(4) {
+        px.rotate_right(1);
+    }
+    Ok(ksni::Icon {
+        width,
+        height,
+        data,
+    })
 }
 
 fn stop_service() {

@@ -1,5 +1,25 @@
 # viaduct — Patch Notes
 
+## v2.6.6 — Tray icon renders without an installed icon theme
+
+User report: "It runs in the background, but its system tray icon doesn't work." Root cause: `tray.rs` only implemented `Tray::icon_name`, returning the freedesktop name `"org.virinvictus.Viaduct"`. SNI hosts resolve that against the system icon theme — which works for shipped builds (`meson install` drops the SVG into `$datadir/icons/hicolor/scalable/apps/`, Flatpak puts it in the runtime's theme), but **not for `cargo run` dev builds**, which never install anything. The host fell back to a placeholder, or in some KDE / extension cases nothing at all.
+
+### Fix
+
+`Tray::icon_pixmap` now returns a `Vec<ksni::Icon>` populated from two PNGs embedded at compile time (`docs/icon-256.png` + `docs/icon-512.png`, total ~42 KB on disk). Decode happens once per process via `gtk::gdk_pixbuf::PixbufLoader` (already a transitive of gtk4 — no new dep), cached in a `OnceLock<Vec<Icon>>`. RGBA is converted to ARGB32 in network byte order per the SNI spec via `pixel.rotate_right(1)`. Two resolutions give the host a choice — KDE / XFCE trays usually pick 256, HiDPI extensions tend to want 512.
+
+`icon_name` stays in place. Per the SNI spec, hosts that prefer themable icons (KDE on a system with the SVG installed) will use that; everyone else falls back to the embedded pixmap. This means installed builds remain themable while dev builds + barebones environments get a working tray icon for free.
+
+### Implementation notes
+
+- `gtk::gdk_pixbuf::PixbufLoader` is `!Send`, so the decode runs on the GTK main thread (where `wire()` is called from `main.rs build_ui`). The resulting `ksni::Icon` is plain data (`Vec<u8>` + two `i32`s) and crosses freely to the tokio thread that ksni's worker runs on.
+- Decode failures log and return an empty Vec; the SNI host then falls back to `icon_name` (still works for installed builds).
+- PNGs live in `docs/` rather than `data/icons/`. The latter is reserved for the SVG that meson installs into the system icon theme; PNGs are exclusively the embedded fallback path.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass (the change is GTK-side and exercised by interactive run, not unit tests). fmt + clippy clean.
+
 ## v2.6.5 — Ghost-data sweep + missing-file failsafes
 
 A spring-cleaning release. Audited the SQLite stores and disk caches for "ghost information" we were carrying across sessions, audited the file-missing failsafes for the inevitable user `rm -rf ~/.local/share/viaduct/foo`, and surfaced one user-visible failure mode that was previously silent.
