@@ -139,6 +139,14 @@ pub fn setup_timeline_list_view(
         let date_label = gtk::Label::new(None);
         date_label.set_halign(gtk::Align::End);
         date_label.add_css_class("dim-label");
+        // Reserve fixed minimum width so the date never gets squeezed
+        // off-screen by long titles competing for space in the same
+        // hbox. 9 chars covers our widest relative-date string
+        // ("Yesterday") plus a little padding. Smart-feed timelines
+        // surfaced this — long aggregated titles from many feeds were
+        // ellipsizing past the date label and pushing it out of view.
+        date_label.set_width_chars(9);
+        date_label.set_xalign(1.0);
 
         top_hbox.append(&title_label);
         top_hbox.append(&media_icon);
@@ -232,14 +240,6 @@ pub fn setup_timeline_list_view(
                 .date_published
                 .map(format_relative_date)
                 .unwrap_or_default();
-            if crate::is_debug_mode() {
-                tracing::trace!(
-                    article = %article.title.as_deref().unwrap_or(""),
-                    has_date = article.date_published.is_some(),
-                    date_str = %date_str,
-                    "timeline: bind date"
-                );
-            }
             date_label.set_text(&date_str);
 
             // Resolve display name through the feed-name map. Falls back to
