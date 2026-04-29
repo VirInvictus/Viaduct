@@ -76,6 +76,13 @@ pub struct Theme {
     /// Adwaita theme uses this so GNOME's system accent surfaces
     /// unchanged through the chrome.
     pub accent_hex: Option<&'static str>,
+    /// Hand-tuned `@media (prefers-color-scheme: dark)` overlay that
+    /// sits AFTER `stylesheet` in the cascade — the original NNW
+    /// stylesheet stays byte-perfect, our dark adaptation adds on top.
+    /// `None` for themes that handle dark mode internally (Adwaita
+    /// has prefers-color-scheme baked in) or are already dark-only
+    /// (Tiqoe Dark).
+    pub dark_overlay: Option<&'static str>,
 }
 
 /// All eight NNW themes ported in v1.1.0. Name and identifier match NNW's
@@ -88,7 +95,8 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/adwaita/template.html"),
         stylesheet: include_str!("../../data/themes/adwaita/stylesheet.css"),
         dark: false,
-        accent_hex: None, // surrender to GNOME's system accent
+        accent_hex: None,
+        dark_overlay: None, // Adwaita stylesheet has prefers-color-scheme baked in
     },
     Theme {
         id: "sepia",
@@ -96,7 +104,8 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/sepia/template.html"),
         stylesheet: include_str!("../../data/themes/sepia/stylesheet.css"),
         dark: false,
-        accent_hex: Some("#7a4d1f"), // warm cinnamon — body text on tan
+        accent_hex: Some("#7a4d1f"),
+        dark_overlay: Some(include_str!("../../data/themes/sepia/dark.css")),
     },
     Theme {
         id: "appanoose",
@@ -104,7 +113,8 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/appanoose/template.html"),
         stylesheet: include_str!("../../data/themes/appanoose/stylesheet.css"),
         dark: false,
-        accent_hex: Some("#086aee"), // clean web-blue link color
+        accent_hex: Some("#086aee"),
+        dark_overlay: Some(include_str!("../../data/themes/appanoose/dark.css")),
     },
     Theme {
         id: "biblioteca",
@@ -112,7 +122,8 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/biblioteca/template.html"),
         stylesheet: include_str!("../../data/themes/biblioteca/stylesheet.css"),
         dark: false,
-        accent_hex: Some("#1145a5"), // deep scholarly blue
+        accent_hex: Some("#1145a5"),
+        dark_overlay: Some(include_str!("../../data/themes/biblioteca/dark.css")),
     },
     Theme {
         id: "hyperlegible",
@@ -121,6 +132,7 @@ pub const THEMES: &[Theme] = &[
         stylesheet: include_str!("../../data/themes/hyperlegible/stylesheet.css"),
         dark: false,
         accent_hex: Some("#086aee"),
+        dark_overlay: Some(include_str!("../../data/themes/hyperlegible/dark.css")),
     },
     Theme {
         id: "newsfax",
@@ -128,7 +140,8 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/newsfax/template.html"),
         stylesheet: include_str!("../../data/themes/newsfax/stylesheet.css"),
         dark: false,
-        accent_hex: Some("#3a3a3a"), // newsprint dark gray; monochrome theme
+        accent_hex: Some("#3a3a3a"),
+        dark_overlay: Some(include_str!("../../data/themes/newsfax/dark.css")),
     },
     Theme {
         id: "promenade",
@@ -137,6 +150,7 @@ pub const THEMES: &[Theme] = &[
         stylesheet: include_str!("../../data/themes/promenade/stylesheet.css"),
         dark: false,
         accent_hex: Some("#086aee"),
+        dark_overlay: Some(include_str!("../../data/themes/promenade/dark.css")),
     },
     Theme {
         id: "tiqoe_dark",
@@ -144,7 +158,8 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/tiqoe_dark/template.html"),
         stylesheet: include_str!("../../data/themes/tiqoe_dark/stylesheet.css"),
         dark: true,
-        accent_hex: Some("#b08660"), // warm tan visible on dark
+        accent_hex: Some("#b08660"),
+        dark_overlay: None, // already dark
     },
     Theme {
         id: "verdana_revival",
@@ -152,7 +167,8 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/verdana_revival/template.html"),
         stylesheet: include_str!("../../data/themes/verdana_revival/stylesheet.css"),
         dark: false,
-        accent_hex: Some("#2670c4"), // bright slate-blue from headings
+        accent_hex: Some("#2670c4"),
+        dark_overlay: Some(include_str!("../../data/themes/verdana_revival/dark.css")),
     },
 ];
 
@@ -839,14 +855,17 @@ pub fn render_themed(
 
     let mut outer_subs: HashMap<&'static str, String> = HashMap::with_capacity(4);
     outer_subs.insert("title", title_for_outer);
-    // Prepend bundled @font-face rules so themes that reference
-    // 'Atkinson Hyperlegible' (etc.) get the bundled TTFs even on
-    // systems where those fonts aren't installed. CSP allows
-    // `font-src viaduct-font:` for this.
-    outer_subs.insert(
-        "style",
-        format!("{}\n{}", font_face_css(), theme.stylesheet),
-    );
+    // Style cascade: bundled @font-face rules (so themes can reference
+    // 'Atkinson Hyperlegible' etc.) → byte-perfect NNW theme stylesheet
+    // → optional dark-mode adaptation overlay (per-theme, hand-tuned
+    // prefers-color-scheme block that activates when the system color
+    // scheme is dark). Themes that adapt to dark mode internally
+    // (Adwaita) or are dark-only (Tiqoe Dark) carry None.
+    let style = match theme.dark_overlay {
+        Some(overlay) => format!("{}\n{}\n{}", font_face_css(), theme.stylesheet, overlay),
+        None => format!("{}\n{}", font_face_css(), theme.stylesheet),
+    };
+    outer_subs.insert("style", style);
     outer_subs.insert(
         "baseURL",
         base_uri.map(|s| s.to_string()).unwrap_or_default(),

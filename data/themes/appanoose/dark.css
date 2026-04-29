@@ -1,0 +1,49 @@
+/*
+ * Appanoose — dark variant.
+ *
+ * The light Appanoose is a clean, modern, neutral white with a vivid
+ * blue link color. The dark counterpart keeps that "GitHub-style"
+ * minimalism: charcoal slate backgrounds with bright sky-blue accents.
+ */
+@media (prefers-color-scheme: dark) {
+	body {
+		background-color: #1a1d22;
+		color: #e6e8eb;
+	}
+	a {
+		color: #5e9ef4;
+	}
+	a:hover {
+		color: #86b7f8;
+	}
+	.feedlink, .feedlink a {
+		color: #a4abb5;
+	}
+	.articleDateline, .articleDatelineTitle {
+		color: #8a929e;
+	}
+	.articleTitle a {
+		color: #f0f2f4;
+	}
+	pre, code, kbd, samp {
+		background-color: rgba(255, 255, 255, 0.06);
+		color: #d8dee8;
+	}
+	pre {
+		border: 1px solid rgba(255, 255, 255, 0.10);
+	}
+	blockquote {
+		border-left-color: rgba(94, 158, 244, 0.5);
+		background-color: rgba(94, 158, 244, 0.06);
+		color: #c5cdd8;
+	}
+	hr {
+		border-top-color: rgba(255, 255, 255, 0.10);
+	}
+	table th, table td {
+		border-color: rgba(255, 255, 255, 0.10);
+	}
+	img {
+		opacity: 0.92;
+	}
+}

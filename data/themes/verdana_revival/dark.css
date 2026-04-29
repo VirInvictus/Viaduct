@@ -1,0 +1,48 @@
+/*
+ * Verdana Revival — dark variant.
+ *
+ * Verdana Revival already leans dark-friendly with its slate palette;
+ * this overlay deepens the slate to a richer dark-blue and brightens
+ * the body text + link blue for better legibility at typical reading
+ * distance.
+ */
+@media (prefers-color-scheme: dark) {
+	body {
+		background-color: #161a22;
+		color: #d6d9df;
+	}
+	a {
+		color: #6ea4dc;
+		text-decoration-color: rgba(110, 164, 220, 0.5);
+	}
+	a:hover {
+		color: #9bc1ea;
+	}
+	.feedlink, .feedlink a {
+		color: #9aa2b0;
+	}
+	.articleDateline, .articleDatelineTitle {
+		color: #889098;
+	}
+	.articleTitle a {
+		color: #e8eaef;
+	}
+	pre, code, kbd, samp {
+		background-color: rgba(255, 255, 255, 0.06);
+		color: #d6d9df;
+	}
+	pre {
+		border: 1px solid rgba(255, 255, 255, 0.10);
+	}
+	blockquote {
+		border-left-color: rgba(110, 164, 220, 0.5);
+		background-color: rgba(110, 164, 220, 0.06);
+		color: #c2c8d2;
+	}
+	hr {
+		border-top-color: rgba(255, 255, 255, 0.10);
+	}
+	table th, table td {
+		border-color: rgba(255, 255, 255, 0.10);
+	}
+}

@@ -1,0 +1,48 @@
+/*
+ * Hyperlegible — dark variant.
+ *
+ * Hyperlegible is built around the Atkinson Hyperlegible typeface
+ * (by Braille Institute) for maximum letter-by-letter discrimination.
+ * The dark counterpart preserves that high-contrast intent: pure
+ * black for the deepest letters, near-white text, vivid sky-blue
+ * accents that don't muddy at the foveal level.
+ */
+@media (prefers-color-scheme: dark) {
+	body {
+		background-color: #0a0a0a;
+		color: #f4f4f4;
+	}
+	a {
+		color: #6cb6ff;
+		text-decoration-color: rgba(108, 182, 255, 0.5);
+	}
+	a:hover {
+		color: #9ccfff;
+		text-decoration-color: #9ccfff;
+	}
+	.feedlink, .feedlink a {
+		color: #b8b8b8;
+	}
+	.articleDateline, .articleDatelineTitle {
+		color: #a0a0a0;
+	}
+	.articleTitle a {
+		color: #ffffff;
+	}
+	pre, code, kbd, samp {
+		background-color: #1a1a1a;
+		color: #f0f0f0;
+		border: 1px solid #2a2a2a;
+	}
+	blockquote {
+		border-left-color: #6cb6ff;
+		background-color: rgba(108, 182, 255, 0.06);
+		color: #d0d0d0;
+	}
+	hr {
+		border-top-color: #2a2a2a;
+	}
+	table th, table td {
+		border-color: #2a2a2a;
+	}
+}

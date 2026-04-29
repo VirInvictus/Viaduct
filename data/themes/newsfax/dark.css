@@ -1,0 +1,47 @@
+/*
+ * NewsFax — dark variant.
+ *
+ * NewsFax is a monochrome, retro-newspaper theme using the ModeSeven
+ * pixel font for headers — think old wire-service teletype pages.
+ * The dark counterpart inverts the newsprint: ink black background
+ * with pearl-gray text, preserving the strict monochrome character.
+ */
+@media (prefers-color-scheme: dark) {
+	body {
+		background-color: #0c0c0c;
+		color: #cccccc;
+	}
+	a {
+		color: #ffffff;
+		text-decoration-color: #888;
+	}
+	a:hover {
+		text-decoration-color: #fff;
+	}
+	.feedlink, .feedlink a {
+		color: #888;
+	}
+	.articleDateline, .articleDatelineTitle {
+		color: #aaa;
+	}
+	.articleTitle a {
+		color: #fafafa;
+	}
+	pre, code, kbd, samp {
+		background-color: #1a1a1a;
+		color: #ddd;
+	}
+	pre {
+		border: 1px solid #333;
+	}
+	blockquote {
+		border-left-color: #555;
+		color: #aaa;
+	}
+	hr {
+		border-top-color: #333;
+	}
+	table th, table td {
+		border-color: #333;
+	}
+}

@@ -1,0 +1,49 @@
+/*
+ * Promenade — dark variant.
+ *
+ * Promenade is an elegant, broadsheet-style theme: warm white,
+ * Avenir-style sans-serif, sky-blue links. The dark counterpart is
+ * a midnight-stroll palette — warm dark-charcoal backgrounds, pale
+ * cream text, slightly cooler accent blue for night reading.
+ */
+@media (prefers-color-scheme: dark) {
+	body {
+		background-color: #1c1a17;
+		color: #ddd6cb;
+	}
+	a {
+		color: #5e9ef4;
+		text-decoration-color: rgba(94, 158, 244, 0.5);
+	}
+	a:hover {
+		color: #8cb9f6;
+		text-decoration-color: #8cb9f6;
+	}
+	.feedlink, .feedlink a {
+		color: #a09b91;
+	}
+	.articleDateline, .articleDatelineTitle {
+		color: #908a80;
+	}
+	.articleTitle a {
+		color: #ede5d8;
+	}
+	pre, code, kbd, samp {
+		background-color: rgba(255, 248, 235, 0.06);
+		color: #ede5d8;
+	}
+	pre {
+		border: 1px solid rgba(255, 248, 235, 0.10);
+	}
+	blockquote {
+		border-left-color: rgba(94, 158, 244, 0.5);
+		background-color: rgba(94, 158, 244, 0.06);
+		color: #c8c1b6;
+	}
+	hr {
+		border-top-color: rgba(255, 248, 235, 0.10);
+	}
+	table th, table td {
+		border-color: rgba(255, 248, 235, 0.10);
+	}
+}

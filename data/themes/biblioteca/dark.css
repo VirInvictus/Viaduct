@@ -1,0 +1,43 @@
+/*
+ * Biblioteca — dark variant.
+ *
+ * The light Biblioteca evokes a printed scholarly volume — black on
+ * cream, deep navy accents. The dark counterpart is a leather-bound
+ * version: deep ink-blue backgrounds, off-white parchment text,
+ * brighter cobalt accents.
+ */
+@media (prefers-color-scheme: dark) {
+	body {
+		background-color: #0d1929;
+		color: #e8e2d2;
+	}
+	:root {
+		--header-table-border-color: rgba(232, 226, 210, 0.18);
+		--body-code-color: #f5e6cb;
+		--system-message-color: #e8e2d2;
+		--feedlink-color: #b3aa97;
+		--article-title-color: #f3eddd;
+		--article-secondary-color: rgba(232, 226, 210, 0.55);
+		--table-cell-border-color: rgba(232, 226, 210, 0.18);
+		--table-header-border-color: rgba(232, 226, 210, 0.55);
+		--secondary-accent-color: #6f9fde;
+		--block-quote-border-color: rgba(232, 226, 210, 0.4);
+		--background-color: #0d1929;
+		--font-color: #e8e2d2;
+		--code-background-border: rgba(232, 226, 210, 0.18);
+		--code-background: rgba(232, 226, 210, 0.06);
+	}
+	a {
+		color: #6f9fde;
+	}
+	a:hover {
+		color: #94baea;
+	}
+	pre, code {
+		background-color: rgba(232, 226, 210, 0.05);
+		color: #f5e6cb;
+	}
+	pre {
+		border-color: rgba(232, 226, 210, 0.18);
+	}
+}

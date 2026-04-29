@@ -1,0 +1,45 @@
+/*
+ * Sepia — dark variant.
+ *
+ * Translates the warm tan / cinnamon palette into a low-glare warm
+ * dark: dark roasted-coffee backgrounds, warm cream text, lifted
+ * copper accents. Preserves Sepia's reading-room character.
+ * Activated via prefers-color-scheme in the WebKit pane when the
+ * system color scheme is dark.
+ */
+@media (prefers-color-scheme: dark) {
+	body {
+		background-color: rgb(38, 30, 21);
+		color: rgb(216, 197, 168);
+	}
+	:root {
+		--header-table-border-color: rgba(255, 240, 220, 0.18);
+		--header-color: rgba(238, 220, 192, 0.55);
+		--body-code-color: #d8a87a;
+		--system-message-color: #d8a87a;
+		--feedlink-color: #d8a87a;
+		--article-title-color: #ecd5b5;
+		--article-date-color: rgba(238, 220, 192, 0.6);
+		--table-cell-border-color: rgba(255, 240, 220, 0.18);
+		--primary-accent-color: #c89968;
+		--secondary-accent-color: #c89968;
+		--block-quote-border-color: rgba(255, 240, 220, 0.4);
+		--link-underline-color: color-mix(in hsl, currentColor, transparent 50%);
+		--link-underline-special: color-mix(in hsl, currentColor, transparent 80%);
+	}
+	a {
+		color: #e8b88a;
+	}
+	pre {
+		background-color: rgba(255, 240, 220, 0.06);
+	}
+	code {
+		background-color: rgba(255, 240, 220, 0.10);
+	}
+	blockquote {
+		background-color: rgba(255, 240, 220, 0.04);
+	}
+	hr {
+		border-top-color: rgba(255, 240, 220, 0.20);
+	}
+}
