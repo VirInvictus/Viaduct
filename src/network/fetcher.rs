@@ -255,12 +255,29 @@ impl AccountRefresher {
     }
 
     pub async fn refresh_feeds(&self, feeds: Vec<(Feed, FeedSettings)>) {
+        self.refresh_feeds_inner(feeds, false).await
+    }
+
+    /// Force a refresh that bypasses the 29-minute timing throttle and the
+    /// 5-hour Cache-Control freshness check. `etag` / `last_modified` are
+    /// still sent (so a 304 response remains a fast no-op), but every feed
+    /// gets a network round-trip. Use for explicit user clicks. Auto-refresh
+    /// (when it lands in Phase 17 / Background portal) calls
+    /// `refresh_feeds` instead.
+    pub async fn refresh_feeds_forced(&self, feeds: Vec<(Feed, FeedSettings)>) {
+        self.refresh_feeds_inner(feeds, true).await
+    }
+
+    async fn refresh_feeds_inner(&self, feeds: Vec<(Feed, FeedSettings)>, force: bool) {
         let special_case_cutoff_date = Utc::now() - Duration::hours(25);
+        let total_input = feeds.len();
+        let mut skipped = 0usize;
 
         let mut futures = Vec::new();
         for (feed, settings) in feeds {
-            if Self::feed_should_be_skipped(&feed, &settings, special_case_cutoff_date) {
+            if !force && Self::feed_should_be_skipped(&feed, &settings, special_case_cutoff_date) {
                 debug!("Skipping feed: {}", feed.url);
+                skipped += 1;
                 continue;
             }
 
@@ -270,9 +287,26 @@ impl AccountRefresher {
             let retention_days = self.retention_days;
 
             futures.push(tokio::spawn(async move {
-                refresh_one_feed(fetcher, account, sender, feed, settings, retention_days).await;
+                refresh_one_feed(
+                    fetcher,
+                    account,
+                    sender,
+                    feed,
+                    settings,
+                    retention_days,
+                    force,
+                )
+                .await;
             }));
         }
+
+        debug!(
+            total_input,
+            skipped,
+            attempted = total_input - skipped,
+            force,
+            "refresh_feeds: dispatched"
+        );
 
         for f in futures {
             let _ = f.await;
@@ -423,8 +457,15 @@ async fn refresh_one_feed(
     feed: Feed,
     settings: FeedSettings,
     retention_days: i64,
+    force: bool,
 ) {
-    let (etag, last_modified) = maybe_expire_conditional_get_info(&feed, &settings);
+    // On force, drop conditional-GET headers entirely so the server can't
+    // 304 us into a no-op when the local article store is missing.
+    let (etag, last_modified) = if force {
+        (None, None)
+    } else {
+        maybe_expire_conditional_get_info(&feed, &settings)
+    };
     let mut new_settings = settings.clone();
     new_settings.last_check_date = Some(Utc::now());
 
@@ -469,11 +510,14 @@ async fn refresh_one_feed(
                 new_settings.max_age = Some(capped);
             }
 
-            // Content-hash short-circuit: skip parsing if the body is byte-identical.
+            // Content-hash short-circuit: skip parsing if the body is
+            // byte-identical to the last successful fetch. `force=true`
+            // bypasses this so a manual refresh after a deleted articles
+            // DB always re-parses and re-inserts.
             let mut hasher = Md5::new();
             hasher.update(&result.body);
             let hash = format!("{:x}", hasher.finalize());
-            if Some(&hash) == settings.content_hash.as_ref() {
+            if !force && Some(&hash) == settings.content_hash.as_ref() {
                 debug!("Feed content hash unchanged: {}", feed.url);
                 let _ = account.upsert_feed_settings(new_settings).await;
                 return;

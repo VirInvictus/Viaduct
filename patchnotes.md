@@ -1,5 +1,24 @@
 # viaduct — Patch Notes
 
+## v1.0.10 — Manual Refresh Bypasses Cache + Toast Feedback
+
+Fixes the "I clicked refresh and nothing happened" trap. After a user deletes `articles.sqlite` (or just clicks refresh more than once in 29 minutes), every feed had stale `last_check_date` / `content_hash` / conditional-GET state in `feed-settings.sqlite` — and the refresher silently skipped them. Manual clicks now bypass every short-circuit and produce a toast either way.
+
+- **`AccountRefresher::refresh_feeds_forced`**: bypasses the 29-minute throttle, the 5-hour Cache-Control freshness check, the conditional-GET headers (`If-None-Match` / `If-Modified-Since`), and the content-hash short-circuit. Every feed gets a full network fetch + parse + diff. The bare `refresh_feeds` keeps every check intact for the future cron-based auto-refresh path.
+- **`refresh_one_feed` accepts `force: bool`** and threads it through the cached-state checks. With `force=true`, conditional-GET headers are dropped at the request layer too — so a server that always 304s us can't keep us pinned to an empty article store.
+- **`act_refresh` and `refresh_specific_feeds` (post-import)** both pass `force=true`. Manual-click semantics: "fetch now, ignore caching."
+- **`RefreshTally` struct** carries `feeds_attempted` + `new_articles` from worker → GTK. The desktop notification still keys on `new_articles`; the toast renders both numbers.
+- **`show_refresh_toast`**: an `AdwToast` after every refresh cycle. Three messages: "No feeds in subscription list." (empty OPML), "Refreshed N feeds — no new articles." (zero-delta refresh), or "Refreshed N feeds — M new articles." (the happy path).
+- **`refresh_feeds: dispatched`** debug-mode log line now reports `total_input` / `skipped` / `attempted` / `force` so a "nothing happened" report can be triaged from the log alone.
+
+### How to recover from the empty-articles state
+
+1. Hit the refresh button (or Ctrl+R).
+2. Toast confirms what happened.
+3. Articles repopulate from the network.
+
+If `feed-settings.sqlite` itself is corrupt, deleting both `articles.sqlite` AND `feed-settings.sqlite` is still the nuclear option — `LocalAccount::cleanup_at_startup` will rebuild settings rows on the next refresh.
+
 ## v1.0.9 — HTTP Client Parity & Pervasive Debug Tracing
 
 The cause of "half my feeds won't refresh": our `reqwest` client didn't enable `gzip` or `brotli` decompression, while NewsFlash and most other RSS readers do. Servers that auto-negotiate compressed responses handed us binary garbage (which the parser flagged as `UnknownFormat`) or rejected our short / unrecognized User-Agent outright. Plus the debug-mode plumbing existed but wasn't actually being used — fixed in the same commit.

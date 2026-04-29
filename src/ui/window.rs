@@ -967,13 +967,13 @@ impl ViaductWindow {
         let account = self.account();
         let window_weak = self.downgrade();
         let retention_days = current_retention_days();
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<usize>();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<RefreshTally>();
         crate::spawn_on_runtime(async move {
             let opml = match account.load_opml().await {
                 Ok(o) => o,
                 Err(e) => {
                     tracing::warn!(?e, "refresh: OPML load failed");
-                    let _ = done_tx.send(0);
+                    let _ = done_tx.send(RefreshTally::default());
                     return;
                 }
             };
@@ -983,27 +983,53 @@ impl ViaductWindow {
                 feeds.extend(folder.feeds.iter().cloned());
             }
             if feeds.is_empty() {
-                let _ = done_tx.send(0);
+                let _ = done_tx.send(RefreshTally::default());
                 return;
             }
             let paired = pair_feeds_with_settings(&account, feeds).await;
-            let total = run_refresh_with_tally(account, paired, retention_days).await;
-            let _ = done_tx.send(total);
+            // Manual refresh = force=true. Bypasses the 29-min throttle so
+            // an explicit user click always hits the network.
+            let tally = run_refresh_with_tally(account, paired, retention_days, true).await;
+            let _ = done_tx.send(tally);
         });
         self.imp().batch_update.start();
         glib::spawn_future_local(async move {
-            let Ok(total) = done_rx.await else {
+            let Ok(tally) = done_rx.await else {
                 if let Some(window) = window_weak.upgrade() {
                     window.imp().batch_update.end();
                 }
                 return;
             };
             if let Some(window) = window_weak.upgrade() {
-                window.dispatch_refresh_notification(total);
+                window.dispatch_refresh_notification(tally.new_articles);
+                window.show_refresh_toast(tally);
                 window.refresh_unread_counts();
                 window.imp().batch_update.end();
             }
         });
+    }
+
+    /// Toast feedback so a refresh that produces no visible state change
+    /// is at least surfaced. Dismissed automatically by `AdwToast`.
+    fn show_refresh_toast(&self, tally: RefreshTally) {
+        let msg = if tally.feeds_attempted == 0 {
+            "No feeds in subscription list.".to_string()
+        } else if tally.new_articles == 0 {
+            format!(
+                "Refreshed {} feed{} — no new articles.",
+                tally.feeds_attempted,
+                if tally.feeds_attempted == 1 { "" } else { "s" }
+            )
+        } else {
+            format!(
+                "Refreshed {} feed{} — {} new article{}.",
+                tally.feeds_attempted,
+                if tally.feeds_attempted == 1 { "" } else { "s" },
+                tally.new_articles,
+                if tally.new_articles == 1 { "" } else { "s" },
+            )
+        };
+        self.imp().toast_overlay.add_toast(adw::Toast::new(&msg));
     }
 
     /// Show a desktop notification summarizing a refresh cycle, gated by the
@@ -1415,16 +1441,18 @@ impl ViaductWindow {
         let account = self.account();
         let window_weak = self.downgrade();
         let retention_days = current_retention_days();
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<usize>();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<RefreshTally>();
         crate::spawn_on_runtime(async move {
             let paired = pair_feeds_with_settings(&account, feeds).await;
-            let total = run_refresh_with_tally(account, paired, retention_days).await;
-            let _ = done_tx.send(total);
+            // Force=true: post-import re-fetch is also an explicit user
+            // intent, not auto-refresh.
+            let tally = run_refresh_with_tally(account, paired, retention_days, true).await;
+            let _ = done_tx.send(tally);
         });
         glib::spawn_future_local(async move {
-            let Ok(total) = done_rx.await else { return };
+            let Ok(tally) = done_rx.await else { return };
             if let Some(window) = window_weak.upgrade() {
-                window.dispatch_refresh_notification(total);
+                window.dispatch_refresh_notification(tally.new_articles);
                 window.refresh_unread_counts();
             }
         });
@@ -1471,11 +1499,21 @@ async fn pair_feeds_with_settings(
 /// before awaiting the drain task so all `changes_tx` clones close and the
 /// drain returns naturally. `retention_days` is forwarded to `update_feed`
 /// for the per-feed prune.
+/// Result of a refresh cycle, broken out so the UI can render a toast or
+/// a desktop notification with both numbers.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct RefreshTally {
+    pub feeds_attempted: usize,
+    pub new_articles: usize,
+}
+
 async fn run_refresh_with_tally(
     account: Arc<Account>,
     paired: Vec<(crate::models::Feed, crate::models::FeedSettings)>,
     retention_days: i64,
-) -> usize {
+    force: bool,
+) -> RefreshTally {
+    let feeds_attempted = paired.len();
     let (changes_tx, mut changes_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::models::ArticleChanges>();
     let drain = tokio::spawn(async move {
@@ -1486,9 +1524,17 @@ async fn run_refresh_with_tally(
         total
     });
     let refresher = crate::network::AccountRefresher::new(account, changes_tx, retention_days);
-    refresher.refresh_feeds(paired).await;
+    if force {
+        refresher.refresh_feeds_forced(paired).await;
+    } else {
+        refresher.refresh_feeds(paired).await;
+    }
     drop(refresher);
-    drain.await.unwrap_or(0)
+    let new_articles = drain.await.unwrap_or(0);
+    RefreshTally {
+        feeds_attempted,
+        new_articles,
+    }
 }
 
 /// Read `retention-days` fresh from GSettings on the GTK thread. Falls back
