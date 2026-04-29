@@ -149,13 +149,35 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                           </object>
                         </child>
                         <property name="content">
-                          <object class="GtkScrolledWindow" id="article_scroll">
+                          <object class="GtkOverlay">
                             <property name="child">
-                              <object class="WebKitWebView" id="article_web_view">
-                                <property name="vexpand">True</property>
-                                <property name="hexpand">True</property>
+                              <object class="GtkScrolledWindow" id="article_scroll">
+                                <property name="child">
+                                  <object class="WebKitWebView" id="article_web_view">
+                                    <property name="vexpand">True</property>
+                                    <property name="hexpand">True</property>
+                                  </object>
+                                </property>
                               </object>
                             </property>
+                            <child type="overlay">
+                              <object class="GtkLabel" id="url_overlay">
+                                <property name="halign">start</property>
+                                <property name="valign">end</property>
+                                <property name="margin-start">12</property>
+                                <property name="margin-end">12</property>
+                                <property name="margin-top">12</property>
+                                <property name="margin-bottom">12</property>
+                                <property name="visible">False</property>
+                                <property name="ellipsize">middle</property>
+                                <property name="max-width-chars">80</property>
+                                <property name="can-target">False</property>
+                                <style>
+                                  <class name="caption"/>
+                                  <class name="osd"/>
+                                </style>
+                              </object>
+                            </child>
                           </object>
                         </property>
                       </object>

@@ -348,6 +348,26 @@ pub fn install_link_interceptor(view: &webkit6::WebView) {
     });
 }
 
+/// Wires `mouse-target-changed` so the hovered link's URL surfaces in the
+/// supplied label widget. Hide the label when the cursor isn't over a
+/// link. Idempotent; safe to call once per WebView. Port of the same
+/// behavior that NewsFlash's `UrlOverlay` provides — implemented from
+/// scratch with a `gtk::Label` overlay child rather than reusing their
+/// custom widget.
+pub fn install_hover_url_overlay(view: &webkit6::WebView, overlay_label: &gtk::Label) {
+    let label = overlay_label.clone();
+    view.connect_mouse_target_changed(move |_view, hit_test, _modifiers| {
+        if hit_test.context_is_link()
+            && let Some(uri) = hit_test.link_uri()
+        {
+            label.set_text(uri.as_str());
+            label.set_visible(true);
+        } else {
+            label.set_visible(false);
+        }
+    });
+}
+
 /// Applies the locked-down `WebKitSettings` profile to the supplied view.
 /// Idempotent; safe to call repeatedly. Should be called once during window
 /// construction before the first `render`.

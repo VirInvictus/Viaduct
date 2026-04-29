@@ -40,6 +40,8 @@ mod imp {
         #[template_child]
         pub article_scroll: TemplateChild<gtk::ScrolledWindow>,
         #[template_child]
+        pub url_overlay: TemplateChild<gtk::Label>,
+        #[template_child]
         pub search_bar: TemplateChild<gtk::SearchBar>,
         #[template_child]
         pub search_entry: TemplateChild<gtk::SearchEntry>,
@@ -193,6 +195,12 @@ impl ViaductWindow {
         // so the article pane's CSP-locked img-src can route through our
         // ImageCache. Process-wide; idempotent.
         article_renderer::install_image_uri_scheme(self.image_cache());
+        // Show the link URL in the article pane's bottom-left when the
+        // user hovers a link — preview where Enter / click will go.
+        article_renderer::install_hover_url_overlay(
+            &imp.article_web_view.get(),
+            &imp.url_overlay.get(),
+        );
 
         // Sidebar: delegate → controller → data source → list view.
         let delegate = Rc::new(RefCell::new(SidebarTreeControllerDelegate::new()));
