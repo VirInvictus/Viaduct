@@ -27,15 +27,35 @@ pub mod keys {
 
 /// Open the user-visible preferences. Returns `None` when the schema isn't
 /// installed (dev environment without `glib-compile-schemas`); callers fall
-/// back to defaults.
+/// back to defaults. Process-singleton: every call returns the same
+/// `gio::Settings` GObject so signal handlers registered through one call
+/// site remain connected even after that call site's stack frame returns.
+/// Without this, `connect_changed` handlers attached to a transient
+/// Settings instance get torn down with it and silently stop firing —
+/// which is exactly how v1.2.0-pre1 shipped a non-functional theme picker.
+///
+/// Thread-local because `gio::Settings` is `!Send` (GObjects are bound to
+/// the thread that created them). All viaduct callers are on the GTK main
+/// thread, so a thread_local cell is the right shape.
 pub fn settings() -> Option<gio::Settings> {
-    let source = gio::SettingsSchemaSource::default()?;
-    source.lookup(SCHEMA_ID, true)?;
-    Some(gio::Settings::new(SCHEMA_ID))
+    use std::cell::OnceCell;
+    thread_local! {
+        static CELL: OnceCell<Option<gio::Settings>> = const { OnceCell::new() };
+    }
+    CELL.with(|cell| {
+        cell.get_or_init(|| {
+            let source = gio::SettingsSchemaSource::default()?;
+            source.lookup(SCHEMA_ID, true)?;
+            Some(gio::Settings::new(SCHEMA_ID))
+        })
+        .clone()
+    })
 }
 
 /// Apply the color-scheme preference to the global `AdwStyleManager` and
-/// keep it in sync when the user flips the dropdown later.
+/// keep it in sync when the user flips the dropdown later. The `settings`
+/// argument is the process-singleton `gio::Settings` from `settings()`,
+/// so signal handlers registered here outlive this call.
 pub fn apply_color_scheme(settings: &gio::Settings) {
     let manager = adw::StyleManager::default();
     update_style_manager(settings, &manager);
@@ -204,5 +224,12 @@ pub fn apply_article_theme_accent(settings: &gio::Settings) {
 
 fn refresh_accent(settings: &gio::Settings, manager: &adw::StyleManager) {
     let theme = resolve_article_theme(settings, manager.is_dark());
+    tracing::debug!(
+        nick = %article_theme_nick(settings),
+        resolved_id = theme.id,
+        accent = theme.accent_hex,
+        is_dark = manager.is_dark(),
+        "preferences: refresh_accent"
+    );
     crate::ui::article_renderer::apply_app_accent(theme.accent_hex);
 }
