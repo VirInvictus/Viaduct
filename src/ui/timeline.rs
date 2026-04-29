@@ -232,6 +232,14 @@ pub fn setup_timeline_list_view(
                 .date_published
                 .map(format_relative_date)
                 .unwrap_or_default();
+            if crate::is_debug_mode() {
+                tracing::trace!(
+                    article = %article.title.as_deref().unwrap_or(""),
+                    has_date = article.date_published.is_some(),
+                    date_str = %date_str,
+                    "timeline: bind date"
+                );
+            }
             date_label.set_text(&date_str);
 
             // Resolve display name through the feed-name map. Falls back to
