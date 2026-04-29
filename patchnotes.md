@@ -1,5 +1,24 @@
 # viaduct — Patch Notes
 
+## v1.2.0 — UI Polish (in progress)
+
+Visual unification + reading-pane upgrades. Built up across pre-release commits; this section is updated with each pre and finalized when v1.2.0 ships.
+
+### Sub-arc 1 (`v1.2.0-pre1` → `v1.2.0-pre1.6`): theme picker, accent unification, fonts, dark variants, scroll fix
+
+- **App-wide accent unification** — the article theme's accent color now propagates to every accent surface in the GTK chrome: sidebar selection, focus rings, switches, suggested-action buttons, text selection, link buttons, AdwAvatar fallback. Picking Sepia gives you warm cinnamon everywhere; Tiqoe Dark, warm tan; Biblioteca, deep scholarly blue. Implementation: a `gtk::CssProvider` registered at `STYLE_PROVIDER_PRIORITY_USER + 100` on the default `gdk::Display` overrides libadwaita's accent across three layers — legacy `@define-color`, modern `:root` CSS custom properties, and selector-targeted overrides for the highest-traffic accent widgets. Beats GNOME 47+'s system-accent integration (`org.gnome.desktop.interface accent-color`).
+- **Theme picker preference** — new `article-theme` enum GSetting + `AdwComboRow` in the prefs dialog. Lists every theme ("Follow color scheme" + Adwaita + the eight NNW-ported themes). Switches the article theme + the app-wide accent live without restart. `Theme::accent_hex` is `Option<&'static str>` — `None` means "don't override" (Adwaita uses this so GNOME's system accent surfaces unchanged).
+- **Adwaita theme** — new ninth theme. NNW-shape page with libadwaita-native typography (Cantarell + system-ui font stack, max-width 44em, generous letter-spacing). Adapts to dark mode automatically via `prefers-color-scheme` baked into its stylesheet. Carries `accent_hex: None` so GNOME's system accent surfaces through the chrome unchanged — picking Adwaita feels like stock GNOME.
+- **Hand-tuned dark variants for every NNW theme** — each light theme (Sepia, Appanoose, Biblioteca, Hyperlegible, NewsFax, Promenade, Verdana Revival) gains a per-theme `dark.css` overlay with a hand-crafted dark palette that preserves the theme's character. Sepia → roasted-coffee bg #261e15, warm cream text, lifted copper accents. Biblioteca → leather-bound deep ink-blue. NewsFax → ink-black newsprint. Activated automatically via `prefers-color-scheme: dark`. NNW byte-perfect stylesheets stay UNCHANGED — our dark adaptation is appended after the original cascade.
+- **Bundled fonts via `viaduct-font://` URI scheme** — new scheme parallel to `viaduct-img://`. Atkinson Hyperlegible Next is bundled (Regular, Bold, Italic, BoldItalic from googlefonts/atkinson-hyperlegible-next, ~270 KB total). `font_face_css()` is prepended to every theme's stylesheet so the Hyperlegible theme renders correctly even when the system doesn't ship the font. CSP gains `font-src viaduct-font:` to allow the loads.
+- **Singleton `gio::Settings`** — `crate::preferences::settings()` now returns the same GObject for the lifetime of the GTK thread (thread_local OnceCell). Without this, every callsite that wired a `connect_changed` handler on a transient Settings instance lost its handlers when the local binding went out of scope — the v1.2.0-pre1 theme picker shipped non-functional because of this. Verified the dropdown wrote correct values to dconf (via `gsettings get`) but listening callsites were dead.
+- **Article scrolling fix** — long articles were being silently clipped because the `WebKitWebView` was wrapped in a `GtkScrolledWindow` whose auto-viewport sized the WebView to the visible area, and every NNW theme stylesheet sets `html { overflow: hidden }`. Result: nothing past the visible fold was reachable. The wrapper is gone (pre1.6); WebKit owns article-pane scrolling natively now (mouse wheel + Space/Shift+Space page-down/up via WebKit's built-in user-agent behaviour). NNW's "advance at bottom" half of `scrollOrGoToNextUnread` is on hold pending a scroll-position monitor — flagged for v1.3 polish since it needs a JS bridge that's currently disabled by Phase 6 lockdown.
+- **Diagnostic tracing** — `preferences::refresh_accent` emits a `tracing::debug!` line on every theme change so future "did the handler fire?" questions are visible in the `--debug` log.
+
+### Sub-arc 2 (in progress): empty states, sidebar polish, timeline polish
+
+Coming.
+
 ## v1.1.0 — Phase 6: Neutered WebKit Article Pane
 
 The article reading pane is now a single locked-down `WebKitWebView` rendering through the full NetNewsWire theme stack. Closes Phase 6 of the roadmap. **Real-world session peak: 292 MB / 500 MB budget.**
