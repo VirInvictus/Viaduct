@@ -149,7 +149,7 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                           </object>
                         </child>
                         <property name="content">
-                          <object class="GtkScrolledWindow">
+                          <object class="GtkScrolledWindow" id="article_scroll">
                             <property name="child">
                               <object class="AdwClamp">
                                 <property name="maximum-size">800</property>
@@ -189,14 +189,9 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                                       </object>
                                     </child>
                                     <child>
-                                      <object class="GtkTextView" id="article_text_view">
-                                        <property name="editable">False</property>
-                                        <property name="wrap-mode">word-char</property>
-                                        <property name="cursor-visible">False</property>
-                                        <property name="pixels-above-lines">8</property>
-                                        <property name="pixels-below-lines">8</property>
-                                        <property name="justification">left</property>
-                                        <property name="bottom-margin">100</property>
+                                      <object class="WebKitWebView" id="article_web_view">
+                                        <property name="vexpand">True</property>
+                                        <property name="hexpand">True</property>
                                       </object>
                                     </child>
                                   </object>

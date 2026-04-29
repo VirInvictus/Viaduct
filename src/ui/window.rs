@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::database::accounts::Account;
 use crate::network::ImageCache;
 use crate::paths::{favicon_cache_dir, image_cache_dir};
-use crate::ui::article;
+use crate::ui::article_renderer;
 use crate::ui::sidebar::{
     SidebarDataSource, SidebarItem, SidebarTreeControllerDelegate, selected_sidebar_item,
     setup_sidebar_list_view,
@@ -36,7 +36,9 @@ mod imp {
         #[template_child]
         pub timeline_list_view: TemplateChild<gtk::ListView>,
         #[template_child]
-        pub article_text_view: TemplateChild<gtk::TextView>,
+        pub article_web_view: TemplateChild<webkit6::WebView>,
+        #[template_child]
+        pub article_scroll: TemplateChild<gtk::ScrolledWindow>,
         #[template_child]
         pub article_title_label: TemplateChild<gtk::Label>,
         #[template_child]
@@ -101,6 +103,10 @@ mod imp {
         type ParentType = adw::ApplicationWindow;
 
         fn class_init(klass: &mut Self::Class) {
+            // The window.ui template references `WebKitWebView` by class
+            // name. The GType must be registered before the GTK builder
+            // resolves the template, otherwise template loading fails.
+            webkit6::WebView::ensure_type();
             klass.bind_template();
         }
 
@@ -174,6 +180,10 @@ impl ViaductWindow {
         use std::rc::Rc;
 
         let imp = self.imp();
+
+        // Lock down the article-pane WebView before any HTML can be loaded.
+        // Idempotent; settings stay applied for the window's lifetime.
+        article_renderer::apply_locked_down_settings(&imp.article_web_view.get());
 
         // Sidebar: delegate → controller → data source → list view.
         let delegate = Rc::new(RefCell::new(SidebarTreeControllerDelegate::new()));
@@ -435,8 +445,7 @@ impl ViaductWindow {
     /// demand when the button goes active and no extracted HTML is cached.
     pub(crate) fn render_article_body(&self) {
         let imp = self.imp();
-        let tv = imp.article_text_view.get();
-        let cache = self.image_cache();
+        let view = imp.article_web_view.get();
 
         let (reader_mode, raw, extracted, url) = {
             let state = imp.article_display.borrow();
@@ -450,21 +459,21 @@ impl ViaductWindow {
 
         if !reader_mode {
             if let Some(raw) = raw {
-                article::render_html(&tv, &raw, Some(cache));
+                article_renderer::render(&view, &raw, url.as_deref());
             }
             return;
         }
 
         // Reader mode from here on.
         if let Some(extracted) = extracted {
-            article::render_html(&tv, &extracted, Some(cache));
+            article_renderer::render(&view, &extracted, url.as_deref());
             return;
         }
 
         // No cached extraction — run one. Show the raw body as a fallback
         // until extraction completes so the pane isn't blank.
         if let Some(ref raw_body) = raw {
-            article::render_html(&tv, raw_body, Some(cache.clone()));
+            article_renderer::render(&view, raw_body, url.as_deref());
         }
 
         let Some(url) = url else { return };
@@ -603,19 +612,17 @@ impl ViaductWindow {
 
     /// Port of NNW `scrollOrGoToNextUnread`: if the article pane can scroll
     /// down, page down; otherwise mark current read and advance to next
-    /// unread.
+    /// unread. Drives the wrapping `GtkScrolledWindow` directly because
+    /// `WebKitWebView` is not `GtkScrollable` in webkit6 0.4 — it has its
+    /// own internal layout managed via the parent viewport.
     pub(crate) fn act_smart_read(&self) {
-        let tv = self.imp().article_text_view.get();
-        if let Some(vadj) = tv.vadjustment() {
-            // `upper` may equal the content extent plus a small epsilon; the
-            // -1.0 guard avoids a redundant set_value(upper-page) at the
-            // floating-point boundary.
-            let at_bottom = vadj.value() + vadj.page_size() >= vadj.upper() - 1.0;
-            if !at_bottom {
-                let target = (vadj.value() + vadj.page_size()).min(vadj.upper() - vadj.page_size());
-                vadj.set_value(target);
-                return;
-            }
+        let scroll = self.imp().article_scroll.get();
+        let vadj = scroll.vadjustment();
+        let at_bottom = vadj.value() + vadj.page_size() >= vadj.upper() - 1.0;
+        if !at_bottom {
+            let target = (vadj.value() + vadj.page_size()).min(vadj.upper() - vadj.page_size());
+            vadj.set_value(target);
+            return;
         }
         self.mark_current_read_then_advance();
     }
@@ -623,11 +630,10 @@ impl ViaductWindow {
     /// Port of NNW `scrollUp:` (Shift+Space). Page up inside the article pane.
     /// At the top, does nothing — NNW doesn't go to previous article here.
     pub(crate) fn act_scroll_up(&self) {
-        let tv = self.imp().article_text_view.get();
-        if let Some(vadj) = tv.vadjustment() {
-            let target = (vadj.value() - vadj.page_size()).max(vadj.lower());
-            vadj.set_value(target);
-        }
+        let scroll = self.imp().article_scroll.get();
+        let vadj = scroll.vadjustment();
+        let target = (vadj.value() - vadj.page_size()).max(vadj.lower());
+        vadj.set_value(target);
     }
 
     fn mark_current_read_then_advance(&self) {

@@ -30,9 +30,27 @@ Modern readers often rely on web engines that consume excessive memory. viaduct 
 
 ## Installation
 
-viaduct is packaged as a Flatpak-first application.
+viaduct is packaged as a Flatpak-first application. The released Flatpak bundles every system dependency and is the recommended install path. Source builds need the development headers below.
+
+### Build dependencies (source)
+
+| Library | Version | Fedora package | Debian/Ubuntu package |
+|---|---|---|---|
+| GTK4 | ≥ 4.16 | `gtk4-devel` | `libgtk-4-dev` |
+| libadwaita | ≥ 1.7 | `libadwaita-devel` | `libadwaita-1-dev` |
+| WebKitGTK | 6.0 | `webkitgtk6.0-devel` | `libwebkitgtk-6.0-dev` |
+| SQLite (bundled) | — | — | — |
+| OpenSSL replacement | — | rustls (vendored) | rustls (vendored) |
+
+WebKitGTK 6.0 powers the article reading pane. It's run in a heavily-neutered configuration (JavaScript disabled, no plugins, no local storage, strict CSP), used only for CSS typography fidelity — see `spec.md` §2.2 for the threat-model writeup.
 
 ```bash
+# Fedora 43+
+sudo dnf install gtk4-devel libadwaita-devel webkitgtk6.0-devel
+
+# Debian/Ubuntu (24.04+)
+sudo apt install libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev
+
 # Build via Cargo
 cargo build --release
 ```

@@ -4,7 +4,7 @@
 
 // UI layer for GTK4/Libadwaita
 pub mod actions;
-pub mod article;
+pub mod article_renderer;
 pub mod batch;
 pub mod coalescing_queue;
 pub mod fetch_queue;
