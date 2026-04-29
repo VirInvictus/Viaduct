@@ -11,12 +11,16 @@
 //! `/proc/self/status` and reports pass/fail against the roadmap's 500 MB
 //! peak / 100–300 MB idle targets.
 //!
-//! Two checkpoints are reported:
+//! Three checkpoints are reported:
 //!
 //! - **post-DB peak** — exercises DB + parser + serde end-to-end.
 //! - **post-image-warmup peak** — adds 500 favicons (1 KB) + 50 images
 //!   (50 KB) routed through the real `ImageCache`, hitting LRU eviction
 //!   (cap is 250/kind so 500 favicons exercise the eviction path).
+//! - **post-reader-view peak** — runs `ui::reader_view::extract` against a
+//!   synthesized ~100 KB article HTML 10 times sequentially to surface any
+//!   cumulative leak in the readability extractor (`html5ever` DOM allocs
+//!   plus scoring tree walks are the riskiest path for the 500 MB ceiling).
 //!
 //! Usage:
 //!
@@ -45,6 +49,7 @@ const FAVICONS_TO_WARM: usize = 500;
 const IMAGES_TO_WARM: usize = 50;
 const SYNTH_FAVICON_BYTES: usize = 1024;
 const SYNTH_IMAGE_BYTES: usize = 50 * 1024;
+const READER_EXTRACTIONS: usize = 10;
 
 const PEAK_BUDGET_MB: u64 = 500;
 const IDLE_TARGET_LOW_MB: u64 = 100;
@@ -156,35 +161,62 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("peak RSS (VmHWM): {} MB", post_warm_peak);
     println!("current RSS (VmRSS): {} MB", post_warm_rss);
 
+    // ---------- Reader View extraction ----------
+    let reader_html = synth_reader_html();
+    let reader_url = "https://synthetic.example/article";
+    let reader_start = std::time::Instant::now();
+    let mut reader_ok = 0usize;
+    for _ in 0..READER_EXTRACTIONS {
+        match viaduct::ui::reader_view::extract(reader_url, Some(&reader_html)).await {
+            Ok(_) => reader_ok += 1,
+            Err(e) => eprintln!("reader_view::extract error: {}", e),
+        }
+    }
+    let reader_elapsed = reader_start.elapsed();
+
+    let post_reader_peak = read_vm_hwm_mb().unwrap_or(0);
+    let post_reader_rss = read_vm_rss_mb().unwrap_or(0);
+
+    println!("-- post-reader-view checkpoint --");
+    println!(
+        "extraction time: {:?} ({} of {} ok, input {} KB)",
+        reader_elapsed,
+        reader_ok,
+        READER_EXTRACTIONS,
+        reader_html.len() / 1024,
+    );
+    println!("peak RSS (VmHWM): {} MB", post_reader_peak);
+    println!("current RSS (VmRSS): {} MB", post_reader_rss);
+
     println!("== results ==");
     let mut failed = false;
-    if post_warm_peak > PEAK_BUDGET_MB {
+    if post_reader_peak > PEAK_BUDGET_MB {
         eprintln!(
             "FAIL: peak RSS {} MB exceeds hard budget of {} MB",
-            post_warm_peak, PEAK_BUDGET_MB
+            post_reader_peak, PEAK_BUDGET_MB
         );
         failed = true;
     } else {
         println!(
             "PASS: peak RSS {} MB under {} MB budget",
-            post_warm_peak, PEAK_BUDGET_MB
+            post_reader_peak, PEAK_BUDGET_MB
         );
     }
-    if post_warm_rss < IDLE_TARGET_LOW_MB {
+    if post_reader_rss < IDLE_TARGET_LOW_MB {
         println!(
             "NOTE: current RSS {} MB is below the {} MB lower idle target — synthetic corpus is smaller than a real-world subscription list.",
-            post_warm_rss, IDLE_TARGET_LOW_MB
+            post_reader_rss, IDLE_TARGET_LOW_MB
         );
-    } else if post_warm_rss > IDLE_TARGET_HIGH_MB {
+    } else if post_reader_rss > IDLE_TARGET_HIGH_MB {
         eprintln!(
             "FAIL: current RSS {} MB exceeds idle target of {} MB",
-            post_warm_rss, IDLE_TARGET_HIGH_MB
+            post_reader_rss, IDLE_TARGET_HIGH_MB
         );
         failed = true;
     } else {
         println!(
             "PASS: current RSS {} MB within idle band ({}–{} MB)",
-            post_warm_rss, IDLE_TARGET_LOW_MB, IDLE_TARGET_HIGH_MB
+            post_reader_rss, IDLE_TARGET_LOW_MB, IDLE_TARGET_HIGH_MB
         );
     }
     if hits < FAVICONS_TO_WARM + IMAGES_TO_WARM {
@@ -192,6 +224,13 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             "WARN: {} of {} cache fetches missed (synth server lossy?)",
             (FAVICONS_TO_WARM + IMAGES_TO_WARM) - hits,
             FAVICONS_TO_WARM + IMAGES_TO_WARM,
+        );
+    }
+    if reader_ok < READER_EXTRACTIONS {
+        eprintln!(
+            "WARN: {} of {} Reader View extractions failed",
+            READER_EXTRACTIONS - reader_ok,
+            READER_EXTRACTIONS,
         );
     }
 
@@ -202,6 +241,46 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Produces ~100 KB of synthetic article HTML in the shape readability
+/// expects: navigation/header/footer chrome, ad-shaped divs, then a long
+/// `<article>` body with many `<p>` tags carrying enough scored content for
+/// the extractor to lock on. We deliberately bury the article in noise so
+/// the scoring path actually runs.
+fn synth_reader_html() -> String {
+    let mut s = String::with_capacity(220 * 1024);
+    s.push_str("<!doctype html><html><head><title>Synthetic article</title>");
+    s.push_str("<style>body{font-family:sans-serif}</style>");
+    s.push_str("<script>window.tracker={};</script></head><body>");
+    s.push_str("<nav><a href=\"/\">Home</a> <a href=\"/about\">About</a></nav>");
+    s.push_str("<header><h1>Site title</h1><p>Tagline that's not the article body.</p></header>");
+    s.push_str("<aside class=\"sidebar\">");
+    for _ in 0..30 {
+        s.push_str("<div class=\"ad\"><a href=\"#\">Sponsored link</a></div>");
+    }
+    s.push_str("</aside>");
+    s.push_str("<article><h2>The article title</h2>");
+    let para = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. \
+        Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. \
+        Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris \
+        nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in \
+        reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla \
+        pariatur. Excepteur sint occaecat cupidatat non proident, sunt in \
+        culpa qui officia deserunt mollit anim id est laborum.";
+    for i in 0..200 {
+        s.push_str("<p>");
+        s.push_str(para);
+        s.push_str(&format!(
+            " Paragraph #{} for additional readability score.",
+            i
+        ));
+        s.push_str("</p>");
+    }
+    s.push_str("</article>");
+    s.push_str("<footer><p>Footer chrome that should also be stripped.</p></footer>");
+    s.push_str("</body></html>");
+    s
 }
 
 /// Spawns a tiny in-process HTTP/1.1 server on an ephemeral port serving

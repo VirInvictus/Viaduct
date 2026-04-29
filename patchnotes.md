@@ -1,5 +1,15 @@
 # viaduct — Patch Notes
 
+## v1.0.6 — Reader View Memory Gate (Phase 10 close-out)
+
+Closes the last unchecked Phase 10 item. The local readability extractor now has a quantified RSS budget instead of a hand-wave.
+
+- **`mem_check` adds a third checkpoint** that runs `ui::reader_view::extract` 10× sequentially against a synthesized ~100 KB article HTML. The HTML is shaped like a real-world page: navigation + header chrome at the top, 30 ad-shaped `<aside class="sidebar"><div class="ad">…</div>…</aside>` blocks, then a 200-paragraph `<article>` body with Lorem ipsum. The chrome/ad noise forces the readability scoring path to actually run rather than short-circuiting on a clean DOM.
+- **Current release-build delta**: 5 MB over the post-warmup peak (59 → 64 MB). All 10 extractions complete in ~25 ms total. The full harness peak (DB + image cache + Reader View) sits at ~64 MB, well under the 500 MB ceiling.
+- **Subprocess isolation deferred.** `reader_view.rs` documents that pattern as the fallback if in-process extraction blows the budget. With 5 MB / 10 extractions in-process, paying the IPC + process-spawn overhead would be a net loss.
+- **Pass/fail logic** now keys off the post-reader-view peak (the highest of the three), so any future regression in the readability path will surface here first.
+- **Harness still uses no new deps** — `tokio::net::TcpListener` for the HTTP fixture, `ui::reader_view::extract` for the extraction, `/proc/self/status` for the measurement.
+
 ## v1.0.5 — Image-Cache Memory Checkpoint (Phase 7 close-out)
 
 Closes the last unchecked Phase 7 item. `mem_check` now exercises the favicon + image cache end-to-end so the 500 MB peak budget covers the full warmed-cache scenario, not just the DB insert path.
