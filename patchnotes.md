@@ -1,5 +1,27 @@
 # viaduct — Patch Notes
 
+## v1.5.1 — Meson build wrapper
+
+Closes the last open Phase 0 / Phase 17 prep item: the project now builds via meson alongside cargo. Packagers and the Flatpak manifest no longer need hand-rolled `install -Dm755 …` invocations; a single `meson install` lays out the binary, gschema, themes, desktop entry, and AppStream metainfo into the canonical GNOME locations.
+
+### What ships
+
+- **`meson.build` at the repo root.** Drives `cargo build --release --package viaduct` via a `custom_target` (build always runs — cargo handles its own incremental tracking, meson stays out of Rust's dependency graph). Sets `CARGO_TARGET_DIR` to the meson build directory so out-of-tree builds Just Work.
+- **Install layout matches AppStream + freedesktop conventions.** Binary → `$prefix/bin/viaduct`. Gschema → `$prefix/share/glib-2.0/schemas/` (and `glib-compile-schemas` runs at install time via `meson.add_install_script`). Themes → `$prefix/share/viaduct/themes/`. Desktop entry → `$prefix/share/applications/`. AppData → `$prefix/share/metainfo/<id>.metainfo.xml` (renamed from the historical `appdata.xml` to match the current AppStream spec location).
+- **Flatpak manifest switched to `buildsystem: meson`.** `org.virinvictus.Viaduct.json` now ships `--prefix=/app` and `--buildtype=release` config-opts; the previous "simple" manifest with hand-rolled cargo+install commands is gone. Result is a much cleaner Flathub submission and a build that follows Flatpak conventions exactly.
+- **AppData release history updated** — the appdata.xml now lists every shipped release from v0.10 through v1.5.1 so AppStream-aware tools (gnome-software, KDE Discover) can show the user the version log on the store page.
+
+### What's still TODO (deliberate)
+
+- **Icons.** Once `data/icons/<size>/apps/<id>.png` lands, drop an `install_subdir('data/icons', install_dir: datadir / 'icons' / 'hicolor')` block into `meson.build`. The desktop file already references `Icon=org.virinvictus.Viaduct`; until the assets exist the system falls back to a generic icon. Tracked separately as part of the visual polish for the actual Flathub submission.
+
+### Verified
+
+- `meson setup builddir --prefix=/tmp/install` configures cleanly.
+- `meson compile -C builddir` runs `cargo build --release` and produces a real ELF binary.
+- `meson install -C builddir` lays out every file in the right place; `glib-compile-schemas` runs and produces `gschemas.compiled` inside the install prefix.
+- The cargo workflow is unchanged — `cargo build`, `cargo run`, `cargo test --workspace` all still work directly from the repo root.
+
 ## v1.5.0 — Cargo workspace refactor
 
 Closes the long-open Phase 16 "Workspace Refactoring" item. The single `viaduct` crate is split into a Cargo workspace with two members:

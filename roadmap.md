@@ -60,7 +60,7 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Cargo project skeleton with GTK4 / libadwaita / tokio / rusqlite / reqwest / quick-xml / ammonia.
 - [x] Module layout: `database/`, `network/`, `parser/`, `ui/`.
 - [x] Basic `adw::Application` window that opens and closes cleanly.
-- [ ] Meson build wrapper so `cargo` output can be packaged as Flatpak without hand-rolled plumbing. *(deferred to Phase 17)*
+- [x] Meson build wrapper so `cargo` output can be packaged as Flatpak without hand-rolled plumbing. *(shipped v1.5.1; `meson.build` at the repo root, Flatpak manifest switched to `buildsystem: meson`)*
 - [x] XDG path helpers: `$XDG_DATA_HOME/viaduct/` for OPML + DBs, `$XDG_CACHE_HOME/viaduct/` for images + favicons. *(v0.0.1)*
 - [x] Error type hierarchy via `thiserror` (`DatabaseError`, `NetworkError`, `ParseError`, `ViaductError`). *(v0.0.1)*
 - [x] `tracing-subscriber` configured with env-filter. *(v0.0.1)*

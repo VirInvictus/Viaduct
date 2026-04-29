@@ -51,8 +51,17 @@ sudo dnf install gtk4-devel libadwaita-devel webkitgtk6.0-devel
 # Debian/Ubuntu (24.04+)
 sudo apt install libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev
 
-# Build via Cargo
-cargo build --release
+# Build via Cargo (workspace root):
+cargo build --release      # binary lands at target/release/viaduct
+cargo run --release        # launch the GTK app
+
+# OR: build via Meson — produces a system-style install layout for
+# packagers / Flathub. Mirrors the path Flatpak takes during build:
+sudo dnf install meson ninja-build glib2-devel    # Fedora
+sudo apt install meson ninja-build libglib2.0-bin # Debian/Ubuntu
+meson setup builddir --prefix=/usr -Dbuildtype=release
+meson compile -C builddir
+sudo meson install -C builddir
 ```
 
 ## Architecture

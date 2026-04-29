@@ -24,12 +24,10 @@
     "modules": [
         {
             "name": "viaduct",
-            "buildsystem": "simple",
-            "build-commands": [
-                "cargo build --release",
-                "install -Dm755 target/release/viaduct /app/bin/viaduct",
-                "install -Dm644 data/org.virinvictus.Viaduct.gschema.xml /app/share/glib-2.0/schemas/org.virinvictus.Viaduct.gschema.xml",
-                "glib-compile-schemas /app/share/glib-2.0/schemas"
+            "buildsystem": "meson",
+            "config-opts": [
+                "--prefix=/app",
+                "--buildtype=release"
             ],
             "sources": [
                 {
