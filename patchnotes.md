@@ -1,5 +1,12 @@
 # viaduct — Patch Notes
 
+## v1.0.11 — Auto-reload Timeline After Refresh
+
+The "I refreshed and the timeline still looks empty" trap. v1.0.10's force-refresh actually fetched 4988 articles for a 110-feed corpus — but the displayed timeline pane held the pre-refresh result (often empty after an articles.sqlite delete) until the user clicked another sidebar item to force a re-fetch.
+
+- **`ViaductWindow::reload_current_timeline`**: pulls the current selection from the sidebar `SingleSelection`, runs the same per-item dispatch the `connect_selection_changed` handler uses (Feed → `fetch_articles_by_feed`, SmartFeed → `Today`/`All Unread`/`Starred`, Folder → `fetch_folder_articles`), repopulates the timeline `ListStore`, and re-runs `refresh_timeline_statuses` so the new rows pick up read/starred state. Reuses the existing helpers verbatim — no new query paths.
+- **`act_refresh` and `refresh_specific_feeds`** now call it from the `glib::spawn_future_local` completion alongside `refresh_unread_counts()`. So after every refresh cycle: sidebar badges update, the article DB has the new rows, AND the timeline pane displays them. No more "click another feed to see updates" workaround.
+
 ## v1.0.10 — Manual Refresh Bypasses Cache + Toast Feedback
 
 Fixes the "I clicked refresh and nothing happened" trap. After a user deletes `articles.sqlite` (or just clicks refresh more than once in 29 minutes), every feed had stale `last_check_date` / `content_hash` / conditional-GET state in `feed-settings.sqlite` — and the refresher silently skipped them. Manual clicks now bypass every short-circuit and produce a toast either way.

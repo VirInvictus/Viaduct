@@ -1004,6 +1004,11 @@ impl ViaductWindow {
                 window.dispatch_refresh_notification(tally.new_articles);
                 window.show_refresh_toast(tally);
                 window.refresh_unread_counts();
+                // Re-fetch the timeline for the currently-selected sidebar
+                // item so newly-fetched articles appear without the user
+                // having to click around. Without this, the timeline shows
+                // stale (often empty) results until the next sidebar click.
+                window.reload_current_timeline();
                 window.imp().batch_update.end();
             }
         });
@@ -1283,6 +1288,47 @@ impl ViaductWindow {
     /// once to apply, and propagates folder/group totals as the sum of their
     /// children. The notify::unread-count signal on each `TreeNode` drives
     /// the actual badge re-render (see `apply_unread_badge` in sidebar.rs).
+    /// Re-fetch + re-populate the timeline pane for whatever sidebar item
+    /// is currently selected. Called after a refresh cycle so newly-fetched
+    /// articles appear without the user needing to click around the sidebar.
+    /// No-op when nothing is selected.
+    pub(crate) fn reload_current_timeline(&self) {
+        let imp = self.imp();
+        let Some(model) = imp.sidebar_list_view.model() else {
+            return;
+        };
+        let Some(sel) = model.downcast_ref::<gtk::SingleSelection>() else {
+            return;
+        };
+        let Some(item) = selected_sidebar_item(sel) else {
+            return;
+        };
+        let Some(store) = imp.timeline_store.get().cloned() else {
+            return;
+        };
+        let account = self.account();
+        glib::spawn_future_local(async move {
+            let result: crate::error::Result<Vec<_>> = match item {
+                SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id).await,
+                SidebarItem::SmartFeed(name) => match name.as_str() {
+                    "Today" => account.fetch_today_articles().await,
+                    "All Unread" => account.fetch_unread_articles().await,
+                    "Starred" => account.fetch_starred_articles().await,
+                    _ => Ok(Vec::new()),
+                },
+                SidebarItem::Folder(folder) => fetch_folder_articles(&account, &folder).await,
+                SidebarItem::SmartFeedGroup => Ok(Vec::new()),
+            };
+            match result {
+                Ok(articles) => {
+                    populate_timeline(&store, articles);
+                    refresh_timeline_statuses(account.clone(), store.clone());
+                }
+                Err(e) => tracing::warn!(?e, "reload_current_timeline failed"),
+            }
+        });
+    }
+
     pub(crate) fn refresh_unread_counts(&self) {
         let Some(controller) = self.imp().sidebar_tree_controller.get().cloned() else {
             return;
@@ -1454,6 +1500,7 @@ impl ViaductWindow {
             if let Some(window) = window_weak.upgrade() {
                 window.dispatch_refresh_notification(tally.new_articles);
                 window.refresh_unread_counts();
+                window.reload_current_timeline();
             }
         });
     }
