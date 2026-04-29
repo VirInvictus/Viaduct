@@ -147,23 +147,24 @@ pub const THEMES: &[Theme] = &[
 ];
 
 /// Install a CSS provider on the default `gdk::Display` overriding
-/// libadwaita's `accent_bg_color` / `accent_color` to match the chosen
-/// article theme. Replaces any prior `accent_provider` so theme switches
-/// are instant (no app restart). The provider sits at
-/// `gtk::STYLE_PROVIDER_PRIORITY_APPLICATION` so user GTK CSS still wins
-/// for any overrides users have intentionally made.
+/// libadwaita's accent throughout the GTK chrome to match the chosen
+/// article theme. Replaces any prior provider so theme switches are
+/// instant (no app restart).
 ///
-/// libadwaita 1.7's stylesheet derives `accent-fg-color`,
-/// `accent-bg-color-light`, and the various focus / hover variants from
-/// the base accent automatically — this single override propagates to
-/// every selection ring, focus ring, switch, button, link, and toggle
-/// in the GTK chrome.
+/// libadwaita 1.7 propagates GNOME's system accent (e.g. the
+/// `org.gnome.desktop.interface accent-color` GSetting) via internal
+/// style channels that win against generic `@define-color` overrides at
+/// any priority. To beat that we register at
+/// `STYLE_PROVIDER_PRIORITY_USER + 100` AND target the highest-traffic
+/// accent-coloured widgets by selector — sidebar selection, focus
+/// rings, switches, checks, suggested-action buttons, links.
+///
+/// `@define-color` redirects are kept for stylesheets that consult the
+/// named-color cascade directly (rare in libadwaita 1.7+ but free
+/// insurance).
 pub fn apply_app_accent(hex: &str) {
     use std::cell::RefCell;
     thread_local! {
-        // Hold onto the active provider so we can swap it on theme change
-        // without leaking the previous one. RefCell because the access is
-        // GTK-thread-local and we never alias it.
         static ACTIVE_PROVIDER: RefCell<Option<gtk::CssProvider>> = const {
             RefCell::new(None)
         };
@@ -172,24 +173,76 @@ pub fn apply_app_accent(hex: &str) {
         tracing::warn!("article_renderer: no default Gdk display — accent skipped");
         return;
     };
+    // Beat libadwaita's system-accent integration (which sits at USER
+    // priority on GNOME 47+).
+    const ACCENT_PRIORITY: u32 = gtk::STYLE_PROVIDER_PRIORITY_USER + 100;
+
+    let fg = "#ffffff";
     let css = format!(
+        // 1. Legacy @define-color cascade — read by older stylesheets
+        //    and any custom widget that asks for the named colors.
         "@define-color accent_bg_color {hex};\n\
-         @define-color accent_color {hex};\n"
+         @define-color accent_color {hex};\n\
+         @define-color accent_fg_color {fg};\n\
+         \n\
+         /* 2. CSS custom properties — libadwaita 1.7's primary path. */\n\
+         :root {{\n\
+           --accent-bg-color: {hex};\n\
+           --accent-color: {hex};\n\
+           --accent-fg-color: {fg};\n\
+         }}\n\
+         \n\
+         /* 3. Selector-targeted overrides for the highest-visibility\n\
+          *    accent surfaces. These win unconditionally because GTK\n\
+          *    matches them on widget paths and we sit at higher\n\
+          *    priority than libadwaita's accent integration. */\n\
+         \n\
+         /* Suggested-action / accent buttons. */\n\
+         button.suggested-action,\n\
+         button.accent {{\n\
+           background-color: {hex};\n\
+           color: {fg};\n\
+         }}\n\
+         \n\
+         /* Toggles and check states. */\n\
+         switch:checked > slider {{ background-color: {fg}; }}\n\
+         switch:checked {{ background-color: {hex}; }}\n\
+         checkbutton check:checked,\n\
+         checkbutton radio:checked,\n\
+         menu check:checked,\n\
+         menu radio:checked {{ background-color: {hex}; color: {fg}; }}\n\
+         \n\
+         /* List & sidebar selection — the single biggest visual cue. */\n\
+         listview > row:selected,\n\
+         listview > row:selected:focus,\n\
+         listview > row:selected:hover,\n\
+         row.activatable:selected,\n\
+         row.activatable:selected:focus,\n\
+         row.activatable:selected:hover {{\n\
+           background-color: alpha({hex}, 0.20);\n\
+           color: {hex};\n\
+         }}\n\
+         \n\
+         /* Text selection. */\n\
+         selection {{ background-color: alpha({hex}, 0.35); color: inherit; }}\n\
+         \n\
+         /* Focus rings. */\n\
+         :focus-visible {{ outline-color: {hex}; }}\n\
+         \n\
+         /* Link buttons / inline links. */\n\
+         button.link, button.link:hover {{ color: {hex}; }}\n\
+         \n\
+         /* AdwAvatar accent fallback when no custom-image is set. */\n\
+         avatar.accent {{ background-color: alpha({hex}, 0.30); color: {hex}; }}\n",
     );
+
     let provider = gtk::CssProvider::new();
     provider.load_from_string(&css);
     ACTIVE_PROVIDER.with(|cell| {
-        // Swap providers atomically on the GTK thread — remove the old
-        // one (if any) before adding the new so the cascade re-resolves
-        // cleanly.
         if let Some(old) = cell.borrow_mut().take() {
             gtk::style_context_remove_provider_for_display(&display, &old);
         }
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
+        gtk::style_context_add_provider_for_display(&display, &provider, ACCENT_PRIORITY);
         *cell.borrow_mut() = Some(provider);
     });
 }
