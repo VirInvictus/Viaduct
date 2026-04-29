@@ -59,7 +59,12 @@ fn main() -> glib::ExitCode {
     let account_for_activate = account.clone();
     app.connect_activate(move |app| build_ui(app, account_for_activate.clone()));
 
-    app.run()
+    // Strip our own `--debug` flag from argv before handing it to GTK —
+    // GApplication parses argv itself and bails on unknown options.
+    // `init_tracing` already pulled the flag's intent into the global
+    // DEBUG_MODE atomic, so the filtered argv is fully equivalent.
+    let args: Vec<String> = std::env::args().filter(|a| a != "--debug").collect();
+    app.run_with_args(&args)
 }
 
 fn init_tracing() {
