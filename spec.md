@@ -47,15 +47,26 @@ viaduct completely isolates the network and data layers from the UI thread using
 
 **Thread Safety:** A dedicated writer task owns both SQLite connections. The GTK thread only ever reads from local models or sends commands down the channel — it never waits on a network socket or a database write.
 
-### 2.2 Native Render Pipeline (No WebKit)
+### 2.2 Neutered WebKit Render Pipeline
 
-Web engines are memory black holes. To hit the 250MB RAM target, viaduct uses native GTK widgets.
+Unconstrained web engines are memory black holes. viaduct ships **exactly one** `WebKitWebView` instance for the article reading pane, configured to give WebKit zero direct internet access and zero scripting surface.
 
-1. **Fetch:** Raw XML is fetched and parsed via `quick-xml`.
-2. **Sanitize:** The HTML payload is stripped of scripts, iframes, trackers, and inline styles using `ammonia`.
-3. **Map:** The clean HTML is parsed into `GtkTextTag` elements (bold, italic, blockquote, code) and rendered in a `GtkTextView`.
-4. **Assets:** Images are downloaded asynchronously, cached to disk, and rendered inline via `GdkTexture`.
-5. **Escape Hatch:** If a user needs the interactive webpage, pressing `Enter` pipes the URL to their default system browser.
+1. **Fetch:** Raw XML is fetched and parsed via `quick-xml`. CDATA-wrapped bodies are captured via the same path as `Event::Text`.
+2. **Sanitize + rewrite:** The HTML payload runs through `ammonia::Builder` with `viaduct-img` added to `url_schemes`. An `attribute_filter` rewrites every `<img src="https://…">` to `viaduct-img://i/<percent-encoded-original>`. Scripts / iframes / inline styles / trackers are stripped in the same pass.
+3. **Theme + render:** Sanitized body is fed into one of 8 NetNewsWire-ported `.nnwtheme` bundles (Sepia / Appanoose / Biblioteca / Hyperlegible / NewsFax / Promenade / Tiqoe Dark / Verdana Revival) via a port of NNW's `MacroProcessor` (`[[key]]` substitution). The themed result is wrapped in a page template carrying a strict CSP meta tag.
+4. **Lockdown profile** applied to the WebView at construction:
+    * **JavaScript: off** (runtime + HTML5 inline `<script>` markup).
+    * **WebGL / WebRTC / plugins / DevTools: off.**
+    * **HTML5 LocalStorage / IndexedDB / app cache: off.**
+    * **`media_playback_requires_user_gesture(true)`** — no autoplay.
+    * **`javascript_can_open_windows_automatically(false)`** — belt-and-braces.
+    * **Back-forward gestures, fullscreen: off.**
+5. **CSP enforcement** in the page wrapper:
+    `default-src 'none'; img-src viaduct-img: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
+6. **`viaduct-img://` URI scheme handler** routes every image lookup through our `ImageCache` (memory LRU → disk → network). WebKit can render images, but every byte travels through the cache, and no other origin can load anything.
+7. **Link interception:** `decide-policy` cancels every `LinkClicked` / `FormSubmitted` / `NewWindowAction` and shells the URL out to `xdg-open` (system browser). `Other` / `Reload` / `BackForward` allowed through so `load_html`'s synthetic about:blank works.
+8. **Hover URL overlay:** `mouse-target-changed` updates a `gtk::Label` overlay (osd + caption) in the bottom-left so the user can preview link destinations.
+9. **Memory:** real-world session peak measured at **292 MB / 500 MB budget**. Locked-down WebProcess sits ~210 MB; main process stays clean.
 
 ### 2.3 Widget Tree
 
@@ -73,8 +84,9 @@ AdwApplicationWindow
 │   └── [content] AdwNavigationSplitView
 │       ├── [sidebar] GtkScrolledWindow
 │       │   └── GtkListView (Article List — recycled via GtkSignalListItemFactory)
-│       └── [content] GtkScrolledWindow
-│           └── GtkTextView (Article Body)
+│       └── [content] GtkOverlay
+│           ├── GtkScrolledWindow → WebKitWebView (article body)
+│           └── GtkLabel url_overlay (hover URL preview, bottom-left)
 └── [bottom] GtkActionBar (refresh progress / background tasks)
 ```
 
@@ -166,15 +178,18 @@ To enforce the memory and disk footprint, the database is regularly vacuumed.
 
 ### Rust Crates (Backend)
 * `tokio`: Async runtime.
-* `reqwest`: HTTP client (with TLS).
+* `reqwest`: HTTP client (with `rustls-tls`, `gzip`, `brotli`).
 * `quick-xml`: Zero-allocation XML parsing.
-* `ammonia`: Strict HTML sanitization.
-* `rusqlite`: SQLite bindings.
+* `ammonia`: Strict HTML sanitization with `viaduct-img://` allowlisted via `Builder::add_url_schemes`.
+* `rusqlite`: SQLite bindings (bundled, FTS5).
 * `crossbeam-channel`: Main/Worker thread communication.
+* `readability`: Local Reader View extraction.
+* `oo7`: libsecret credential storage (Inoreader OAuth tokens).
 
 ### C/GTK Libraries (Frontend)
 * `gtk4` (via `gtk4-rs`): Minimum 4.16.
 * `libadwaita` (via `libadwaita-rs`): Minimum 1.7.
+* `webkitgtk-6.0` (via `webkit6` 0.4): Minimum 2.42; the article reading pane runs a single neutered instance — see §2.2.
 
 ---
 

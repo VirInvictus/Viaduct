@@ -1,5 +1,44 @@
 # viaduct — Patch Notes
 
+## v1.1.0 — Phase 6: Neutered WebKit Article Pane
+
+The article reading pane is now a single locked-down `WebKitWebView` rendering through the full NetNewsWire theme stack. Closes Phase 6 of the roadmap. **Real-world session peak: 292 MB / 500 MB budget.**
+
+Built up across six pre-release commits (`v1.1.0-pre1` through `v1.1.0-pre6`):
+
+### What ships
+
+- **8 NetNewsWire themes ported byte-for-byte**: Sepia, Appanoose, Biblioteca, Hyperlegible, NewsFax, Promenade, Tiqoe Dark, Verdana Revival. Each is a `(template.html, stylesheet.css)` pair embedded at compile time via `include_str!`. Sepia for light, Tiqoe Dark for dark; user-facing picker queued for v1.2.0.
+- **Macro substitution engine** (`render_with_macros`): linear-scan port of NNW's `RSCore.MacroProcessor.processMacros()`. `[[key]]` delimiters; unknown keys preserved as literal `[[key]]`. `ArticleSubstitutions` mirrors NNW's `articleSubstitutions()` exactly so bundled themes work without modification.
+- **Strict `WebKitSettings`**: JS / WebGL / WebRTC / plugins / DevTools / LocalStorage / IndexedDB / app cache / fullscreen / window-open / media-autoplay / back-forward gestures all OFF. `media_playback_requires_user_gesture(true)`.
+- **`viaduct-img://` URI scheme** on the default `WebContext`. Article HTML's `<img src="https://…">` is rewritten to `viaduct-img://i/<percent-encoded-original>` via `ammonia::Builder::attribute_filter`. The scheme handler clones the URISchemeRequest GObject, hops to `glib::spawn_future_local`, then to tokio for `ImageCache::image()`, then back to GTK to call `request.finish()` with a `gio::MemoryInputStream`. WebKit gets ZERO direct internet access.
+- **Strict CSP** in `data/themes/page.html`: `default-src 'none'; img-src viaduct-img: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. Belt-and-braces — even with JS off, no scripts / fonts / frames / analytics beacons / trackers can reach the network.
+- **Link interception** via `decide-policy`: every `LinkClicked` / `FormSubmitted` / `NewWindowAction` cancels the WebView navigation and shells the URL out to `xdg-open`. The synthetic about:blank load that backs `WebView::load_html` (NavigationType `Other`) passes through.
+- **Hover URL overlay**: `gtk::Label` overlay child of the article-pane `GtkOverlay`, `osd` + `caption` style classes, halign=start / valign=end / can-target=False. `install_hover_url_overlay` connects `mouse-target-changed` so hovered link URLs surface in the bottom-left corner.
+- **At-exit memory summary log**: every session emits `session exit: memory summary rss_mb=… peak_mb=… budget_mb=500` so the cost of any feature regression is visible in any log.
+- **Debug-mode periodic memory ticker**: `viaduct::spawn_debug_memory_ticker` reads `/proc/self/status` on a random 8–25 second cadence (avoids regular intervals that could mask jitter).
+
+### Files
+
+- New: `src/ui/article_renderer.rs`, `data/themes/{sepia,appanoose,biblioteca,hyperlegible,newsfax,promenade,tiqoe_dark,verdana_revival}/{template.html,stylesheet.css,Info.plist}`, `data/themes/page.html`.
+- Deleted: `src/ui/article.rs` (the old `GtkTextTag` walker — no callers remain).
+- Modified: `src/ui/window.{rs,ui}`, `src/main.rs`, `Cargo.toml` (`webkit6 = "0.4"` matched to gtk4 0.9 / libadwaita 0.7 generation), `README.md` (build-deps for `webkitgtk6.0-devel` / `libwebkitgtk-6.0-dev`).
+
+### Memory profile
+
+`mem_check` peak (DB + image cache + Reader View, headless): 64 MB. Adding the WebKit article pane in real-world use takes the session to **~292 MB peak / 500 MB budget**, well within the spec's 100–300 MB idle band. Locked-down WebProcess accounts for ~210 MB; main process stays clean. Stable across a 2-minute session — no leak.
+
+### NNW deviations logged
+
+- WebKitGTK 6.0 instead of macOS `WKWebView` (the obvious port deviation).
+- `viaduct-img://` instead of NNW's `nnwImageIcon://` (different cache shape — NNW caches by article ID, we cache by image URL).
+- Macro processor is a clean Rust port of `RSCore.MacroProcessor`; identical semantics, identical delimiters, no third-party templating crate.
+
+### Known follow-ups
+
+- **User-facing theme picker** (v1.2.0): GSettings key + `AdwPreferencesDialog` row for theme selection. The 8 themes are already wired by id.
+- **`max-width: 44em` enforcement** is carried by the NNW theme stylesheets natively; spec mention is satisfied via the bundled CSS rather than a separate constraint.
+
 ## v1.0.11 — Auto-reload Timeline After Refresh
 
 The "I refreshed and the timeline still looks empty" trap. v1.0.10's force-refresh actually fetched 4988 articles for a 110-feed corpus — but the displayed timeline pane held the pre-refresh result (often empty after an articles.sqlite delete) until the user clicked another sidebar item to force a re-fetch.

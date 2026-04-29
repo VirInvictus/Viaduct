@@ -114,15 +114,16 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Unread-count badges on sidebar rows, recalculated off `StatusesTable` deltas.
 - [x] Folder selection aggregates articles from all child feeds (newest-first). *(`fetch_folder_articles` in `window.rs`)*
 
-## Phase 6: World-Class Typography via Neutered WebKit
-- [ ] Transition from `GtkTextView` to exactly ONE heavily constrained `WebKitWebView` instance.
-- [ ] Enforce strict `WebKitSettings`: disable JavaScript, plugins, WebGL, and Local Storage.
-- [ ] Implement strict Content Security Policies (CSP) to block background network requests and trackers.
-- [ ] Port NetNewsWire theme bundles (`.nnwtheme`) as CSS variables to achieve flawless typography (Sepia, Gruvbox, etc.).
-- [ ] Enforce typographic constraints: `max-width: 44em` for the reading column.
+## Phase 6: World-Class Typography via Neutered WebKit *(shipped v1.1.0)*
+- [x] Transition from `GtkTextView` to exactly ONE heavily constrained `WebKitWebView` instance. *(v1.1.0-pre1; deleted `src/ui/article.rs`, added `src/ui/article_renderer.rs`, `webkit6 = "0.4"` dep)*
+- [x] Enforce strict `WebKitSettings`: disable JavaScript, plugins, WebGL, and Local Storage. *(`apply_locked_down_settings` — also disables WebRTC, IndexedDB, app cache, fullscreen, back-forward gestures, JS-window-open, media autoplay)*
+- [x] Implement strict Content Security Policies (CSP) to block background network requests and trackers. *(v1.1.0-pre4; `default-src 'none'; img-src viaduct-img: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` in `data/themes/page.html`)*
+- [x] Port NetNewsWire theme bundles (`.nnwtheme`) as CSS variables to achieve flawless typography. *(v1.1.0-pre2; all 8 themes — Sepia, Appanoose, Biblioteca, Hyperlegible, NewsFax, Promenade, Tiqoe Dark, Verdana Revival — bundled byte-for-byte via `include_str!`. Macro engine `render_with_macros` is a port of NNW's `RSCore.MacroProcessor.processMacros()`. `select_for_dark_mode` pairs Sepia ↔ Tiqoe Dark; user-facing theme picker queued for v1.2.0.)*
+- [x] Enforce typographic constraints: `max-width: 44em` for the reading column. *(carried natively by the bundled NNW theme stylesheets)*
 - [x] Baseline: `ammonia` whitelist configuration (strip scripts, iframes, inline styles, trackers).
-- [ ] Link handling: wire WebKit's hover signals to a native `UrlOverlay` (Phase 2 improvements).
-- [ ] Image `<img>` tags: handled natively by WebKit with disk-cache support.
+- [x] Link handling: wire WebKit's hover signals to a native `UrlOverlay`. *(v1.1.0-pre5; `gtk::Label` overlay child with `osd` + `caption` style classes, halign=start / valign=end / can-target=False. `install_hover_url_overlay` connects `mouse-target-changed`.)*
+- [x] Image `<img>` tags: handled natively by WebKit with disk-cache support. *(v1.1.0-pre4; `viaduct-img://` URI scheme registered on the default `WebContext`. `sanitize_and_rewrite_image_srcs` rewrites every `img@src` http(s)→viaduct-img via `ammonia::Builder::attribute_filter`. The scheme handler clones the URISchemeRequest GObject, hops to tokio for `ImageCache::image()`, then back to GTK to call `request.finish()` with a `MemoryInputStream`.)*
+- [x] Memory checkpoint: real-world session peak measured at **292 MB / 500 MB budget**. *(v1.1.0-pre6; at-exit `log_session_memory_summary()` always-on, plus the `--debug` periodic ticker)*
 
 ## Phase 7: Asset & Memory Management
 - [x] `IconImageCache` analog: favicon fetch → disk cache in `$XDG_CACHE_HOME/viaduct/favicons/`. *(`network::cache::ImageCache::favicon`)*
