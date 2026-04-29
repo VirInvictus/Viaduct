@@ -58,6 +58,17 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     // Feed management
     register(window, "add-feed", |w| w.act_add_feed());
 
+    // Context-menu actions on the right-clicked sidebar feed / folder.
+    // Read the `right_clicked_feed` / `right_clicked_folder` RefCell
+    // populated by the gesture handler before the popover was shown.
+    register(window, "refresh-feed", |w| w.act_refresh_clicked_feed());
+    register(window, "copy-feed-url", |w| w.act_copy_clicked_feed_url());
+    register(window, "delete-feed", |w| w.act_delete_clicked_feed());
+    register(window, "mark-feed-read", |w| w.act_mark_clicked_feed_read());
+    register(window, "mark-folder-read", |w| {
+        w.act_mark_clicked_folder_read()
+    });
+
     // OPML import/export — menu only, no accelerators (NNW does the same).
     register(window, "import-opml", |w| w.act_import_opml());
     register(window, "export-opml", |w| w.act_export_opml());

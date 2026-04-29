@@ -1,5 +1,45 @@
 # viaduct — Patch Notes
 
+## v1.7.1 — Right-click context menus
+
+The other half of v1.7.0's "obvious missing UI" round.
+
+### Sidebar — feed rows
+
+Right-click a feed in the sidebar to open a context menu with three sections:
+
+1. **Mark All as Read** — fetches every article from the right-clicked feed and marks them all read in one batch. Doesn't change the timeline pane (you weren't looking at this feed; we shouldn't yank you to it).
+2. **Refresh** + **Copy Feed URL** — single-feed refresh fires `refresh_specific_feeds([feed])`. Copy URL lands in `gtk::Clipboard` with a toast confirming.
+3. **Delete Feed** — destructive-styled, opens an `AdwAlertDialog` with the feed name in the title and an explicit "this cannot be undone" warning. Confirm calls `Account::remove_feed(url)` (added in v1.7.0 in anticipation of this), reloads the sidebar, toast confirms. Article rows pruned by the next `cleanup_at_startup` cycle.
+
+### Sidebar — folder rows
+
+Smaller menu — just **Mark All as Read**, which walks the folder's feeds, fetches all articles, and marks them all read in one upsert.
+
+### Timeline — article rows
+
+Right-click an article in the timeline to open a context menu with:
+
+1. **Toggle Read** + **Toggle Star** — same actions as `r` / `s` shortcuts.
+2. **Open in Browser** + **Open Enclosure** + **Copy URL** — same actions as `b` / `Ctrl+Enter` / `Ctrl+Shift+C`.
+
+The right-click also auto-selects the row before showing the popover, so existing `timeline_selection`-bound actions operate on the right-clicked article without us having to introduce a parallel `right_clicked_article` state. Cleaner than the sidebar path because timeline actions were already selection-driven; sidebar actions weren't.
+
+### How the wiring works
+
+Single `gtk::GestureClick` per list view (not per row), in BUBBLE phase. On right-click, `widget.pick(x, y)` returns the leaf widget under the cursor; we walk up `parent()` looking for an ancestor with `viaduct-article` (timeline) or `viaduct-sidebar-item` (sidebar) data attached. The data is set during the row factory's `connect_bind` via `unsafe set_data` and gets overwritten cleanly when the row recycles to a new model object.
+
+This avoided changing `setup_timeline_list_view` / `setup_sidebar_list_view` signatures to accept a callback parameter, which would have required threading a `glib::WeakRef<ViaductWindow>` through the `sidebar.rs` / `timeline.rs` modules and creating a circular type dependency. Trade-off was a small `unsafe` block on each side of the parent-walk; same pattern we already use for `viaduct-read-handler` (the per-row `notify::read` signal handler in `timeline.rs:366`).
+
+### What's not yet wired
+
+- **Mark Above Read** / **Mark Below Read** in the timeline menu — NNW has these and they're useful. Skipped for v1.7.1 to keep this release focused; a future release can add them once we decide whether they should respect the current sort direction or always go strictly chronological.
+- **Rename Feed** — would need a one-line `AdwEntryRow` mini-dialog. Not user-blocking; deferred.
+
+### Test status
+
+77 + 12 = 89 unit tests across the workspace, 1 integration. fmt + clippy clean.
+
 ## v1.7.0 — Add Feed dialog (the obvious missing feature)
 
 Until v1.7.0 the only way to add a feed to Viaduct was OPML import. v1.0.0 → v1.6.0 shipped a complete feed reader that didn't *let you add feeds*. Brandon caught it the right way — by laughing about it. Fixed.

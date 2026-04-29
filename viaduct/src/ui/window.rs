@@ -90,6 +90,22 @@ mod imp {
         /// Detected video source for the currently-rendered article, if any.
         /// Drives `play_video_btn` visibility and the click handler.
         pub current_video: RefCell<Option<crate::network::video_thumbs::VideoSource>>,
+        /// Right-click context-menu state (v1.7.1). Populated by the
+        /// gesture-click handlers on the sidebar / timeline list views
+        /// before the popover is shown; the `act_*_feed` and
+        /// `act_*_article` action bodies read from these cells. Refcells
+        /// rather than passing arguments because gio::Action callbacks
+        /// don't carry per-invocation data, only the action target value.
+        pub right_clicked_feed: RefCell<Option<crate::models::Feed>>,
+        pub right_clicked_folder: RefCell<Option<crate::models::Folder>>,
+        pub right_clicked_article: RefCell<Option<crate::models::Article>>,
+        /// Popover-menu widgets, constructed lazily via `gio::Menu` ->
+        /// `gtk::PopoverMenu::from_model` and parented to their list view.
+        /// Stored on the window so we don't rebuild the popover on every
+        /// right-click — set_pointing_to + popup() reuses the same widget.
+        pub sidebar_feed_popover: OnceCell<gtk::PopoverMenu>,
+        pub sidebar_folder_popover: OnceCell<gtk::PopoverMenu>,
+        pub timeline_popover: OnceCell<gtk::PopoverMenu>,
     }
 
     /// Captured state for whatever article is currently on-screen.
@@ -586,6 +602,146 @@ impl ViaductWindow {
 
         self.wire_search(timeline_store);
         self.wire_play_video_button();
+        self.wire_context_menus();
+    }
+
+    /// Build the three right-click popover menus (timeline rows,
+    /// sidebar feeds, sidebar folders) and attach `gtk::GestureClick`
+    /// controllers to the list views that fire them.
+    ///
+    /// The hit-testing strategy is `widget.pick(x, y)` to get the leaf
+    /// widget under the cursor, then walk up parents looking for a
+    /// widget that has `viaduct-article` / `viaduct-sidebar-item` data
+    /// attached during the row factory's `connect_bind`. That's how we
+    /// recover the bound model object for the row the user right-
+    /// clicked, without restructuring `setup_sidebar_list_view` or
+    /// `setup_timeline_list_view` to accept a callback parameter.
+    fn wire_context_menus(&self) {
+        use gtk::gdk;
+
+        // ---- Timeline popover ----
+        // Operates on the currently-selected article — the gesture
+        // handler manually selects the right-clicked row first so the
+        // existing `toggle-read` / `toggle-star` / `open-in-browser` /
+        // `copy-url` / `open-enclosure` actions all have the right
+        // article in `timeline_selection`.
+        let timeline_menu = gio::Menu::new();
+        let status_section = gio::Menu::new();
+        status_section.append(Some("Toggle Read"), Some("win.toggle-read"));
+        status_section.append(Some("Toggle Star"), Some("win.toggle-star"));
+        timeline_menu.append_section(None, &status_section);
+        let open_section = gio::Menu::new();
+        open_section.append(Some("Open in Browser"), Some("win.open-in-browser"));
+        open_section.append(Some("Open Enclosure"), Some("win.open-enclosure"));
+        open_section.append(Some("Copy URL"), Some("win.copy-url"));
+        timeline_menu.append_section(None, &open_section);
+
+        let timeline_popover = gtk::PopoverMenu::from_model(Some(&timeline_menu));
+        timeline_popover.set_has_arrow(false);
+        timeline_popover.set_parent(&self.imp().timeline_list_view.get());
+        let _ = self.imp().timeline_popover.set(timeline_popover);
+
+        let timeline_gesture = gtk::GestureClick::new();
+        timeline_gesture.set_button(gdk::BUTTON_SECONDARY);
+        let window_weak = self.downgrade();
+        timeline_gesture.connect_pressed(move |_, _n_press, x, y| {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let listview = window.imp().timeline_list_view.get();
+            let Some(article) = pick_article_at(listview.upcast_ref::<gtk::Widget>(), x, y) else {
+                return;
+            };
+            // Synchronise the selection to the right-clicked row so the
+            // existing actions operate on it.
+            window.select_timeline_article_by_id(&article.article_id);
+            window.show_timeline_popover(x, y);
+        });
+        self.imp()
+            .timeline_list_view
+            .add_controller(timeline_gesture);
+
+        // ---- Sidebar feed popover ----
+        let feed_menu = gio::Menu::new();
+        let read_section = gio::Menu::new();
+        read_section.append(Some("Mark All as Read"), Some("win.mark-feed-read"));
+        feed_menu.append_section(None, &read_section);
+        let net_section = gio::Menu::new();
+        net_section.append(Some("Refresh"), Some("win.refresh-feed"));
+        net_section.append(Some("Copy Feed URL"), Some("win.copy-feed-url"));
+        feed_menu.append_section(None, &net_section);
+        let danger_section = gio::Menu::new();
+        danger_section.append(Some("Delete Feed"), Some("win.delete-feed"));
+        feed_menu.append_section(None, &danger_section);
+
+        let feed_popover = gtk::PopoverMenu::from_model(Some(&feed_menu));
+        feed_popover.set_has_arrow(false);
+        feed_popover.set_parent(&self.imp().sidebar_list_view.get());
+        let _ = self.imp().sidebar_feed_popover.set(feed_popover);
+
+        // ---- Sidebar folder popover (smaller — just mark-read) ----
+        let folder_menu = gio::Menu::new();
+        folder_menu.append(Some("Mark All as Read"), Some("win.mark-folder-read"));
+        let folder_popover = gtk::PopoverMenu::from_model(Some(&folder_menu));
+        folder_popover.set_has_arrow(false);
+        folder_popover.set_parent(&self.imp().sidebar_list_view.get());
+        let _ = self.imp().sidebar_folder_popover.set(folder_popover);
+
+        let sidebar_gesture = gtk::GestureClick::new();
+        sidebar_gesture.set_button(gdk::BUTTON_SECONDARY);
+        let window_weak = self.downgrade();
+        sidebar_gesture.connect_pressed(move |_, _n_press, x, y| {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let listview = window.imp().sidebar_list_view.get();
+            let Some(item) = pick_sidebar_item_at(listview.upcast_ref::<gtk::Widget>(), x, y)
+            else {
+                return;
+            };
+            match item {
+                crate::ui::sidebar::SidebarItem::Feed(feed) => {
+                    *window.imp().right_clicked_feed.borrow_mut() = Some(feed);
+                    window.show_sidebar_feed_popover(x, y);
+                }
+                crate::ui::sidebar::SidebarItem::Folder(folder) => {
+                    *window.imp().right_clicked_folder.borrow_mut() = Some(folder);
+                    window.show_sidebar_folder_popover(x, y);
+                }
+                // Smart feeds and the smart-feed group have no destructive
+                // actions to expose — skip the popover entirely.
+                _ => {}
+            }
+        });
+        self.imp().sidebar_list_view.add_controller(sidebar_gesture);
+    }
+
+    /// Walk the timeline `gio::ListStore` for an article whose ID
+    /// matches `article_id` and select it. Used by the timeline
+    /// right-click gesture to point existing selection-bound actions
+    /// at the right-clicked article. Returns true if a match was
+    /// found and the selection was updated.
+    fn select_timeline_article_by_id(&self, article_id: &str) -> bool {
+        let Some(store) = self.imp().timeline_store.get() else {
+            return false;
+        };
+        let Some(selection) = self.imp().timeline_selection.get() else {
+            return false;
+        };
+        for i in 0..store.n_items() {
+            let Some(obj) = store.item(i) else { continue };
+            let Some(node) = obj.downcast_ref::<ArticleNode>() else {
+                continue;
+            };
+            let Some(article) = node.article() else {
+                continue;
+            };
+            if article.article_id == article_id {
+                selection.set_selected(i);
+                return true;
+            }
+        }
+        false
     }
 
     /// Connect the Article-pane "▶ Play video" button to the dispatcher
@@ -1318,6 +1474,215 @@ impl ViaductWindow {
         // Focus recovery — pull keyboard focus back to the timeline so
         // any stuck WebKit / dialog focus state gets released.
         let _ = imp.timeline_list_view.grab_focus();
+    }
+
+    // ---------------------------------------------------------------
+    // Right-click context-menu action bodies (v1.7.1).
+    //
+    // These read from `right_clicked_feed` / `right_clicked_folder` —
+    // the RefCells populated by the sidebar gesture handler just
+    // before the popover was shown. Each clears the cell after
+    // reading so a stale value from a previous right-click can't bleed
+    // into an unrelated keyboard activation.
+    // ---------------------------------------------------------------
+
+    pub(crate) fn act_refresh_clicked_feed(&self) {
+        let Some(feed) = self.imp().right_clicked_feed.borrow_mut().take() else {
+            return;
+        };
+        self.refresh_specific_feeds(vec![feed]);
+    }
+
+    pub(crate) fn act_copy_clicked_feed_url(&self) {
+        let Some(feed) = self.imp().right_clicked_feed.borrow_mut().take() else {
+            return;
+        };
+        self.clipboard().set_text(&feed.url);
+        self.show_toast("Feed URL copied.");
+    }
+
+    /// Confirmation-gated feed removal. Presents an `AdwAlertDialog`
+    /// with destructive-action styling on Delete; on confirm, calls
+    /// `Account::remove_feed` and reloads the sidebar. Article rows
+    /// for the removed feed are pruned by the next `cleanup_at_startup`
+    /// cycle (we don't fire it eagerly here to keep the perceived
+    /// removal latency low).
+    pub(crate) fn act_delete_clicked_feed(&self) {
+        let Some(feed) = self.imp().right_clicked_feed.borrow_mut().take() else {
+            return;
+        };
+        let display_name = display_name_for_feed(&feed);
+
+        let alert = adw::AlertDialog::new(
+            Some(&format!("Remove “{display_name}”?")),
+            Some(
+                "Articles already saved from this feed will be cleaned up the next time \
+                 viaduct starts. Starred articles in this feed will be deleted too. This \
+                 cannot be undone.",
+            ),
+        );
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("delete", "Delete");
+        alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        alert.set_default_response(Some("cancel"));
+        alert.set_close_response("cancel");
+
+        let window_weak = self.downgrade();
+        let feed_url = feed.url.clone();
+        alert.connect_response(None, move |dialog, response| {
+            if response != "delete" {
+                return;
+            }
+            dialog.close();
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let account = window.account();
+            let url = feed_url.clone();
+            let display_name = display_name.clone();
+            let window_for_done = window.downgrade();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            crate::spawn_on_runtime(async move {
+                let _ = tx.send(account.remove_feed(&url).await);
+            });
+            glib::spawn_future_local(async move {
+                match rx.await {
+                    Ok(Ok(true)) => {
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.show_toast(&format!("Removed “{display_name}”."));
+                            window.reload_sidebar_after_opml_change();
+                        }
+                    }
+                    Ok(Ok(false)) => {
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.show_toast("Feed wasn't in the subscription list.");
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(?e, "remove_feed failed");
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.show_toast("Couldn't remove the feed. See the log.");
+                        }
+                    }
+                    Err(_) => {
+                        if let Some(window) = window_for_done.upgrade() {
+                            window.show_toast("Removal task crashed.");
+                        }
+                    }
+                }
+            });
+        });
+
+        alert.present(Some(self));
+    }
+
+    pub(crate) fn act_mark_clicked_feed_read(&self) {
+        let Some(feed) = self.imp().right_clicked_feed.borrow_mut().take() else {
+            return;
+        };
+        let account = self.account();
+        let window_weak = self.downgrade();
+        glib::spawn_future_local(async move {
+            let articles = match account.fetch_articles_by_feed(feed.id.clone()).await {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!(?e, "mark-feed-read: fetch_articles_by_feed failed");
+                    return;
+                }
+            };
+            let now = chrono::Utc::now();
+            let statuses: Vec<crate::models::ArticleStatus> = articles
+                .into_iter()
+                .map(|a| crate::models::ArticleStatus {
+                    article_id: a.article_id,
+                    read: true,
+                    starred: false,
+                    date_arrived: now,
+                })
+                .collect();
+            if statuses.is_empty() {
+                return;
+            }
+            if let Err(e) = account.upsert_statuses(statuses).await {
+                tracing::warn!(?e, "mark-feed-read: upsert_statuses failed");
+                return;
+            }
+            if let Some(window) = window_weak.upgrade() {
+                window.refresh_unread_counts();
+                window.reload_current_timeline();
+            }
+        });
+    }
+
+    pub(crate) fn act_mark_clicked_folder_read(&self) {
+        let Some(folder) = self.imp().right_clicked_folder.borrow_mut().take() else {
+            return;
+        };
+        let account = self.account();
+        let window_weak = self.downgrade();
+        glib::spawn_future_local(async move {
+            let now = chrono::Utc::now();
+            let mut statuses: Vec<crate::models::ArticleStatus> = Vec::new();
+            for feed in &folder.feeds {
+                match account.fetch_articles_by_feed(feed.id.clone()).await {
+                    Ok(arts) => {
+                        for a in arts {
+                            statuses.push(crate::models::ArticleStatus {
+                                article_id: a.article_id,
+                                read: true,
+                                starred: false,
+                                date_arrived: now,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(?e, feed_id = %feed.id, "mark-folder-read: feed fetch failed")
+                    }
+                }
+            }
+            if statuses.is_empty() {
+                return;
+            }
+            if let Err(e) = account.upsert_statuses(statuses).await {
+                tracing::warn!(?e, "mark-folder-read: upsert_statuses failed");
+                return;
+            }
+            if let Some(window) = window_weak.upgrade() {
+                window.refresh_unread_counts();
+                window.reload_current_timeline();
+            }
+        });
+    }
+
+    /// Position and present the timeline row's context popover. Called
+    /// by the right-click gesture handler attached in `wire_models`.
+    pub(crate) fn show_timeline_popover(&self, x: f64, y: f64) {
+        let Some(popover) = self.imp().timeline_popover.get() else {
+            return;
+        };
+        let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+        popover.set_pointing_to(Some(&rect));
+        popover.popup();
+    }
+
+    /// Position and present the sidebar row's context popover. The
+    /// `right_clicked_*` cells must already be populated by the caller.
+    pub(crate) fn show_sidebar_feed_popover(&self, x: f64, y: f64) {
+        let Some(popover) = self.imp().sidebar_feed_popover.get() else {
+            return;
+        };
+        let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+        popover.set_pointing_to(Some(&rect));
+        popover.popup();
+    }
+
+    pub(crate) fn show_sidebar_folder_popover(&self, x: f64, y: f64) {
+        let Some(popover) = self.imp().sidebar_folder_popover.get() else {
+            return;
+        };
+        let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+        popover.set_pointing_to(Some(&rect));
+        popover.popup();
     }
 
     pub(crate) fn act_open_enclosure(&self) {
@@ -2140,6 +2505,49 @@ fn embed_url_for_iframe(url: &str) -> String {
         }
     }
     out
+}
+
+/// Walk a list view's child widget tree from the click coordinates up
+/// to the first ancestor that has `viaduct-article` data attached. The
+/// data is set during the timeline row factory's `connect_bind`. Used
+/// by the right-click context menu so we know which article was
+/// right-clicked without restructuring the row factory's signature.
+fn pick_article_at(listview: &gtk::Widget, x: f64, y: f64) -> Option<crate::models::Article> {
+    let leaf = listview.pick(x, y, gtk::PickFlags::DEFAULT)?;
+    let mut walker: Option<gtk::Widget> = Some(leaf);
+    while let Some(w) = walker {
+        // SAFETY: `viaduct-article` is set by the timeline row factory's
+        // bind closure (in `timeline.rs`) to a `Box<Article>`. We only
+        // read it here; ownership stays with the widget.
+        unsafe {
+            if let Some(ptr) = w.data::<crate::models::Article>("viaduct-article") {
+                return Some(ptr.as_ref().clone());
+            }
+        }
+        walker = w.parent();
+    }
+    None
+}
+
+/// Same pattern as `pick_article_at` but walking for a sidebar
+/// `SidebarItem`. Sidebar row factory attaches `viaduct-sidebar-item`
+/// data to the row's content during `connect_bind`.
+fn pick_sidebar_item_at(
+    listview: &gtk::Widget,
+    x: f64,
+    y: f64,
+) -> Option<crate::ui::sidebar::SidebarItem> {
+    let leaf = listview.pick(x, y, gtk::PickFlags::DEFAULT)?;
+    let mut walker: Option<gtk::Widget> = Some(leaf);
+    while let Some(w) = walker {
+        unsafe {
+            if let Some(ptr) = w.data::<crate::ui::sidebar::SidebarItem>("viaduct-sidebar-item") {
+                return Some(ptr.as_ref().clone());
+            }
+        }
+        walker = w.parent();
+    }
+    None
 }
 
 fn current_video_playback_mode() -> VideoPlaybackMode {

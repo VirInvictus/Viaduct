@@ -317,6 +317,15 @@ pub fn setup_sidebar_list_view(
             label.remove_css_class("heading");
             label.remove_css_class("dim-label");
             if let Some(sidebar_item) = obj.downcast_ref::<SidebarItem>() {
+                // Attach the bound SidebarItem to the row's content box
+                // so the right-click context menu (v1.7.1) can recover
+                // it via a parent-walk from the picked leaf widget.
+                // Overwrites cleanly on rebind — no explicit unbind
+                // needed, mirrors the timeline.rs pattern.
+                unsafe {
+                    box_widget
+                        .set_data::<SidebarItem>("viaduct-sidebar-item", sidebar_item.clone());
+                }
                 match sidebar_item {
                     SidebarItem::SmartFeedGroup => {
                         label.set_text("Smart Feeds");

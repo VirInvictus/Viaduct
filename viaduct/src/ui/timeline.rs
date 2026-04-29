@@ -351,6 +351,15 @@ pub fn setup_timeline_list_view(
             thumb_picture.set_visible(false);
             thumb_picture.set_widget_name(&article.article_id);
             spawn_video_thumbnail_fetch(&article, &thumb_picture, cache_for_bind.clone());
+
+            // Attach the bound article to the row's outer container so
+            // the right-click context menu (v1.7.1) can recover it via
+            // a parent-walk from the picked leaf widget. Overwrites any
+            // previously-bound article cleanly — connect_bind always
+            // sets fresh data, no need for an explicit unbind.
+            unsafe {
+                row_hbox.set_data::<Article>("viaduct-article", article.clone());
+            }
         }
 
         // Re-style the title whenever the node's read flag flips. Stored on
