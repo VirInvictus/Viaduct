@@ -167,6 +167,12 @@ pub fn setup_timeline_list_view(
         let feed_name_label = gtk::Label::new(None);
         feed_name_label.set_halign(gtk::Align::Start);
         feed_name_label.add_css_class("dim-label");
+        feed_name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        // Same natural-width cap rationale as title_label — long feed
+        // names ("Deutsche Welle: DW.com - Top Stories") would otherwise
+        // inflate the pane.
+        feed_name_label.set_max_width_chars(32);
+        feed_name_label.set_width_chars(20);
 
         let preview_label = gtk::Label::new(None);
         preview_label.set_halign(gtk::Align::Start);
@@ -175,6 +181,11 @@ pub fn setup_timeline_list_view(
         preview_label.set_lines(2);
         preview_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         preview_label.add_css_class("dim-label");
+        // Wrap=true makes natural width potentially huge (full prose
+        // length). Cap so the row's total natural width stays bounded
+        // regardless of how long the preview text is.
+        preview_label.set_max_width_chars(48);
+        preview_label.set_width_chars(20);
 
         content_vbox.append(&top_hbox);
         content_vbox.append(&feed_name_label);
