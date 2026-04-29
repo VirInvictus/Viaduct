@@ -32,7 +32,9 @@ The interface is constructed declaratively using standard `.ui` GTK Builder XML 
 *   **Adaptive layout**: GNOME 50 `AdwNavigationSplitView` handles the responsive three-pane layout (sidebar → timeline → article body) with graceful collapse on narrow windows.
 *   **List recycling**: the timeline strictly enforces memory efficiency by binding a custom `gio::ListModel` directly to `GtkListView` via a `GtkSignalListItemFactory`. Rendering 10,000 articles consumes identical RAM to rendering 10.
 *   **FetchRequestQueue analog**: selection changes cancel in-flight timeline fetches so rapid sidebar navigation doesn't pile up stale work.
-*   **Native text rendering**: no WebKit. Parsed HTML bodies are sanitized via `ammonia` and translated natively into `GtkTextTag` structures rendered in a `GtkTextView`.
+*   **World-Class Typography**: Transitioning to a single, strictly neutered WebKit instance to render flawless CSS themes (Sepia, Gruvbox, Midnight) without the memory bloat of unconstrained browser engines. This will enforce comfortable reading widths (e.g., `max-width: 44em`) and native hover states for links.
+*   **Article Settings Popover**: Future UX addition to allow users to dynamically adjust text scaling, line height, and themes without leaving the reading context.
+*   **Engine Separation**: Refactor into a Cargo workspace, pulling `database`, `network`, and `parser` into a `viaduct-core` headless crate to enforce architectural boundaries.
 
 ### 4. Parsing Engine (`quick-xml` & `serde_json`)
 Parallel parsing architecture using `quick-xml` (RSS/Atom/OPML) and `serde_json` (JSON Feed, RSS-in-JSON) inside spawned `tokio` tasks.
@@ -40,15 +42,17 @@ Parallel parsing architecture using `quick-xml` (RSS/Atom/OPML) and `serde_json`
 *   **HTML metadata extraction**: an `HTMLMetadataExtractor` scans raw HTML for hidden `<link rel="alternate" type="application/rss+xml">` feeds when the user adds a bare website URL.
 *   **Permissive date parsing**: port of NNW's `RSDateParser` to handle the zoo of real-world date formats found in feeds.
 *   **Reader View** (optional, RAM-gated — see Phase 10): local Readability port to scrape full text from truncated RSS feeds. NNW's version calls a remote Mercury service; ours must be local-only.
+*   **Render Caching**: Aggressive disk-level caching of extracted Reader View HTML (or raw outputs) to speed up subsequent loads, avoiding the RAM-pinning mistakes seen in other clients.
+*   **Thumbnail Extraction**: Implement a `video_thumbnail_extractor` to fetch preview images for YouTube/Vimeo links found in feeds, sprucing up the timeline view.
 
 ---
 
 ## Memory Budget (hard target)
 
 *   **Idle**: 100–300 MB after full sync + image cache warm.
-*   **Peak**: < 500 MB during any operation, including Reader View extraction.
+*   **Peak**: < 500 MB during any operation, including Reader View extraction and WebKit rendering.
 
-Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features that can't hit the budget get gated, deferred, or cut.
+Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features that can't hit the budget get gated, deferred, or cut. The "Single Neutered WebKit Instance" rule ensures we achieve perfect typography (reusing NNW CSS variables) without allowing Javascript execution or multiple WebProcess bloat.
 
 ---
 
@@ -110,12 +114,15 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] Unread-count badges on sidebar rows, recalculated off `StatusesTable` deltas.
 - [x] Folder selection aggregates articles from all child feeds (newest-first). *(`fetch_folder_articles` in `window.rs`)*
 
-## Phase 6: Native HTML → GtkTextBuffer Rendering
-- [x] `ammonia` whitelist configuration (strip scripts, iframes, inline styles, trackers).
-- [x] HTML walker that maps structural tags to `GtkTextTag` instances: `h1`-`h6`, `p`, `blockquote`, `pre`, `code`, `strong`, `em`, `a`, `ul`/`ol`/`li`, `hr`.
-- [x] System-font typography with monospace override for `pre`/`code`; GNOME 50 styling conventions.
-- [x] Link handling: click → `xdg-open` (also bound to Enter key per spec).
-- [x] Image `<img>` tags register an anchor; actual image fetch lives in Phase 7.
+## Phase 6: World-Class Typography via Neutered WebKit
+- [ ] Transition from `GtkTextView` to exactly ONE heavily constrained `WebKitWebView` instance.
+- [ ] Enforce strict `WebKitSettings`: disable JavaScript, plugins, WebGL, and Local Storage.
+- [ ] Implement strict Content Security Policies (CSP) to block background network requests and trackers.
+- [ ] Port NetNewsWire theme bundles (`.nnwtheme`) as CSS variables to achieve flawless typography (Sepia, Gruvbox, etc.).
+- [ ] Enforce typographic constraints: `max-width: 44em` for the reading column.
+- [x] Baseline: `ammonia` whitelist configuration (strip scripts, iframes, inline styles, trackers).
+- [ ] Link handling: wire WebKit's hover signals to a native `UrlOverlay` (Phase 2 improvements).
+- [ ] Image `<img>` tags: handled natively by WebKit with disk-cache support.
 
 ## Phase 7: Asset & Memory Management
 - [x] `IconImageCache` analog: favicon fetch → disk cache in `$XDG_CACHE_HOME/viaduct/favicons/`. *(`network::cache::ImageCache::favicon`)*
@@ -197,6 +204,8 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 
 ## Phase 16: QA, Test Suites, & Debug Mode
 - [x] Implement a `viaduct --debug` flag or environment variable that enables verbose `tracing` logs, disables database WAL truncation (for easier inspection), and adds a hidden Debug menu to the UI.
+- [ ] **Workspace Refactoring**: Migrate to a Cargo workspace, pulling `database`, `network`, and `parser` into a `viaduct-core` headless crate to enforce architectural boundaries and support zero-UI testing.
+- [ ] **Video Thumbnail Extraction**: Implement a `video_thumbnail_extractor` to fetch and cache preview images for YouTube/Vimeo links found in feeds.
 - [x] Build out integration test suites for the refresh pipeline (`LocalAccountRefresher` and Inoreader sync), mocking the network layer.
 - [x] Implement UI test harnesses to ensure sidebar/timeline/article pane state transitions are rock solid.
 - [x] Port any remaining applicable unit tests from `.netnewswire/Tests/` and module test directories.

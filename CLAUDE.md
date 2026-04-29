@@ -24,14 +24,16 @@ Current version: **v1.0.0** (Stable). The xdg-desktop-portal Background daemon m
 
 A full clone of NetNewsWire lives at `.netnewswire/` in this repo. **It is already there — do not re-clone, re-download, or `git submodule add` it.** Treat it as read-only reference material.
 
-> **Note on Latest Upstream Sync (April 23, 2026):**
-> The `.netnewswire` reference folder has been updated to the latest upstream state (Commit `ec06277`). Key architectural and feature changes to be aware of when porting:
-> *   **C-to-Swift Port (`StripHTML`):** A major refactor has moved the core HTML stripping logic from legacy C (`striphtml.c`) to a native Swift implementation (`StripHTML.swift`) within the `RSCore` module. This includes significant performance optimizations and new test suites for `CollapsingWhitespace` and `StripHTML`.
-> *   **Swift 6 Integration:** Ongoing work to align `RSCore` and `RSParser` with Swift 6 concurrency and language modes.
-> *   **HTML Entity Decoding:** Enhanced robustness in `RSParser` for handling complex HTML entities within the XML module.
-> *   **New UI Themes:** Added *Biblioteca*, *Tiqoe Dark*, and *Verdana Revival* themes (check `Shared/Resources/`).
-> *   **Sync Optimization:** Implementation of the "Do not sync unread article content" toggle, which reduces iCloud database bloat.
-> *   **Enhanced Performance Testing:** New benchmarks for `ArticleStringFormatter` and `NSAttributedString` HTML rendering have been added to the test targets.
+> **Note on Latest Upstream Sync (April 28, 2026):**
+> The `.netnewswire` reference folder has been updated to the latest upstream state (Commit `4d594181f`, post-7.0.5 release). Key changes since the previous sync at `ec06277`:
+> *   **Parser refactor:** `MutableItem` renamed to `RSSItem` and shared between RSS and Atom parsers. A single `uniqueIDCalculator` is now shared across feed types. Atom now picks up `<icon>` favicons natively and parses `<summary>` correctly. Pure-rename refactors don't translate to our Rust code; keep porting from the new file names.
+> *   **`domainsWithNoMinimumTime` expanded** from a small list to 19 domains in `LocalAccountRefresher.swift`. Our `is_no_minimum_domain` should sync to match — folded into v1.0.6 maintenance.
+> *   **Macro template format:** NNW article templates use `[[key]]` (double-bracket), not `{{key}}`. Match exactly so themes drop in byte-perfect.
+> *   **Issue #5280 / WebView cache:** NNW reverted a change that aggressively emptied the WebKit cache between renders because it triggered intermittent bugs. Lesson for our Phase 6: don't flush WebKit caches between articles. Our memory-only `WebKitNetworkSession` data store sidesteps this automatically.
+> *   **Author/authorsLookup startup cleanup (Fixes #5232):** NNW added an explicit cleanup sweep on account init. Our `articles_ad_lookup` cascade trigger handles this differently — no port needed.
+> *   **Date parser simplification & swiftString UTF-8 conversion:** Swift-specific micro-perf, not portable to our `chrono` + `quick-xml` stack.
+> *   **CloudKit Storage Stats UI:** out of scope (we don't ship CloudKit).
+> *   **Themes unchanged** since previous sync — Phase 6 plan to bundle all 8 (`Sepia`, `Appanoose`, `Biblioteca`, `Hyperlegible`, `NewsFax`, `Promenade`, `Tiqoe Dark`, `Verdana Revival`) is unaffected.
 
 When you need to implement a feature, port from this local tree. Do not invent bespoke logic.
 
@@ -234,7 +236,7 @@ Non-negotiable unless the user overrides in conversation.
 1. **Memory budget is supreme.** Idle: **100–300 MB** after full sync + image cache warm. Peak: **< 500 MB** across every supported operation. Any feature proposal that plausibly busts this is rejected on sight (this includes embedded WebKit, in-process image decoding of uncapped size, eager full-text extraction, etc.). Every major phase ends with a `heaptrack`/`massif` checkpoint.
 2. **Never block the GTK thread.** All I/O (network, disk, SQLite writes, XML parsing, HTML sanitization) runs in tokio tasks. The main thread renders and reads — nothing else.
 3. **No remote sync engines in v1.0.** No Feedbin, Miniflux, FreshRSS, CloudKit, NewsBlur, Inoreader. Local OPML account only. Do not even scaffold interfaces "in case."
-4. **No WebKit. Ever.** Article bodies render into a `GtkTextView` via `GtkTextTag`. Interactive pages open via `xdg-open` (Enter key).
+4. **Neutered WebKit Instance.** To achieve world-class typography (like NetNewsWire), we allow exactly ONE `WebKitWebView` instance for the reading pane. It must be heavily neutered: no Javascript, no local storage, no plugins, and strict Content Security Policies to prevent memory bloat and background network connections.
 5. **Error types:** public / library-surface errors use `thiserror` variants under `ViaductError`. `anyhow` is tolerated only in binary glue (`main.rs`, scratch bins). Do not add `anyhow::Result` to module APIs.
 6. **No scope creep.** Don't refactor adjacent code while passing through. Don't add abstractions for hypothetical future callers. Three similar lines beats a premature helper.
 7. **No new top-level dependencies without asking.** The crate list in `Cargo.toml` is deliberate. If you think you need another, propose it with the specific NNW symbol you're porting.

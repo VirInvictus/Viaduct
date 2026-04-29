@@ -24,7 +24,7 @@ Modern readers often rely on web engines that consume excessive memory. viaduct 
 |---------|-------------|
 | **Smart Feeds** | Virtual feeds generated dynamically via SQLite queries (Today, All Unread, Starred). |
 | **Local OPML** | Robust local-first architecture for importing and exporting your feed lists. |
-| **Native Render Pipeline** | No WebKit. Uses native GTK widgets for rendering parsed HTML. |
+| **Neutered WebKit Pipeline** | Single, strictly sandboxed WebKit instance for flawless CSS typography without the memory bloat. |
 | **Keyboard Shortcuts** | Standard desktop accelerators, prioritizing spatial navigation. |
 | **The Pruning Engine** | Automated database vacuum and age-based article purging to maintain performance. |
 

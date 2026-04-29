@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-//! Native HTML renderer. No WebKit.
+//! Native HTML renderer. (Planned for transition to Neutered WebKit)
 //!
 //! Pipeline:
 //!   1. `ammonia::clean` strips scripts / iframes / event handlers / inline styles.

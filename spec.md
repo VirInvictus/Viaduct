@@ -194,7 +194,7 @@ viaduct is packaged as a Flatpak-first application.
 
 Explicitly out of scope for v1.0 and likely forever:
 
-* **Not a browser.** It does not embed WebKit. If an article requires Javascript to read, it belongs in Firefox.
+* **Not a browser.** It uses a heavily neutered WebKit instance purely for typography, with Javascript strictly disabled. If an article requires Javascript to read, it belongs in Firefox.
 * **Not a social network.** No sharing buttons, no Twitter integration, no Mastodon crossposting.
 * **Not an algorithm.** No "suggested reads," no engagement metrics. It shows exactly what was published, in reverse-chronological order.
 

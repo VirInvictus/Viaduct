@@ -1,5 +1,17 @@
 # viaduct — Patch Notes
 
+## v1.0.2 — Housekeeping & WebKit Pivot Prep
+
+Doc-only release that re-opens Phase 6 around a single neutered `WebKitWebView` instead of the original `GtkTextView` + `GtkTextTag` renderer. No code changes shipped — the implementation lands in v1.1.0.
+
+- **Roadmap pivot:** Phase 6 reframed as "World-Class Typography via Neutered WebKit". Six unchecked items: WebKit transition, locked-down `WebKitSettings`, strict CSP, NNW theme bundle port, `max-width: 44em`, hover URL overlay, native `<img>` rendering with disk cache. The `ammonia` baseline stays checked as defense-in-depth even with CSP.
+- **Spec & README updated:** §2.2, §9, and the README feature table now describe the neutered WebKit pipeline.
+- **CLAUDE.md rule 4 updated:** "No WebKit. Ever." → "Neutered WebKit Instance" (one heavily-constrained `WebKitWebView`, JS off, plugins off, no LocalStorage, strict CSP).
+- **NNW reference sync:** `.netnewswire/` advanced from `ec06277` (April 23) to `4d594181f` (April 28, post-7.0.5). Notable upstream changes documented in CLAUDE.md §2: `MutableItem` → `RSSItem` rename, expanded `domainsWithNoMinimumTime` (queued for v1.0.6), Atom summary/icon improvements, NNW issue #5280 (don't aggressively flush WebKit cache).
+- **`Cargo.toml` version drift fixed:** was stuck at `1.0.0` despite `v1.0.1` shipping. Bumped to `1.0.2` to match.
+- **`spec.md` trailing-duplicate line cleaned up** (botched edit artifact at the bottom of §10 success criteria).
+- **`.gitignore`:** added `.newsflash/` so the NewsFlash reference clone (anti-pattern study source) doesn't get committed alongside `.netnewswire/`.
+
 ## v1.0.1 — Audit & Polish
 
 - **Inoreader Engine Completion:** Resolved hardcoded API keys by injecting them at compile-time via environment variables. Added missing author parsing logic to the sync engine.
