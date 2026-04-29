@@ -1,5 +1,33 @@
 # viaduct — Patch Notes
 
+## v1.5.8 — YouTube playback fix + real screenshots
+
+Two unrelated items.
+
+### YouTube error 153 — "Video player configuration error"
+
+In-pane video playback shipped broken. Tapping the play button on a YouTube article opened the dialog, the embed loaded, and then the YouTube player surfaced its own "Error 153: Video player configuration error" message before any video could play. Reproducible on every YouTube video, every time.
+
+Root cause: the embed WebView's `WebKitSettings` were modeled on the article-pane WebView's lockdown profile, which disables three things the embedded YouTube player actually *needs* to initialize:
+
+- `enable_html5_local_storage` — YouTube stores volume / quality / playback preferences in LocalStorage; the player JS bails when the store isn't writable
+- `enable_html5_database` — IndexedDB; modern YouTube uses it for the player session cache
+- `enable_webgl` — needed for VP9 / AV1 hardware decode paths; without it the player falls back to software decode and the embed page fails
+
+Privacy was the reason for the lockdown, but it's preserved by the dialog lifecycle: when the dialog closes, `connect_closed` calls `load_uri("about:blank")` then `try_close()` on the embed WebView. Cookies / LocalStorage / IndexedDB written during playback die with the WebProcess. The article-pane WebView's lockdown profile is unrelated and unaffected; it stays as strict as ever.
+
+Also dropped the `set_user_agent_with_application_details("Viaduct", "1.4")` call. Some video hosts run anti-bot heuristics on the UA string — appending an unknown application identifier risks throttling or refusal. WebKitGTK's default UA is a standard `Mozilla/5.0 ... AppleWebKit/...` string, accepted everywhere.
+
+### Real screenshots
+
+Brandon dropped two captures into `docs/screenshots/`:
+- `main-adwaita.png` — three-pane wide layout, dark mode, Adwaita theme with the system orange accent
+- `main-sepia.png` — same layout but with the Sepia theme active, showing the warm cinnamon accent propagated across the chrome (selected timeline row, sidebar selection)
+
+Both are 1962×1202 captures from Fedora 43 / GNOME 50 / Wayland. Wired into both the README's Screenshots section and the AppStream metainfo (`data/org.virinvictus.Viaduct.appdata.xml`) — the AppStream entry is what gnome-software / Flathub display on the install page.
+
+74 unit + 1 integration tests passing. fmt + clippy clean.
+
 ## v1.5.7 — Three responsiveness bugs in the adaptive layout
 
 After the v1.5.6 Vimeo panic fix, Brandon kept testing the adaptive layout and surfaced three more issues. None of them were panics, all of them were visible in normal use:

@@ -637,18 +637,34 @@ impl ViaductWindow {
         view.set_hexpand(true);
 
         if let Some(settings) = webkit6::prelude::WebViewExt::settings(&view) {
+            // JS and storage features YouTube / Vimeo's embedded players
+            // actually need to initialize. Disabling LocalStorage was what
+            // caused YouTube error 153 ("Video player configuration error")
+            // in v1.4.0–v1.5.7 — the player JS bails when its preference
+            // store isn't writable. WebGL is needed for VP9 / AV1 hardware
+            // decode paths; without it modern YouTube falls back to
+            // software decode which often fails on the embed page.
+            //
+            // Privacy is preserved by the dialog lifecycle: the WebView is
+            // destroyed when the dialog closes (`load_uri("about:blank")` +
+            // `try_close()` in `connect_closed`), so any cookies / storage
+            // / IndexedDB the embed wrote die with it. The article-pane
+            // WebView's lockdown profile is unaffected and unrelated.
             settings.set_enable_javascript(true);
             settings.set_javascript_can_access_clipboard(false);
             settings.set_javascript_can_open_windows_automatically(false);
-            settings.set_enable_webgl(false);
+            settings.set_enable_webgl(true);
+            settings.set_enable_html5_database(true);
+            settings.set_enable_html5_local_storage(true);
+            settings.set_enable_offline_web_application_cache(false);
             settings.set_enable_developer_extras(false);
             settings.set_enable_back_forward_navigation_gestures(false);
-            settings.set_enable_html5_database(false);
-            settings.set_enable_html5_local_storage(false);
-            settings.set_enable_offline_web_application_cache(false);
             settings.set_enable_fullscreen(true);
             settings.set_media_playback_requires_user_gesture(false);
-            settings.set_user_agent_with_application_details(Some("Viaduct"), Some("1.4"));
+            // Don't override the user-agent — YouTube's anti-bot heuristics
+            // throttle / refuse playback when they see a UA that doesn't
+            // match a real browser. WebKitGTK's default UA is a standard
+            // Mozilla / AppleWebKit string, accepted by every embed host.
         }
 
         view.load_uri(&source.embed_url());

@@ -21,12 +21,17 @@
   <url type="homepage">https://github.com/virinvictus/Viaduct</url>
   <screenshots>
     <screenshot type="default">
-      <caption>Reading pane with the Sepia theme on GNOME 50</caption>
-      <image>https://raw.githubusercontent.com/VirInvictus/Viaduct/main/docs/screenshots/main.png</image>
+      <caption>Three-pane wide layout with the Adwaita theme — system accent</caption>
+      <image>https://raw.githubusercontent.com/VirInvictus/Viaduct/main/docs/screenshots/main-adwaita.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Reading pane with the Sepia theme — warm cinnamon accent across the chrome</caption>
+      <image>https://raw.githubusercontent.com/VirInvictus/Viaduct/main/docs/screenshots/main-sepia.png</image>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="1.5.8" date="2026-04-29" />
     <release version="1.5.7" date="2026-04-29" />
     <release version="1.5.6" date="2026-04-29" />
     <release version="1.5.5" date="2026-04-29" />

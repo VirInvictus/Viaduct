@@ -41,10 +41,22 @@ Modern feed readers tend to be Electron / browser-engine apps with sprawling mem
 
 ## Screenshots
 
-> Screenshots in this section show the app on Fedora 43 / GNOME 50 / Wayland. Both light and dark mode shots use the system-default Adwaita accent.
+Captures from Fedora 43 / GNOME 50 / Wayland in dark mode, three-pane wide layout.
 
 <p align="center">
-  <em>Screenshots coming with the next tagged release. Drop PNGs into <code>docs/screenshots/</code> and reference them here.</em>
+  <img src="docs/screenshots/main-adwaita.png" alt="Three-pane wide layout with the Adwaita article theme — system orange accent" width="800">
+</p>
+
+<p align="center">
+  <em>Adwaita theme — system accent colour, libadwaita-native typography</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/main-sepia.png" alt="Three-pane wide layout with the Sepia article theme — cinnamon accent" width="800">
+</p>
+
+<p align="center">
+  <em>Sepia theme — warm cinnamon accent propagates across the chrome (selected timeline row, sidebar selection, focus rings)</em>
 </p>
 
 The AppStream metainfo (`data/org.virinvictus.Viaduct.appdata.xml`) also lists screenshots — those are the ones gnome-software / Flathub display on the install page, so keep both in sync when adding new captures.
