@@ -68,6 +68,12 @@ pub struct Theme {
     /// True for themes designed for dark backgrounds. `select_for_dark_mode`
     /// uses this to honor `adw::StyleManager::dark`.
     pub dark: bool,
+    /// Hex color (`#rrggbb`) applied app-wide as `@define-color
+    /// accent_bg_color` / `accent_color` so the GTK chrome (sidebar
+    /// selection, focus rings, switches, buttons) visually echoes the
+    /// theme of the article pane. Pulled from each NNW stylesheet's
+    /// most distinctive accent.
+    pub accent_hex: &'static str,
 }
 
 /// All eight NNW themes ported in v1.1.0. Name and identifier match NNW's
@@ -80,6 +86,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/sepia/template.html"),
         stylesheet: include_str!("../../data/themes/sepia/stylesheet.css"),
         dark: false,
+        accent_hex: "#7a4d1f", // warm cinnamon — pulled from body text on tan
     },
     Theme {
         id: "appanoose",
@@ -87,6 +94,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/appanoose/template.html"),
         stylesheet: include_str!("../../data/themes/appanoose/stylesheet.css"),
         dark: false,
+        accent_hex: "#086aee", // clean web-blue — link color
     },
     Theme {
         id: "biblioteca",
@@ -94,6 +102,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/biblioteca/template.html"),
         stylesheet: include_str!("../../data/themes/biblioteca/stylesheet.css"),
         dark: false,
+        accent_hex: "#1145a5", // deep scholarly blue
     },
     Theme {
         id: "hyperlegible",
@@ -101,6 +110,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/hyperlegible/template.html"),
         stylesheet: include_str!("../../data/themes/hyperlegible/stylesheet.css"),
         dark: false,
+        accent_hex: "#086aee",
     },
     Theme {
         id: "newsfax",
@@ -108,6 +118,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/newsfax/template.html"),
         stylesheet: include_str!("../../data/themes/newsfax/stylesheet.css"),
         dark: false,
+        accent_hex: "#3a3a3a", // newsprint dark gray; theme is monochrome
     },
     Theme {
         id: "promenade",
@@ -115,6 +126,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/promenade/template.html"),
         stylesheet: include_str!("../../data/themes/promenade/stylesheet.css"),
         dark: false,
+        accent_hex: "#086aee",
     },
     Theme {
         id: "tiqoe_dark",
@@ -122,6 +134,7 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/tiqoe_dark/template.html"),
         stylesheet: include_str!("../../data/themes/tiqoe_dark/stylesheet.css"),
         dark: true,
+        accent_hex: "#b08660", // warm tan, visible on dark
     },
     Theme {
         id: "verdana_revival",
@@ -129,8 +142,57 @@ pub const THEMES: &[Theme] = &[
         template: include_str!("../../data/themes/verdana_revival/template.html"),
         stylesheet: include_str!("../../data/themes/verdana_revival/stylesheet.css"),
         dark: false,
+        accent_hex: "#2670c4", // bright slate-blue from headings
     },
 ];
+
+/// Install a CSS provider on the default `gdk::Display` overriding
+/// libadwaita's `accent_bg_color` / `accent_color` to match the chosen
+/// article theme. Replaces any prior `accent_provider` so theme switches
+/// are instant (no app restart). The provider sits at
+/// `gtk::STYLE_PROVIDER_PRIORITY_APPLICATION` so user GTK CSS still wins
+/// for any overrides users have intentionally made.
+///
+/// libadwaita 1.7's stylesheet derives `accent-fg-color`,
+/// `accent-bg-color-light`, and the various focus / hover variants from
+/// the base accent automatically — this single override propagates to
+/// every selection ring, focus ring, switch, button, link, and toggle
+/// in the GTK chrome.
+pub fn apply_app_accent(hex: &str) {
+    use std::cell::RefCell;
+    thread_local! {
+        // Hold onto the active provider so we can swap it on theme change
+        // without leaking the previous one. RefCell because the access is
+        // GTK-thread-local and we never alias it.
+        static ACTIVE_PROVIDER: RefCell<Option<gtk::CssProvider>> = const {
+            RefCell::new(None)
+        };
+    }
+    let Some(display) = gtk::gdk::Display::default() else {
+        tracing::warn!("article_renderer: no default Gdk display — accent skipped");
+        return;
+    };
+    let css = format!(
+        "@define-color accent_bg_color {hex};\n\
+         @define-color accent_color {hex};\n"
+    );
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(&css);
+    ACTIVE_PROVIDER.with(|cell| {
+        // Swap providers atomically on the GTK thread — remove the old
+        // one (if any) before adding the new so the cascade re-resolves
+        // cleanly.
+        if let Some(old) = cell.borrow_mut().take() {
+            gtk::style_context_remove_provider_for_display(&display, &old);
+        }
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        *cell.borrow_mut() = Some(provider);
+    });
+}
 
 /// Look up a theme by id; falls back to Sepia when the id isn't recognized.
 pub fn theme_by_id(id: &str) -> Theme {

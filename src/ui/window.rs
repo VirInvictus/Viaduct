@@ -202,6 +202,30 @@ impl ViaductWindow {
             &imp.url_overlay.get(),
         );
 
+        // Re-render the article pane when:
+        //   * the user changes the article-theme GSetting, or
+        //   * the libadwaita color scheme flips (so "auto" mode swaps
+        //     Sepia ↔ Tiqoe Dark live).
+        // No-op when no article is selected (`render_article_body`
+        // clears the pane).
+        let win_for_theme = self.downgrade();
+        if let Some(settings) = crate::preferences::settings() {
+            settings.connect_changed(
+                Some(crate::preferences::keys::ARTICLE_THEME),
+                move |_, _| {
+                    if let Some(win) = win_for_theme.upgrade() {
+                        win.render_article_body();
+                    }
+                },
+            );
+        }
+        let win_for_dark = self.downgrade();
+        adw::StyleManager::default().connect_dark_notify(move |_| {
+            if let Some(win) = win_for_dark.upgrade() {
+                win.render_article_body();
+            }
+        });
+
         // Sidebar: delegate → controller → data source → list view.
         let delegate = Rc::new(RefCell::new(SidebarTreeControllerDelegate::new()));
         let controller = Rc::new(TreeController::new_with_generic_root(
@@ -486,11 +510,14 @@ impl ViaductWindow {
             return;
         };
 
-        // Pick a theme based on the current libadwaita color scheme.
-        // Phase 6 ships hardcoded Sepia (light) / Tiqoe Dark (dark);
-        // a user-facing theme picker is queued for v1.2.0.
+        // Pick a theme: user's GSettings choice wins, "auto" pairs Sepia
+        // (light) with Tiqoe Dark (dark). v1.2.0 wired the article-theme
+        // GSetting + preferences dropdown — see preferences.rs.
         let is_dark = adw::StyleManager::default().is_dark();
-        let theme = article_renderer::select_for_dark_mode(is_dark);
+        let theme = match crate::preferences::settings() {
+            Some(s) => crate::preferences::resolve_article_theme(&s, is_dark),
+            None => article_renderer::select_for_dark_mode(is_dark),
+        };
 
         let subs = article_renderer::ArticleSubstitutions {
             title: article_renderer::escape_html(&state.title),

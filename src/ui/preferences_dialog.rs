@@ -36,6 +36,7 @@ pub fn present(parent: &impl IsA<gtk::Widget>) {
 
     if let Some(settings) = crate::preferences::settings() {
         appearance.add(&color_scheme_row(&settings));
+        appearance.add(&article_theme_row(&settings));
         notifications.add(&notifications_row(&settings));
     } else {
         let warn = adw::ActionRow::new();
@@ -84,6 +85,87 @@ fn color_scheme_row(settings: &gio::Settings) -> adw::ComboRow {
     );
 
     row
+}
+
+/// Theme picker for the article reading pane. The dropdown lists "Follow
+/// color scheme" plus all 8 NNW-ported themes; the selected theme's
+/// accent color also propagates app-wide via
+/// `preferences::apply_article_theme_accent`.
+fn article_theme_row(settings: &gio::Settings) -> adw::ComboRow {
+    use crate::ui::article_renderer::THEMES;
+
+    let row = adw::ComboRow::builder()
+        .title("Article theme")
+        .subtitle("Reading pane typography. Accent color propagates app-wide.")
+        .build();
+
+    // Index 0 = Auto; subsequent indices match THEMES[i-1].
+    let mut labels = vec!["Follow color scheme".to_string()];
+    labels.extend(THEMES.iter().map(|t| t.display_name.to_string()));
+    let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    let model = gtk::StringList::new(&label_refs);
+    row.set_model(Some(&model));
+    row.set_selected(theme_nick_to_index(&settings.string(keys::ARTICLE_THEME)));
+
+    let settings_for_row = settings.clone();
+    row.connect_selected_notify(move |row| {
+        let nick = theme_index_to_nick(row.selected());
+        if settings_for_row.string(keys::ARTICLE_THEME).as_str() != nick
+            && let Err(e) = settings_for_row.set_string(keys::ARTICLE_THEME, nick)
+        {
+            tracing::warn!(?e, "failed to write article-theme setting");
+        }
+    });
+
+    // External flips (e.g. dconf-editor) sync back to the dropdown.
+    settings.connect_changed(
+        Some(keys::ARTICLE_THEME),
+        glib::clone!(
+            #[weak]
+            row,
+            move |s, _| {
+                let nick = s.string(keys::ARTICLE_THEME);
+                row.set_selected(theme_nick_to_index(&nick));
+            }
+        ),
+    );
+
+    row
+}
+
+fn theme_nick_to_index(nick: &str) -> u32 {
+    use crate::ui::article_renderer::THEMES;
+    if nick == "auto" || nick.is_empty() {
+        return 0;
+    }
+    let id_form = nick.replace('-', "_");
+    match THEMES.iter().position(|t| t.id == id_form) {
+        Some(i) => (i as u32) + 1,
+        None => 0,
+    }
+}
+
+fn theme_index_to_nick(index: u32) -> &'static str {
+    use crate::ui::article_renderer::THEMES;
+    if index == 0 {
+        return "auto";
+    }
+    let i = (index as usize).saturating_sub(1);
+    if i >= THEMES.len() {
+        return "auto";
+    }
+    // Map the underscore form back to the schema's dash form.
+    match THEMES[i].id {
+        "sepia" => "sepia",
+        "appanoose" => "appanoose",
+        "biblioteca" => "biblioteca",
+        "hyperlegible" => "hyperlegible",
+        "newsfax" => "newsfax",
+        "promenade" => "promenade",
+        "tiqoe_dark" => "tiqoe-dark",
+        "verdana_revival" => "verdana-revival",
+        _ => "auto",
+    }
 }
 
 fn notifications_row(settings: &gio::Settings) -> adw::SwitchRow {

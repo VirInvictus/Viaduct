@@ -6,6 +6,18 @@
     <value nick="force-dark" value="2"/>
   </enum>
 
+  <enum id="org.virinvictus.Viaduct.ArticleTheme">
+    <value nick="auto" value="0"/>
+    <value nick="sepia" value="1"/>
+    <value nick="appanoose" value="2"/>
+    <value nick="biblioteca" value="3"/>
+    <value nick="hyperlegible" value="4"/>
+    <value nick="newsfax" value="5"/>
+    <value nick="promenade" value="6"/>
+    <value nick="tiqoe-dark" value="7"/>
+    <value nick="verdana-revival" value="8"/>
+  </enum>
+
   <schema id="org.virinvictus.Viaduct" path="/org/virinvictus/Viaduct/">
     <key name="color-scheme" enum="org.virinvictus.Viaduct.ColorScheme">
       <default>"default"</default>
@@ -60,6 +72,19 @@
       <description>
         Optional font family name override for serif article content. Empty
         string means "follow system default".
+      </description>
+    </key>
+
+    <key name="article-theme" enum="org.virinvictus.Viaduct.ArticleTheme">
+      <default>"auto"</default>
+      <summary>Article reading theme</summary>
+      <description>
+        Which NetNewsWire-ported theme renders the article reading pane.
+        "auto" pairs Sepia with light mode and Tiqoe Dark with dark mode;
+        the other values pin a specific theme regardless of system color
+        scheme. The selected theme's accent color also propagates across
+        the GTK chrome (sidebar selection, focus rings, switches) so the
+        entire window visually echoes the reading pane.
       </description>
     </key>
   </schema>

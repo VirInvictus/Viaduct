@@ -141,6 +141,9 @@ fn build_ui(app: &adw::Application, account: Arc<Account>) {
     if let Some(settings) = viaduct::preferences::settings() {
         viaduct::preferences::apply_color_scheme(&settings);
         viaduct::preferences::apply_fonts(&settings);
+        // v1.2.0-pre1: paint the GTK chrome with the article theme's
+        // accent so the whole window visually echoes the reading pane.
+        viaduct::preferences::apply_article_theme_accent(&settings);
     }
     let window = ui::window::ViaductWindow::new(app, account);
     window.present();

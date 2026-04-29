@@ -22,6 +22,7 @@ pub mod keys {
     pub const RETENTION_DAYS: &str = "retention-days";
     pub const FONT_MONOSPACE: &str = "font-monospace";
     pub const FONT_SERIF: &str = "font-serif";
+    pub const ARTICLE_THEME: &str = "article-theme";
 }
 
 /// Open the user-visible preferences. Returns `None` when the schema isn't
@@ -146,4 +147,62 @@ pub fn font_monospace(settings: &gio::Settings) -> String {
 /// "use system/app default".
 pub fn font_serif(settings: &gio::Settings) -> String {
     settings.string(keys::FONT_SERIF).to_string()
+}
+
+/// User's chosen article theme. Schema enum nick (e.g. "auto", "sepia",
+/// "tiqoe-dark"). The dash form matches the GSettings convention; our
+/// internal `Theme::id` uses underscores, so callers feeding this into
+/// `article_renderer::theme_by_id` must convert dashes to underscores.
+pub fn article_theme_nick(settings: &gio::Settings) -> String {
+    settings.string(keys::ARTICLE_THEME).to_string()
+}
+
+/// Resolve the current article theme: explicit selection wins; "auto"
+/// pairs Sepia (light) with Tiqoe Dark (dark) like the v1.1.0 default.
+/// `is_dark` should be `adw::StyleManager::default().is_dark()` taken
+/// fresh on the GTK thread.
+pub fn resolve_article_theme(
+    settings: &gio::Settings,
+    is_dark: bool,
+) -> crate::ui::article_renderer::Theme {
+    let nick = article_theme_nick(settings);
+    if nick == "auto" || nick.is_empty() {
+        return crate::ui::article_renderer::select_for_dark_mode(is_dark);
+    }
+    // Schema nicks use dashes (`tiqoe-dark`) but Theme::id uses
+    // underscores (`tiqoe_dark`) to match the data/themes/ directory
+    // names. Translate before lookup.
+    let id = nick.replace('-', "_");
+    crate::ui::article_renderer::theme_by_id(&id)
+}
+
+/// Apply the article theme's accent color to the GTK chrome via a
+/// CSS provider on the default `gdk::Display`. Reads the current setting
+/// fresh, resolves through `resolve_article_theme`, and pushes the hex
+/// to `article_renderer::apply_app_accent`. Connects a notify handler so
+/// the accent re-applies when the user flips the dropdown later — no
+/// restart needed.
+pub fn apply_article_theme_accent(settings: &gio::Settings) {
+    let manager = adw::StyleManager::default();
+    refresh_accent(settings, &manager);
+    settings.connect_changed(
+        Some(keys::ARTICLE_THEME),
+        glib::clone!(
+            #[weak]
+            manager,
+            move |s, _| refresh_accent(s, &manager)
+        ),
+    );
+    // Dark-mode toggles can flip the chosen theme in "auto" mode, so
+    // re-apply the accent whenever the color scheme actually flips.
+    manager.connect_dark_notify(glib::clone!(
+        #[weak]
+        settings,
+        move |m| refresh_accent(&settings, m)
+    ));
+}
+
+fn refresh_accent(settings: &gio::Settings, manager: &adw::StyleManager) {
+    let theme = resolve_article_theme(settings, manager.is_dark());
+    crate::ui::article_renderer::apply_app_accent(theme.accent_hex);
 }
