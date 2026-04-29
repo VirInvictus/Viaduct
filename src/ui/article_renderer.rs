@@ -17,15 +17,32 @@
 //! `.netnewswire/Shared/Resources/`. Each theme is a (`template.html`,
 //! `stylesheet.css`) pair embedded at compile time via `include_str!`. The
 //! outer page wrapper (`page.html`) inlines the theme CSS into a `<style>`
-//! tag so WebKit doesn't need disk access for rendering — Phase 6 CSP will
-//! then forbid all external resource loads except our `viaduct-img://`
-//! scheme.
+//! tag so WebKit doesn't need disk access for rendering.
+//!
+//! ### Network sandbox: `viaduct-img://` + CSP
+//!
+//! WebKit gets ZERO direct internet access. The page wrapper carries a
+//! strict Content-Security-Policy (`default-src 'none'`) that whitelists
+//! only inline styles and images from a custom URI scheme — `viaduct-img:`.
+//! Every `<img src="https://…">` in incoming feed HTML is rewritten to
+//! `viaduct-img://i/<percent-encoded-original>`; the registered scheme
+//! handler routes the lookup through our `ImageCache` (memory LRU → disk
+//! cache → network). End result: WebKit can render images, but every byte
+//! travels through our cache, and no other origin (script, font, frame,
+//! analytics beacon) can load anything.
 //!
 //! NNW deviation: NNW uses native `WKWebView` (macOS/iOS) with a similar
-//! lockdown profile in `WebViewController.applyConfiguration`. We translate
-//! the same intent to WebKitGTK 6.0 via `webkit6::Settings`.
+//! lockdown profile in `WebViewController.applyConfiguration` and registers
+//! `nnwImageIcon://` for article-icon URLs. We translate the same intent
+//! to WebKitGTK 6.0 via `webkit6::Settings` + `WebContext::register_uri_scheme`.
 
+use crate::network::ImageCache;
+use gtk::gio;
+use gtk::glib;
+use gtk::prelude::*;
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::Arc;
 use webkit6::prelude::*;
 
 /// Outer wrapper template — port of `.netnewswire/Mac/MainWindow/Detail/page.html`.
@@ -357,16 +374,192 @@ pub fn apply_locked_down_settings(view: &webkit6::WebView) {
     s.set_auto_load_images(true);
 }
 
+/// Custom URI scheme served by our `ImageCache`. Article HTML's
+/// `<img src="https://…">` attributes are rewritten to
+/// `viaduct-img://i/<percent-encoded-original>` before WebKit sees them;
+/// the scheme handler decodes and routes through cache → disk → network.
+pub const VIADUCT_IMG_SCHEME: &str = "viaduct-img";
+const VIADUCT_IMG_PREFIX: &str = "viaduct-img://i/";
+
+/// Percent-encode every byte that isn't an unreserved RFC 3986 character.
+/// Used for stuffing arbitrary URLs into our scheme's path component.
+fn percent_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 3);
+    for &b in input.as_bytes() {
+        let safe = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~');
+        if safe {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            let high = b >> 4;
+            let low = b & 0x0F;
+            out.push(hex_digit(high));
+            out.push(hex_digit(low));
+        }
+    }
+    out
+}
+
+fn hex_digit(nibble: u8) -> char {
+    match nibble {
+        0..=9 => (b'0' + nibble) as char,
+        10..=15 => (b'A' + (nibble - 10)) as char,
+        _ => '0',
+    }
+}
+
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let high = decode_hex(bytes[i + 1])?;
+            let low = decode_hex(bytes[i + 2])?;
+            out.push((high << 4) | low);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn decode_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+pub fn encode_image_url(original: &str) -> String {
+    format!("{VIADUCT_IMG_PREFIX}{}", percent_encode(original))
+}
+
+pub fn decode_image_url(viaduct_url: &str) -> Option<String> {
+    viaduct_url
+        .strip_prefix(VIADUCT_IMG_PREFIX)
+        .and_then(percent_decode)
+}
+
+/// Sniff a content-type from the first few bytes of an image. Sufficient
+/// for the formats WebKit cares about; falls back to
+/// `application/octet-stream` so WebKit's own MIME detection takes over.
+fn sniff_image_mime(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return "image/png";
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return "image/jpeg";
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return "image/gif";
+    }
+    if bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return "image/webp";
+    }
+    if bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml") {
+        return "image/svg+xml";
+    }
+    "application/octet-stream"
+}
+
+/// Run sanitization + img-src rewrite on a raw article body. Built every
+/// call (cheap) instead of lazily so the closure capturing
+/// `image_cache` stays scoped to the active window. The ammonia builder
+/// adds `viaduct-img` to the URL allowlist so our rewritten attribute
+/// survives the second-pass URL validation.
+pub fn sanitize_and_rewrite_image_srcs(html: &str) -> String {
+    let mut builder = ammonia::Builder::default();
+    builder.add_url_schemes(&[VIADUCT_IMG_SCHEME]);
+    builder.attribute_filter(|element, attribute, value| {
+        if element.eq_ignore_ascii_case("img")
+            && attribute.eq_ignore_ascii_case("src")
+            && (value.starts_with("http://") || value.starts_with("https://"))
+        {
+            return Some(Cow::Owned(encode_image_url(value)));
+        }
+        Some(Cow::Borrowed(value))
+    });
+    builder.clean(html).to_string()
+}
+
+/// Register the `viaduct-img://` URI scheme on the default `WebContext`
+/// so every WebView in the process resolves image URLs through our
+/// `ImageCache` instead of the network. Idempotent within a process; the
+/// last registration wins on a re-call. Must be invoked on the GTK main
+/// thread.
+pub fn install_image_uri_scheme(image_cache: Arc<ImageCache>) {
+    let Some(ctx) = webkit6::WebContext::default() else {
+        tracing::warn!("article_renderer: no default WebContext — viaduct-img:// disabled");
+        return;
+    };
+    ctx.register_uri_scheme(VIADUCT_IMG_SCHEME, move |request| {
+        // The URISchemeRequest is a !Send GObject; clone the Rc-style
+        // reference so we can keep it alive across the async fetch and
+        // call finish() on the GTK main thread when bytes arrive.
+        let request = request.clone();
+        let cache = image_cache.clone();
+        let uri = request.uri().map(|s| s.to_string()).unwrap_or_default();
+        tracing::debug!(%uri, "viaduct-img: scheme request");
+
+        glib::spawn_future_local(async move {
+            let Some(original_url) = decode_image_url(&uri) else {
+                tracing::warn!(%uri, "viaduct-img: malformed scheme URI");
+                let mut err = glib::Error::new(
+                    gio::IOErrorEnum::InvalidArgument,
+                    "malformed viaduct-img URI",
+                );
+                request.finish_error(&mut err);
+                return;
+            };
+
+            // Hop to tokio for the cache lookup (memory → disk → network).
+            // Image cache traffic must NOT block the GTK main loop.
+            let (tx, rx) = tokio::sync::oneshot::channel::<Option<Vec<u8>>>();
+            let cache_for_task = cache.clone();
+            let url_for_task = original_url.clone();
+            crate::spawn_on_runtime(async move {
+                let bytes = cache_for_task.image(&url_for_task).await;
+                let _ = tx.send(bytes);
+            });
+
+            match rx.await {
+                Ok(Some(bytes)) => {
+                    let mime = sniff_image_mime(&bytes);
+                    let len = bytes.len() as i64;
+                    let g_bytes = glib::Bytes::from_owned(bytes);
+                    let stream = gio::MemoryInputStream::from_bytes(&g_bytes);
+                    request.finish(&stream, len, Some(mime));
+                }
+                _ => {
+                    tracing::debug!(%original_url, "viaduct-img: cache miss");
+                    let mut err =
+                        glib::Error::new(gio::IOErrorEnum::NotFound, "image not in viaduct cache");
+                    request.finish_error(&mut err);
+                }
+            }
+        });
+    });
+}
+
 /// Render an article with the NNW page-wrapper + theme. Two-pass macro
 /// substitution (matches NNW): inner pass fills the article fields into
-/// the theme template; outer pass fills the result + the theme stylesheet
-/// + the article's title and base URL into `page.html`.
+/// the theme template; outer pass fills the result, the theme stylesheet,
+/// and the article's title and base URL into `page.html`. The body is
+/// run through `sanitize_and_rewrite_image_srcs` first so external `img`
+/// URLs become `viaduct-img://` references and CSP can lock the pane
+/// down to our scheme alone.
 pub fn render_themed(
     view: &webkit6::WebView,
     theme: Theme,
-    subs: ArticleSubstitutions,
+    mut subs: ArticleSubstitutions,
     base_uri: Option<&str>,
 ) {
+    subs.body = sanitize_and_rewrite_image_srcs(&subs.body);
     let title_for_outer = escape_html(&subs.title);
     let inner_subs = subs.into_map();
     let inner_html = render_with_macros(theme.template, &inner_subs);

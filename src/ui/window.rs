@@ -189,6 +189,10 @@ impl ViaductWindow {
         // Link clicks must route to the system browser instead of
         // navigating the WebView away from our rendered article.
         article_renderer::install_link_interceptor(&imp.article_web_view.get());
+        // Register the viaduct-img:// URI scheme on the default WebContext
+        // so the article pane's CSP-locked img-src can route through our
+        // ImageCache. Process-wide; idempotent.
+        article_renderer::install_image_uri_scheme(self.image_cache());
 
         // Sidebar: delegate → controller → data source → list view.
         let delegate = Rc::new(RefCell::new(SidebarTreeControllerDelegate::new()));
