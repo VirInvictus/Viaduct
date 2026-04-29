@@ -1,5 +1,36 @@
 # viaduct — Patch Notes
 
+## v1.3.0 — Video thumbnail extraction
+
+Closes the "video thumbnail extractor" item that's been sitting open in Phase 16 since the v1.2.0 polish pass deferred it. Articles backed by a YouTube or Vimeo URL now show a 16:9 preview thumbnail in the timeline row.
+
+### What ships
+
+- **New module `src/network/video_thumbs.rs`** — port-style detection layer with a `VideoSource` enum (`YouTube { id }`, `Vimeo { id }`) and helpers:
+  - `VideoSource::from_url` — pattern-matches the URL against the major YouTube surfaces (`youtube.com/watch?v=…`, `youtu.be/…`, `youtube.com/embed/…`, `youtube.com/shorts/…`, `youtube.com/v/…`, `youtube.com/live/…`, `youtube-nocookie.com/embed/…`) and Vimeo (`vimeo.com/<id>`, `vimeo.com/video/<id>`, `player.vimeo.com/video/<id>`). Strips `www.` / `m.` host prefixes; numeric-ID guard for Vimeo to skip pages like `vimeo.com/categories`.
+  - `detect_video(&Article)` — checks `external_url` → `url` → scans `content_html` / `content_text` / `summary` for the first matching URL. The scanner is a hand-rolled URL-token extractor (no regex dep) — finds every `http(s)://…` substring and stops at whitespace / quotes / angle brackets.
+  - `youtube_thumbnail_url(id)` — deterministic `https://i.ytimg.com/vi/<id>/hqdefault.jpg`. `hqdefault` (480×360) always exists for any valid video; `maxresdefault` only when the uploader uploaded a high-res custom thumbnail.
+  - `thumbnail_url(client, source)` — async resolver. YouTube returns synchronously; Vimeo hits the public oEmbed endpoint (`https://vimeo.com/api/oembed.json?url=…`, no auth required) and reads `thumbnail_url` from the JSON response.
+  - 12 unit tests covering every URL surface + corner cases (rejects `vimeo.com/categories`, handles `m.youtube.com`, strips `?feature=share` query strings).
+
+- **`ImageCache` extended with a third `Kind::VideoThumb` variant.** New cache directory at `$XDG_CACHE_HOME/viaduct/video-thumbs/` (added to `paths::ensure_dirs`). Per-kind LRU cap stays at 250 entries — peak RSS ceiling unchanged. New `image_cache.video_thumbnail(url)` method routes through the same memory-hit → disk-hit → network-fetch flow as favicon and image. New `image_cache.client()` accessor exposes the underlying reqwest `Client` for callers that need to issue an oEmbed lookup before the actual thumbnail fetch (Vimeo path).
+
+- **Timeline row layout updated.** New `gtk::Picture` widget added as the first child of `row_hbox` ahead of `content_vbox`. Sized 80×45 with `ContentFit::Cover`. Hidden by default — only shows after `detect_video` matches AND the bytes successfully decode to a `GdkTexture`. `widget_name` carries the article's `article_id` so a stale fetch (the row recycled to a new article before the network call returned) drops its result instead of painting it onto the wrong row.
+
+- **Asset hygiene.** When a row's bound article has no detected video, the picture explicitly clears its paintable (`set_paintable(Paintable::NONE)`) and stays hidden — no leftover thumbnail from a previously-bound article shows during recycling.
+
+- **CSS — new `.viaduct-timeline-thumb` class.** 6 px border-radius + 5 % currentColor placeholder background so the thumbnail reads as inline media without dominating the row.
+
+### What deliberately doesn't ship in v1.3.0
+
+- **Reader-pane embedding.** The video player UI is a separate piece tracked under v1.4.0 (in-pane YouTube playback). v1.3.0 stops at "the timeline shows you there's a video here" — clicking the article still routes through the existing flow (article body in WebKit + Ctrl+Enter → `xdg-open` for in-system playback if the user has mpv configured).
+- **PeerTube.** Federated; no single oEmbed endpoint. Skipped pending a request — the federated graph would need per-instance configuration that the `local.opml` schema doesn't carry yet.
+- **Generic Open Graph thumbnail extraction.** Some non-video sites ship `<meta property="og:image">`. Out of scope here — that's an article-image flow (NNW already has one tied to `Article.imageURL`) and would need its own UX decision about whether to surface in every row or only video rows. Tracked as a future polish if needed.
+
+### Memory profile
+
+68 unit + 1 integration test passing. No new top-level dependency — Vimeo's oEmbed JSON parsing reuses `serde_json` (already in the tree). Cache eviction guarantees keep peak RSS unchanged from v1.2.x.
+
 ## v1.2.1 — Empty-state flash fix
 
 Tiny, surgical follow-up to v1.2.0. Clicking between feeds in the sidebar briefly flashed the "No articles" `AdwStatusPage` while the timeline rebuilt. Cause: `populate_timeline` did `store.remove_all()` (one `items_changed` → empty-state stack flips visible) then `store.append(...)` per article (more `items_changed` → eventually back to content). The empty-state `connect_items_changed` watcher caught the in-between zero state every time.

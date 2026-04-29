@@ -122,6 +122,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let cache = ImageCache::new(
         viaduct::paths::favicon_cache_dir()?,
         viaduct::paths::image_cache_dir()?,
+        viaduct::paths::video_thumb_cache_dir()?,
     );
     let mut handles = Vec::with_capacity(FAVICONS_TO_WARM + IMAGES_TO_WARM);
     for i in 0..FAVICONS_TO_WARM {

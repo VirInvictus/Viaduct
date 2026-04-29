@@ -41,6 +41,10 @@ pub fn image_cache_dir() -> Result<PathBuf> {
     Ok(cache_dir()?.join("images"))
 }
 
+pub fn video_thumb_cache_dir() -> Result<PathBuf> {
+    Ok(cache_dir()?.join("video-thumbs"))
+}
+
 pub fn fonts_dir() -> Result<PathBuf> {
     Ok(xdg_home("XDG_DATA_HOME", ".local/share")?
         .join("fonts")
@@ -53,6 +57,7 @@ pub fn ensure_dirs() -> Result<()> {
         cache_dir()?,
         favicon_cache_dir()?,
         image_cache_dir()?,
+        video_thumb_cache_dir()?,
         fonts_dir()?,
     ] {
         std::fs::create_dir_all(&dir).map_err(|source| ViaductError::CreateDir {

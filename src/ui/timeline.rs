@@ -3,12 +3,15 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 use crate::models::Article;
+use crate::network::ImageCache;
+use crate::network::video_thumbs::{VideoSource, detect_video};
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 glib::wrapper! {
     /// A GObject wrapper around the domain `Article` so it can be used in `gio::ListModel`.
@@ -97,6 +100,7 @@ pub fn setup_timeline_list_view(
     list_view: &gtk::ListView,
     list_store: &gtk::gio::ListStore,
     feed_names: FeedNameMap,
+    image_cache: Arc<ImageCache>,
 ) -> gtk::SingleSelection {
     let selection_model = gtk::SingleSelection::new(Some(list_store.clone()));
     selection_model.set_autoselect(false);
@@ -111,9 +115,11 @@ pub fn setup_timeline_list_view(
             .expect("Needs to be ListItem");
 
         // Row layout (v1.2.0-pre4.3 — restructured to fix date getting
-        // pushed off-screen in smart-feed views):
+        // pushed off-screen in smart-feed views; v1.3.0 added a leading
+        // thumbnail column hidden when the article has no detected video):
         //
         //   row_hbox:
+        //     thumb_picture (visible only when the article has a video)
         //     content_vbox (hexpand=true):
         //       top_hbox: title (hexpand) | media icon + count
         //       feed_name
@@ -130,6 +136,18 @@ pub fn setup_timeline_list_view(
         row_hbox.set_margin_end(8);
         row_hbox.set_margin_top(8);
         row_hbox.set_margin_bottom(8);
+
+        // Video thumbnail column. Hidden by default; populated and shown
+        // during bind when `detect_video` finds a YouTube / Vimeo URL.
+        // 80×45 = 16:9 at compact size — small enough not to dominate
+        // text-only rows when present, large enough to read.
+        let thumb_picture = gtk::Picture::new();
+        thumb_picture.set_size_request(80, 45);
+        thumb_picture.set_content_fit(gtk::ContentFit::Cover);
+        thumb_picture.set_can_shrink(true);
+        thumb_picture.set_valign(gtk::Align::Start);
+        thumb_picture.add_css_class("viaduct-timeline-thumb");
+        thumb_picture.set_visible(false);
 
         let content_vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
         content_vbox.set_hexpand(true);
@@ -200,6 +218,7 @@ pub fn setup_timeline_list_view(
         // ellipsizes around it.
         date_label.set_size_request(80, -1);
 
+        row_hbox.append(&thumb_picture);
         row_hbox.append(&content_vbox);
         row_hbox.append(&date_label);
 
@@ -207,21 +226,30 @@ pub fn setup_timeline_list_view(
     });
 
     let feed_names_for_bind = feed_names.clone();
+    let cache_for_bind = image_cache.clone();
     factory.connect_bind(move |_factory, list_item| {
         let item = list_item
             .downcast_ref::<gtk::ListItem>()
             .expect("Needs to be ListItem");
 
         let node = item.item().and_downcast::<ArticleNode>().unwrap();
-        // New tree from pre4.3:
+        // Tree from v1.3.0 (thumbnail column added in front):
         //   row_hbox
-        //   ├── content_vbox  (first_child)
+        //   ├── thumb_picture (first_child, hidden when no video)
+        //   ├── content_vbox
         //   │   ├── top_hbox (title + media)
         //   │   ├── feed_name_label
         //   │   └── preview_label
         //   └── date_label  (last_child)
         let row_hbox = item.child().and_downcast::<gtk::Box>().unwrap();
-        let content_vbox = row_hbox.first_child().and_downcast::<gtk::Box>().unwrap();
+        let thumb_picture = row_hbox
+            .first_child()
+            .and_downcast::<gtk::Picture>()
+            .unwrap();
+        let content_vbox = thumb_picture
+            .next_sibling()
+            .and_downcast::<gtk::Box>()
+            .unwrap();
         let date_label = row_hbox.last_child().and_downcast::<gtk::Label>().unwrap();
 
         let top_hbox = content_vbox
@@ -313,6 +341,16 @@ pub fn setup_timeline_list_view(
             // when read, the entire row dims; when unread, feed-name +
             // preview pop a touch above default to draw the eye.
             apply_row_read_styling(&feed_name_label, &preview_label, &date_label, node.read());
+
+            // Video thumbnail. Hide by default; if the article carries a
+            // detectable YouTube/Vimeo URL, async-load the thumbnail and
+            // assign to the picture. The article_id is stamped onto the
+            // widget as a stale-row guard so a recycled row doesn't show
+            // the previous article's thumb.
+            thumb_picture.set_paintable(gtk::gdk::Paintable::NONE);
+            thumb_picture.set_visible(false);
+            thumb_picture.set_widget_name(&article.article_id);
+            spawn_video_thumbnail_fetch(&article, &thumb_picture, cache_for_bind.clone());
         }
 
         // Re-style the title whenever the node's read flag flips. Stored on
@@ -481,6 +519,56 @@ fn decode_common_entities(s: &str) -> String {
         .replace("&lsquo;", "‘")
         .replace("&rdquo;", "”")
         .replace("&ldquo;", "“")
+}
+
+/// Detect a video URL on the article and async-load its thumbnail through
+/// `ImageCache`. The widget's `name` carries the article_id as a stale-row
+/// guard — when the row gets recycled to a different article before the
+/// thumbnail finishes downloading, we skip applying the texture.
+fn spawn_video_thumbnail_fetch(article: &Article, picture: &gtk::Picture, cache: Arc<ImageCache>) {
+    let Some(source) = detect_video(article) else {
+        return;
+    };
+    let expected_id = article.article_id.clone();
+    let picture_weak = picture.downgrade();
+    glib::spawn_future_local(async move {
+        let bytes_opt = match source {
+            VideoSource::YouTube { id } => {
+                cache
+                    .video_thumbnail(&crate::network::video_thumbs::youtube_thumbnail_url(&id))
+                    .await
+            }
+            VideoSource::Vimeo { id } => {
+                let client = cache.client().await;
+                let url_opt = crate::network::video_thumbs::thumbnail_url(
+                    &client,
+                    &VideoSource::Vimeo { id },
+                )
+                .await;
+                match url_opt {
+                    Some(u) => cache.video_thumbnail(&u).await,
+                    None => None,
+                }
+            }
+        };
+        let Some(bytes) = bytes_opt else { return };
+        let Some(picture) = picture_weak.upgrade() else {
+            return;
+        };
+        if picture.widget_name() != expected_id {
+            return;
+        }
+        let glib_bytes = glib::Bytes::from_owned(bytes);
+        match gtk::gdk::Texture::from_bytes(&glib_bytes) {
+            Ok(texture) => {
+                picture.set_paintable(Some(&texture));
+                picture.set_visible(true);
+            }
+            Err(e) => {
+                tracing::debug!(?e, "failed to decode video thumbnail bytes");
+            }
+        }
+    });
 }
 
 #[cfg(test)]

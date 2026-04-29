@@ -38,13 +38,15 @@ pub struct ImageCache {
 struct Inner {
     favicon_dir: PathBuf,
     image_dir: PathBuf,
+    video_thumb_dir: PathBuf,
     favicons: LruCache<String, Vec<u8>>,
     images: LruCache<String, Vec<u8>>,
+    video_thumbs: LruCache<String, Vec<u8>>,
     client: Client,
 }
 
 impl ImageCache {
-    pub fn new(favicon_dir: PathBuf, image_dir: PathBuf) -> Self {
+    pub fn new(favicon_dir: PathBuf, image_dir: PathBuf, video_thumb_dir: PathBuf) -> Self {
         let cap = NonZeroUsize::new(MEMORY_CAPACITY).expect("MEMORY_CAPACITY > 0");
         let client = crate::network::http::build_default_client()
             .expect("Failed to build reqwest client for ImageCache");
@@ -52,11 +54,20 @@ impl ImageCache {
             inner: Arc::new(Mutex::new(Inner {
                 favicon_dir,
                 image_dir,
+                video_thumb_dir,
                 favicons: LruCache::new(cap),
                 images: LruCache::new(cap),
+                video_thumbs: LruCache::new(cap),
                 client,
             })),
         }
+    }
+
+    /// Borrow the underlying reqwest `Client` for callers that need the same
+    /// connection pool (e.g. video oEmbed lookups before the actual thumbnail
+    /// fetch).
+    pub async fn client(&self) -> Client {
+        self.inner.lock().await.client.clone()
     }
 
     /// Fetch a favicon by URL. Memory hit → disk hit → network fetch → cache.
@@ -78,6 +89,18 @@ impl ImageCache {
         let (tx, rx) = tokio::sync::oneshot::channel();
         crate::spawn_on_runtime(async move {
             let _ = tx.send(cache.fetch_kind(&url, Kind::Image).await);
+        });
+        rx.await.unwrap_or(None)
+    }
+
+    /// Fetch a video thumbnail by URL. Stored under the dedicated video-thumb
+    /// cache directory so it doesn't blend with article inline images.
+    pub async fn video_thumbnail(&self, url: &str) -> Option<Vec<u8>> {
+        let cache = self.clone();
+        let url = url.to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let _ = tx.send(cache.fetch_kind(&url, Kind::VideoThumb).await);
         });
         rx.await.unwrap_or(None)
     }
@@ -132,6 +155,7 @@ impl ImageCache {
 enum Kind {
     Favicon,
     Image,
+    VideoThumb,
 }
 
 impl Inner {
@@ -139,6 +163,7 @@ impl Inner {
         match kind {
             Kind::Favicon => &mut self.favicons,
             Kind::Image => &mut self.images,
+            Kind::VideoThumb => &mut self.video_thumbs,
         }
     }
 
@@ -146,6 +171,7 @@ impl Inner {
         let dir: &Path = match kind {
             Kind::Favicon => &self.favicon_dir,
             Kind::Image => &self.image_dir,
+            Kind::VideoThumb => &self.video_thumb_dir,
         };
         dir.join(cache_filename(url))
     }

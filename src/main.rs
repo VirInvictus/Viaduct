@@ -183,6 +183,12 @@ listview > row:selected .viaduct-unread-badge {\n\
 .viaduct-row-read {\n\
     opacity: 0.55;\n\
 }\n\
+/* Video thumbnails get rounded corners and a subtle border so they\n\
+ * read as inline media without dominating the row. */\n\
+.viaduct-timeline-thumb {\n\
+    border-radius: 6px;\n\
+    background-color: alpha(currentColor, 0.05);\n\
+}\n\
 ";
     let provider = gtk::CssProvider::new();
     provider.load_from_string(css);

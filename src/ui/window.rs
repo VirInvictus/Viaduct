@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::database::accounts::Account;
 use crate::network::ImageCache;
-use crate::paths::{favicon_cache_dir, image_cache_dir};
+use crate::paths::{favicon_cache_dir, image_cache_dir, video_thumb_cache_dir};
 use crate::ui::article_renderer;
 use crate::ui::sidebar::{
     SidebarDataSource, SidebarItem, SidebarTreeControllerDelegate, selected_sidebar_item,
@@ -148,10 +148,12 @@ impl ViaductWindow {
         // window still opens (favicons silently fail).
         let favicons = favicon_cache_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
         let images = image_cache_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        let video_thumbs =
+            video_thumb_cache_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
         window
             .imp()
             .image_cache
-            .set(Arc::new(ImageCache::new(favicons, images)))
+            .set(Arc::new(ImageCache::new(favicons, images, video_thumbs)))
             .ok();
         window.wire_models();
         crate::ui::actions::install(&window, app);
@@ -258,8 +260,12 @@ impl ViaductWindow {
 
         // Timeline store + selection.
         let timeline_store = gio::ListStore::new::<ArticleNode>();
-        let timeline_selection =
-            setup_timeline_list_view(&imp.timeline_list_view, &timeline_store, feed_names.clone());
+        let timeline_selection = setup_timeline_list_view(
+            &imp.timeline_list_view,
+            &timeline_store,
+            feed_names.clone(),
+            self.image_cache(),
+        );
 
         self.install_timeline_capture_shortcuts();
 

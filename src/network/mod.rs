@@ -9,6 +9,7 @@ pub mod credentials;
 pub mod fetcher;
 pub mod http;
 pub mod inoreader;
+pub mod video_thumbs;
 
 pub use cache::{ImageCache, color_for};
 pub use fetcher::{AccountRefresher, Fetcher};
