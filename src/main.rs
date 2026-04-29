@@ -150,10 +150,11 @@ fn build_ui(app: &adw::Application, account: Arc<Account>) {
     window.present();
 }
 
-/// One-time CSS provider for sidebar refinements (v1.2.0-pre3). Pill-
-/// shaped unread badges, bolder section headers for the SmartFeedGroup
-/// row. Lives at APPLICATION priority so the accent provider (USER+100)
-/// still wins for accent-coloured surfaces.
+/// One-time CSS provider for sidebar + timeline refinements (v1.2.0
+/// pre3 + pre4). Pill-shaped unread badges, bolder section headers for
+/// the SmartFeedGroup row, dimmed-row treatment for read articles in
+/// the timeline. Lives at APPLICATION priority so the accent provider
+/// (USER+100) still wins for accent-coloured surfaces.
 fn apply_sidebar_styling() {
     let Some(display) = gtk::gdk::Display::default() else {
         return;
@@ -176,6 +177,11 @@ fn apply_sidebar_styling() {
 }\n\
 listview > row:selected .viaduct-unread-badge {\n\
     background-color: alpha(@accent_fg_color, 0.20);\n\
+}\n\
+/* Timeline rows: support labels dim slightly more on read items so\n\
+ * the eye reads the row state at a glance, beyond the title alone. */\n\
+.viaduct-row-read {\n\
+    opacity: 0.55;\n\
 }\n\
 ";
     let provider = gtk::CssProvider::new();

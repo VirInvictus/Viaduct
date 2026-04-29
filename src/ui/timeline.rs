@@ -230,7 +230,7 @@ pub fn setup_timeline_list_view(
 
             let date_str = article
                 .date_published
-                .map(|d| d.format("%b %e, %Y").to_string())
+                .map(format_relative_date)
                 .unwrap_or_default();
             date_label.set_text(&date_str);
 
@@ -252,11 +252,17 @@ pub fn setup_timeline_list_view(
                     .summary
                     .as_deref()
                     .or(article.content_text.as_deref())
+                    .or(article.content_html.as_deref())
                     .unwrap_or("")
                     .to_string()
             });
-            let clean_preview = preview_source.replace('\n', " ").replace('\r', "");
+            let clean_preview = strip_html_for_preview(&preview_source);
             preview_label.set_text(&clean_preview);
+
+            // Sharpen the read/unread visual hierarchy beyond the title:
+            // when read, the entire row dims; when unread, feed-name +
+            // preview pop a touch above default to draw the eye.
+            apply_row_read_styling(&feed_name_label, &preview_label, &date_label, node.read());
         }
 
         // Re-style the title whenever the node's read flag flips. Stored on
@@ -301,5 +307,172 @@ fn apply_read_styling(title: &gtk::Label, read: bool) {
     } else {
         title.remove_css_class("dim-label");
         title.add_css_class("heading");
+    }
+}
+
+/// Sharpen the unread/read visual hierarchy beyond the title — once an
+/// article is read, every label in the row gets a notch dimmer; while
+/// unread, the supporting labels (feed name, preview) sit at default
+/// brightness so the title doesn't fight a low-contrast row.
+fn apply_row_read_styling(
+    feed_name: &gtk::Label,
+    preview: &gtk::Label,
+    date: &gtk::Label,
+    read: bool,
+) {
+    let extra_dim = "viaduct-row-read";
+    if read {
+        feed_name.add_css_class(extra_dim);
+        preview.add_css_class(extra_dim);
+        date.add_css_class(extra_dim);
+    } else {
+        feed_name.remove_css_class(extra_dim);
+        preview.remove_css_class(extra_dim);
+        date.remove_css_class(extra_dim);
+    }
+}
+
+/// NNW-style relative date for the timeline row: "5m ago" within the
+/// hour, "3h ago" within the day, "Yesterday" for ~24-48 h, weekday
+/// name for the past week, "Mar 19" within the year, "Mar 19, 2025"
+/// for older. Stays compact so long titles don't get squeezed.
+fn format_relative_date(d: chrono::DateTime<chrono::Utc>) -> String {
+    let now = chrono::Utc::now();
+    let local_now = now.with_timezone(&chrono::Local);
+    let local = d.with_timezone(&chrono::Local);
+    let elapsed = now.signed_duration_since(d);
+
+    if elapsed.num_seconds() < 0 {
+        // Future-dated article (clock skew or feed bug). Fall back to
+        // the absolute medium format rather than "in 3h".
+        return local.format("%b %-d").to_string();
+    }
+    let mins = elapsed.num_minutes();
+    let hours = elapsed.num_hours();
+    let days = elapsed.num_days();
+    if mins < 1 {
+        return "Just now".to_string();
+    }
+    if hours < 1 {
+        return format!("{}m ago", mins);
+    }
+    if hours < 24 {
+        return format!("{}h ago", hours);
+    }
+    // Today / Yesterday checks key off LOCAL calendar dates so a feed
+    // post at 23:30 local time and read at 02:00 the next day is
+    // "Yesterday" rather than "3h ago".
+    use chrono::Datelike;
+    let today_ord = local_now.num_days_from_ce();
+    let pub_ord = local.num_days_from_ce();
+    let day_diff = today_ord - pub_ord;
+    if day_diff == 1 {
+        return "Yesterday".to_string();
+    }
+    if (2..7).contains(&day_diff) {
+        return local.format("%A").to_string();
+    }
+    if local.year() == local_now.year() {
+        return local.format("%b %-d").to_string();
+    }
+    if days < 365 {
+        return local.format("%b %-d").to_string();
+    }
+    local.format("%b %-d, %Y").to_string()
+}
+
+/// Drop tags, decode the most common HTML entities, and collapse whitespace
+/// so a feed-supplied HTML preview lands as a clean two-line string in
+/// the timeline row. Skipped when the input is already plain text.
+fn strip_html_for_preview(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_tag = false;
+    let mut last_was_space = false;
+    for ch in input.chars() {
+        if in_tag {
+            if ch == '>' {
+                in_tag = false;
+                if !last_was_space {
+                    out.push(' ');
+                    last_was_space = true;
+                }
+            }
+            continue;
+        }
+        if ch == '<' {
+            in_tag = true;
+            continue;
+        }
+        if ch.is_whitespace() {
+            if !last_was_space && !out.is_empty() {
+                out.push(' ');
+                last_was_space = true;
+            }
+            continue;
+        }
+        out.push(ch);
+        last_was_space = false;
+    }
+    decode_common_entities(out.trim())
+}
+
+fn decode_common_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&hellip;", "…")
+        .replace("&mdash;", "—")
+        .replace("&ndash;", "–")
+        .replace("&rsquo;", "’")
+        .replace("&lsquo;", "‘")
+        .replace("&rdquo;", "”")
+        .replace("&ldquo;", "“")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_html_drops_tags_and_collapses_whitespace() {
+        let input = "<p>Hello <strong>world</strong>!</p>\n<p>How are\nyou?</p>";
+        let out = strip_html_for_preview(input);
+        assert_eq!(out, "Hello world ! How are you?");
+    }
+
+    #[test]
+    fn strip_html_decodes_common_entities() {
+        let input = "Tom &amp; Jerry &mdash; Mary&#39;s &ldquo;cat&rdquo;";
+        let out = strip_html_for_preview(input);
+        assert_eq!(out, "Tom & Jerry — Mary's “cat”");
+    }
+
+    #[test]
+    fn strip_html_handles_plain_text() {
+        let input = "  Already plain  text  ";
+        let out = strip_html_for_preview(input);
+        assert_eq!(out, "Already plain text");
+    }
+
+    #[test]
+    fn relative_date_just_now_under_minute() {
+        let d = chrono::Utc::now() - chrono::Duration::seconds(15);
+        assert_eq!(format_relative_date(d), "Just now");
+    }
+
+    #[test]
+    fn relative_date_minutes_within_hour() {
+        let d = chrono::Utc::now() - chrono::Duration::minutes(7);
+        assert_eq!(format_relative_date(d), "7m ago");
+    }
+
+    #[test]
+    fn relative_date_hours_within_day() {
+        let d = chrono::Utc::now() - chrono::Duration::hours(5);
+        assert_eq!(format_relative_date(d), "5h ago");
     }
 }
