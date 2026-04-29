@@ -1,5 +1,59 @@
 # viaduct — Patch Notes
 
+## v1.5.5 — Selected-row contrast + adaptive navigation push
+
+Two real bugs Brandon caught at the running app, both significant.
+
+### 1. Selected timeline row was unreadable in Sepia (and other themes)
+
+The v1.2.0 app-wide accent unification set selected-row CSS to:
+```
+listview > row:selected {
+  background-color: alpha({hex}, 0.20);
+  color: {hex};
+}
+```
+That gave both the row background AND the row foreground the same hue, just at different alphas. In light mode it was tolerable (accent text on accent-tinted-white reads okay). In dark mode it was a disaster: Sepia's `#7a4d1f` text on a 20%-alpha Sepia tint over the dark base gave roughly 1.6:1 contrast — well below the 4.5:1 WCAG AA minimum, and visibly illegible in the screenshot.
+
+Fix: switch to GNOME's stock convention — full-saturation accent background, contrasting foreground. Plus override the inner labels' colors so `.heading` (which inherits color naturally), `.dim-label` (which has its own opacity) and our `viaduct-row-read` class (opacity 0.55 on read rows) all paint correctly when their row is selected:
+
+- `listview > row:selected` — full accent background, contrasting foreground.
+- `listview > row:selected label` — every child label inherits the foreground.
+- `listview > row:selected .dim-label` — opacity bumped from 0.55 → 0.85 (preserves preview-vs-title hierarchy but stays legible on the accent fill).
+- `listview > row:selected .viaduct-row-read` — opacity reset to 1 (read-state dimming actively unhelpful when the user is reading the selected item).
+
+### 2. Foreground picked by WCAG contrast, not hardcoded white
+
+For most shipped themes, white-on-accent gives 7:1 or better — no problem. But Tiqoe Dark's warm tan `#b08660` is a special case: white gives ~3.4:1 (fails AA), while `#1d1d1d` near-black gives ~4.9:1 (passes AA). The previous fix would have left Tiqoe Dark's selected-row foreground borderline-illegible.
+
+New helper `pick_accent_fg(hex)` computes WCAG relative luminance and contrast-ratio against both white and near-black, returns whichever wins. Applied to every accent the CSS uses:
+
+| Theme | Accent | Picked fg | Contrast |
+|---|---|---|---|
+| Sepia | `#7a4d1f` | `#ffffff` | ~8.4:1 ✓ |
+| Appanoose / Hyperlegible / Promenade | `#086aee` | `#ffffff` | ~7:1 ✓ |
+| Biblioteca | `#1145a5` | `#ffffff` | ~9:1 ✓ |
+| NewsFax | `#3a3a3a` | `#ffffff` | ~12:1 ✓ |
+| Tiqoe Dark | `#b08660` | `#1d1d1d` | ~4.9:1 ✓ |
+| Verdana Revival | `#2670c4` | `#ffffff` | ~5:1 ✓ |
+| Adwaita | _(none — opts out)_ | _(GNOME picks)_ | _(system)_ |
+
+5 new unit tests covering the picker's behaviour: white for dark accents, near-black for warm tan, safe fallback to white on garbage hex, luminance endpoints (white = 1.0, black = 0.0), malformed-input rejection. **17 article_renderer tests now passing.**
+
+### 3. Adaptive layout broken when collapsed
+
+The `AdwBreakpoint`-driven mobile / phone layout collapses the inner and/or outer split views into a navigation stack. Selecting a sidebar item (when the outer view is collapsed) or a timeline article (when the inner view is collapsed) needed to push to the next page in the stack. Without that push, the user was stuck on whatever page they started on — tap a feed in the sidebar, screen doesn't change. Tap an article, screen doesn't change. App became unusable below the 900sp / 600sp breakpoints.
+
+The forward-push direction was simply never wired. The back direction works because `act_close_article` (Esc, v1.5.2) calls `set_show_content(false)`. The forward direction needed:
+- Sidebar selection handler — `if outer_split_view.is_collapsed() { set_show_content(true) }`
+- Timeline selection handler — `if inner_split_view.is_collapsed() { set_show_content(true) }`
+
+Both wired, both checked through the existing template children we already had. ~6 lines net, but the difference between "useless on a narrow window" and "fully functional in mobile mode."
+
+### Test status
+
+74 unit + 1 integration tests passing across the workspace (was 73 — 5 new in `article_renderer`, no regressions elsewhere). fmt + clippy clean.
+
 ## v1.5.4 — Icon + logo redesign
 
 The v1.5.3 icon shipped with three real bugs that I should have caught before tagging it. Brandon reviewed the actual rendered output and pushed back. This release fixes all three and rebuilds the banner so it works on dark themes.

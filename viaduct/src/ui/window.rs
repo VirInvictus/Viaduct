@@ -350,6 +350,16 @@ impl ViaductWindow {
                     None
                 };
                 *window.imp().selected_feed_id.borrow_mut() = feed_id;
+                // Adaptive layout (v1.5.5): when the outer split view is
+                // collapsed (mobile-shaped window), tapping a sidebar
+                // entry must push to the timeline page or the user is
+                // stuck on the feed list with no way to read anything.
+                // The split view back-pops naturally via system Back; the
+                // forward push has to be explicit.
+                let outer = &window.imp().outer_split_view;
+                if outer.is_collapsed() {
+                    outer.set_show_content(true);
+                }
             }
             let account = account_for_sidebar.clone();
             let store = timeline_store_for_sidebar.clone();
@@ -460,6 +470,16 @@ impl ViaductWindow {
             *window.imp().current_video.borrow_mut() = detected.clone();
             window.refresh_video_button_visibility();
             window.render_article_body();
+            // Adaptive layout (v1.5.5): when the inner split view is
+            // collapsed, push to the article page so the user actually
+            // sees the article they just selected. Without this, the
+            // user taps an article in the timeline and the screen
+            // doesn't change — the article stays hidden behind the
+            // collapsed nav stack.
+            let inner = &window.imp().inner_split_view;
+            if inner.is_collapsed() {
+                inner.set_show_content(true);
+            }
 
             // Auto-mark-read on selection — port of NNW
             // `tableViewSelectionDidChange` (TimelineViewController.swift:931).

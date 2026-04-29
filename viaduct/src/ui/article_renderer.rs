@@ -249,7 +249,14 @@ pub fn apply_app_accent(hex: Option<&str>) {
     // priority on GNOME 47+).
     const ACCENT_PRIORITY: u32 = gtk::STYLE_PROVIDER_PRIORITY_USER + 100;
 
-    let fg = "#ffffff";
+    // Pick the accent's contrasting foreground by WCAG contrast ratio.
+    // White is correct for most of our shipped themes (Sepia, the blue
+    // family, NewsFax — all dark accents). Tiqoe Dark's warm tan
+    // `#b08660` is the outlier: white on it gives ~3.4:1 (fails AA),
+    // near-black gives ~4.9:1 (passes AA). Without this picker, the
+    // selected timeline row would be unreadable on Tiqoe Dark in dark
+    // mode — same class of bug Brandon reported in Sepia/v1.5.4.
+    let fg = pick_accent_fg(hex);
     let css = format!(
         // 1. Legacy @define-color cascade — read by older stylesheets
         //    and any custom widget that asks for the named colors.
@@ -284,15 +291,45 @@ pub fn apply_app_accent(hex: Option<&str>) {
          menu check:checked,\n\
          menu radio:checked {{ background-color: {hex}; color: {fg}; }}\n\
          \n\
-         /* List & sidebar selection — the single biggest visual cue. */\n\
+         /* List & sidebar selection — the single biggest visual cue.\n\
+          * Use FULL-saturation accent for the background and white for\n\
+          * the foreground, mirroring GNOME's stock convention. The\n\
+          * previous 20%-alpha background + accent foreground produced\n\
+          * accent-on-accent-tinted-dark in dark mode (Sepia + dark mode\n\
+          * was the worst offender, where `#7a4d1f` text on a 20% Sepia\n\
+          * tinted dark base gave ~1.6:1 contrast — illegible). */\n\
          listview > row:selected,\n\
          listview > row:selected:focus,\n\
          listview > row:selected:hover,\n\
          row.activatable:selected,\n\
          row.activatable:selected:focus,\n\
          row.activatable:selected:hover {{\n\
-           background-color: alpha({hex}, 0.20);\n\
-           color: {hex};\n\
+           background-color: {hex};\n\
+           color: {fg};\n\
+         }}\n\
+         /* Override label-level styling inside a selected row so every\n\
+          * child label paints against the accent background. The .heading\n\
+          * class on titles inherits color naturally; .dim-label and our\n\
+          * .viaduct-row-read class both apply opacity that needs to be\n\
+          * partially neutralised so the user can read a selected item\n\
+          * clearly even when it's marked read. */\n\
+         listview > row:selected label,\n\
+         row.activatable:selected label {{\n\
+           color: {fg};\n\
+         }}\n\
+         /* Bump dim-label's default opacity (0.55) up to 0.85 inside a\n\
+          * selected row — preserves hierarchy (preview vs. title) but\n\
+          * stays solidly legible on the accent fill. */\n\
+         listview > row:selected .dim-label,\n\
+         row.activatable:selected .dim-label {{\n\
+           opacity: 0.85;\n\
+         }}\n\
+         /* Read-row dimming (`viaduct-row-read`, opacity 0.55) is\n\
+          * actively unhelpful on a selected row — the user is looking\n\
+          * AT the selected item, so render it at full strength. */\n\
+         listview > row:selected .viaduct-row-read,\n\
+         row.activatable:selected .viaduct-row-read {{\n\
+           opacity: 1;\n\
          }}\n\
          \n\
          /* Text selection. */\n\
@@ -317,6 +354,60 @@ pub fn apply_app_accent(hex: Option<&str>) {
         gtk::style_context_add_provider_for_display(&display, &provider, ACCENT_PRIORITY);
         *cell.borrow_mut() = Some(provider);
     });
+}
+
+/// Pick a high-contrast foreground (white or near-black) for an accent
+/// background. Compares WCAG contrast against both candidates and
+/// returns whichever wins. Falls back to white on parse failure so a
+/// malformed hex never produces invisible text.
+///
+/// Test vectors:
+/// - `#7a4d1f` (Sepia, dark cinnamon) → `#ffffff` (8.4:1 vs 1.8:1)
+/// - `#086aee` (the blue-family accents) → `#ffffff` (~7:1)
+/// - `#b08660` (Tiqoe Dark's warm tan) → `#1d1d1d` (~4.9:1 vs 3.4:1)
+/// - `#3a3a3a` (NewsFax) → `#ffffff` (~12:1)
+fn pick_accent_fg(hex: &str) -> &'static str {
+    const WHITE: &str = "#ffffff";
+    const DARK: &str = "#1d1d1d";
+    let Some(lum) = relative_luminance(hex) else {
+        return WHITE;
+    };
+    // WCAG contrast: (L_lighter + 0.05) / (L_darker + 0.05)
+    let contrast_with_white = 1.05 / (lum + 0.05);
+    // Near-black #1d1d1d has linear-luminance ≈ 0.0119; using 0.012
+    // matches WCAG enough for the picker. Hardcoded so we don't need
+    // a second relative_luminance call on the constant.
+    let contrast_with_dark = (lum + 0.05) / (0.012 + 0.05);
+    if contrast_with_white >= contrast_with_dark {
+        WHITE
+    } else {
+        DARK
+    }
+}
+
+/// WCAG relative luminance of a `#rrggbb` hex string. Returns None for
+/// any unparseable input. The formula applies the sRGB gamma decoding
+/// per channel (the `<= 0.03928` branch of the WCAG 2.x spec) before
+/// the `0.2126·R + 0.7152·G + 0.0722·B` weighting.
+fn relative_luminance(hex: &str) -> Option<f64> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+
+    fn channel(c: u8) -> f64 {
+        let s = c as f64 / 255.0;
+        if s <= 0.03928 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    Some(0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b))
 }
 
 /// Look up a theme by id; falls back to Sepia when the id isn't recognized.
@@ -991,5 +1082,59 @@ mod tests {
         assert!(theme_by_id("sepia").accent_hex.is_some());
         // Unknown id falls back to first registered theme (Adwaita).
         assert_eq!(theme_by_id("nope").id, "adwaita");
+    }
+
+    #[test]
+    fn relative_luminance_handles_endpoints() {
+        // Pure white should give 1.0; pure black 0.0; near-black our
+        // hardcoded approximation. Allow generous epsilon for sRGB
+        // gamma roundtripping.
+        let white = relative_luminance("#ffffff").unwrap();
+        let black = relative_luminance("#000000").unwrap();
+        assert!((white - 1.0).abs() < 1e-6, "white luminance = {white}");
+        assert!(black < 1e-6, "black luminance = {black}");
+    }
+
+    #[test]
+    fn relative_luminance_rejects_malformed() {
+        assert!(relative_luminance("").is_none());
+        assert!(relative_luminance("nope").is_none());
+        assert!(relative_luminance("#xyz").is_none());
+        assert!(relative_luminance("#fff").is_none()); // 3-char shorthand not supported
+    }
+
+    #[test]
+    fn pick_accent_fg_picks_white_for_dark_accents() {
+        // Sepia, the blue family, NewsFax — every shipped theme except
+        // Tiqoe Dark — should pair with white text.
+        for hex in [
+            "#7a4d1f", // Sepia
+            "#086aee", // Appanoose / Hyperlegible / Promenade
+            "#1145a5", // Biblioteca
+            "#3a3a3a", // NewsFax
+            "#2670c4", // Verdana Revival
+        ] {
+            assert_eq!(
+                pick_accent_fg(hex),
+                "#ffffff",
+                "expected white fg for accent {hex}"
+            );
+        }
+    }
+
+    #[test]
+    fn pick_accent_fg_picks_dark_for_warm_tan() {
+        // Tiqoe Dark — the regression case from v1.5.5. Warm tan #b08660
+        // gives ~3.4:1 with white but ~4.9:1 with near-black, so the
+        // picker should pick the dark fg to preserve readability.
+        assert_eq!(pick_accent_fg("#b08660"), "#1d1d1d");
+    }
+
+    #[test]
+    fn pick_accent_fg_falls_back_safely_on_garbage() {
+        // Malformed hex shouldn't produce invisible text — fall back
+        // to white, which works against most realistic backgrounds.
+        assert_eq!(pick_accent_fg("not-a-hex"), "#ffffff");
+        assert_eq!(pick_accent_fg("#zzz"), "#ffffff");
     }
 }
