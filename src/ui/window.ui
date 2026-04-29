@@ -35,6 +35,9 @@ Licensed under the MIT License. See LICENSE in the project root for details.
       <object class="AdwToastOverlay" id="toast_overlay">
         <property name="child">
       <object class="AdwNavigationSplitView" id="outer_split_view">
+        <property name="min-sidebar-width">220</property>
+        <property name="max-sidebar-width">360</property>
+        <property name="sidebar-width-fraction">0.22</property>
         <property name="sidebar">
           <object class="AdwNavigationPage" id="sidebar_page">
             <property name="title">Feeds</property>
@@ -88,6 +91,9 @@ Licensed under the MIT License. See LICENSE in the project root for details.
             <property name="title">Articles</property>
             <property name="child">
               <object class="AdwNavigationSplitView" id="inner_split_view">
+                <property name="min-sidebar-width">320</property>
+                <property name="max-sidebar-width">480</property>
+                <property name="sidebar-width-fraction">0.32</property>
                 <property name="sidebar">
                   <object class="AdwNavigationPage" id="timeline_page">
                     <property name="title">Timeline</property>

@@ -40,6 +40,7 @@ Visual unification + reading-pane upgrades. Built up across pre-release commits;
       │   └── preview_label
       └── date_label  (valign=Start, 80 px min, right-aligned)
       ```
+- **Pane width constraints (pre4.6).** With pre4.5's `hscrollbar-policy="never"`, the timeline pane was free to auto-size based on row natural width — so smart-feed views (with their long aggregated titles) made the timeline grow much wider than the per-feed view, eating into the article pane. Added `min-sidebar-width` / `max-sidebar-width` / `sidebar-width-fraction` constraints to both `AdwNavigationSplitView`s: outer (Feeds) clamps 220–360 px at 22 %; inner (Timeline) clamps 320–480 px at 32 %. The article pane now keeps its real estate regardless of which feed is selected. Defaults match GNOME app convention (Geary, Polari, etc.).
 
 ## v1.1.0 — Phase 6: Neutered WebKit Article Pane
 
