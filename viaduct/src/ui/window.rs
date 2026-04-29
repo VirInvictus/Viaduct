@@ -667,7 +667,38 @@ impl ViaductWindow {
             // Mozilla / AppleWebKit string, accepted by every embed host.
         }
 
-        view.load_uri(&source.embed_url());
+        // Load the embed inside an actual <iframe> in a host HTML
+        // document, with a synthetic `viaduct.local` base URI as the
+        // notional parent origin. YouTube's embed page is designed to
+        // run as an iframe child — its player JS checks for that
+        // context and surfaces "Error 153: Video player configuration
+        // error" when loaded as a top-level navigation. (We confirmed
+        // this against real YouTube videos in v1.5.8: enabling
+        // LocalStorage / IndexedDB / WebGL didn't help because the
+        // refusal happens *before* the player checks browser features.
+        // The bail is purely on the iframe-context check.) Vimeo's
+        // player has the same expectation.
+        let embed_url_attr = embed_url_for_iframe(&source.embed_url());
+        let html = format!(
+            "<!DOCTYPE html>\n\
+             <html>\n\
+             <head>\n\
+             <meta charset=\"utf-8\">\n\
+             <style>\n\
+             * {{ box-sizing: border-box; margin: 0; padding: 0; }}\n\
+             html, body {{ width: 100%; height: 100%; background: #000; }}\n\
+             iframe {{ width: 100%; height: 100%; border: 0; display: block; }}\n\
+             </style>\n\
+             </head>\n\
+             <body>\n\
+             <iframe src=\"{embed_url_attr}\"\n\
+                     allow=\"autoplay; encrypted-media; fullscreen; picture-in-picture\"\n\
+                     allowfullscreen\n\
+                     referrerpolicy=\"strict-origin-when-cross-origin\"></iframe>\n\
+             </body>\n\
+             </html>"
+        );
+        view.load_html(&html, Some("https://viaduct.local/embed/"));
         toolbar.set_content(Some(&view));
         dialog.set_child(Some(&toolbar));
 
@@ -2050,6 +2081,27 @@ pub enum VideoPlaybackMode {
     Disabled,
 }
 
+/// HTML-escape an embed URL for safe insertion into an `<iframe src="…">`
+/// attribute. The embed URLs we generate carry query strings with `&`,
+/// `=`, and the four other characters that need escaping in HTML attribute
+/// context. Without this, `&rel=0&modestbranding=1` is interpreted by the
+/// HTML parser as `&rel`-something + `&mod`-something entity references,
+/// silently corrupting the URL the iframe actually loads.
+fn embed_url_for_iframe(url: &str) -> String {
+    let mut out = String::with_capacity(url.len() + 8);
+    for c in url.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn current_video_playback_mode() -> VideoPlaybackMode {
     let Some(settings) = crate::preferences::settings() else {
         return VideoPlaybackMode::InPane;
@@ -2135,4 +2187,44 @@ async fn fetch_folder_articles(
     // bottom (matches NNW's ordering for missing dates).
     merged.sort_by_key(|a| std::cmp::Reverse(a.date_published));
     Ok(merged)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embed_url_for_iframe_escapes_query_separators() {
+        // The default YouTube embed URL has three '&' separators in the
+        // query. Without escaping, the HTML parser interprets them as
+        // entity references and silently corrupts the URL the iframe
+        // actually loads.
+        let raw = "https://www.youtube-nocookie.com/embed/abc?autoplay=1&rel=0&modestbranding=1";
+        let escaped = embed_url_for_iframe(raw);
+        assert_eq!(
+            escaped,
+            "https://www.youtube-nocookie.com/embed/abc?autoplay=1&amp;rel=0&amp;modestbranding=1"
+        );
+    }
+
+    #[test]
+    fn embed_url_for_iframe_escapes_attribute_breakers() {
+        // Quote marks would close the src attribute early; angle brackets
+        // would break the iframe tag entirely. Escape them too.
+        let raw = "https://x.test/?q=<script>&v=\"1'2\"";
+        let escaped = embed_url_for_iframe(raw);
+        assert!(!escaped.contains('"'));
+        assert!(!escaped.contains('<'));
+        assert!(!escaped.contains('>'));
+        assert!(escaped.contains("&quot;"));
+        assert!(escaped.contains("&lt;"));
+        assert!(escaped.contains("&gt;"));
+    }
+
+    #[test]
+    fn embed_url_for_iframe_passes_safe_chars_through() {
+        let raw = "https://example.com/path?id=abc-123_def&x=1";
+        let escaped = embed_url_for_iframe(raw);
+        assert_eq!(escaped, "https://example.com/path?id=abc-123_def&amp;x=1");
+    }
 }

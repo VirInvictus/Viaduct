@@ -1,5 +1,27 @@
 # viaduct — Patch Notes
 
+## v1.5.9 — YouTube playback finally works (iframe wrapper)
+
+The v1.5.8 fix (re-enabling LocalStorage / IndexedDB / WebGL on the embed view) addressed the *symptom-adjacent* problem but not the actual cause. YouTube error 153 kept firing.
+
+Real cause: `https://www.youtube-nocookie.com/embed/<id>` is *designed to be loaded inside an `<iframe>` element of a host page*, not as a top-level navigation. The embed page's player JS checks for that context — specifically that `window !== window.top` — and surfaces "Error 153: Video player configuration error" when loaded directly. The check happens *before* the player gets to verifying browser features, which is why enabling the storage APIs in v1.5.8 didn't help.
+
+### Fix
+
+`present_video_dialog` now generates a small HTML host document containing the YouTube / Vimeo embed inside a real `<iframe>`, then loads that HTML via `view.load_html(&html, Some("https://viaduct.local/embed/"))`. The synthetic `viaduct.local` base URI is what the embed sees as its parent origin — a plausible host that satisfies the iframe-context check. The iframe element gets `allow="autoplay; encrypted-media; fullscreen; picture-in-picture"` and `referrerpolicy="strict-origin-when-cross-origin"` per YouTube's official iframe-embed documentation.
+
+### Why HTML escaping matters
+
+The embed URL carries `?autoplay=1&rel=0&modestbranding=1` — three `&` separators. Inserted directly into `<iframe src="…">` without escaping, the HTML parser would interpret `&rel` as an entity reference and silently corrupt the URL. New `embed_url_for_iframe(url)` helper escapes the five attribute-context-relevant characters (`& < > " '`). 3 unit tests lock the escaping behaviour.
+
+### What this also catches
+
+The same iframe-context check applies to Vimeo's `player.vimeo.com/video/<id>` URL. Both providers now route through the iframe wrapper and play correctly.
+
+### Test status
+
+77 unit + 1 integration tests passing (was 74; 3 new for the URL-escape helper). fmt + clippy clean.
+
 ## v1.5.8 — YouTube playback fix + real screenshots
 
 Two unrelated items.
