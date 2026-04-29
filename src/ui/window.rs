@@ -38,8 +38,6 @@ mod imp {
         #[template_child]
         pub article_web_view: TemplateChild<webkit6::WebView>,
         #[template_child]
-        pub article_scroll: TemplateChild<gtk::ScrolledWindow>,
-        #[template_child]
         pub url_overlay: TemplateChild<gtk::Label>,
         #[template_child]
         pub search_bar: TemplateChild<gtk::SearchBar>,
@@ -715,32 +713,30 @@ impl ViaductWindow {
     // visible during development.
     // -----------------------------------------------------------------
 
-    /// Port of NNW `scrollOrGoToNextUnread`: if the article pane can scroll
-    /// down, page down; otherwise mark current read and advance to next
-    /// unread. Drives the wrapping `GtkScrolledWindow` directly because
-    /// `WebKitWebView` is not `GtkScrollable` in webkit6 0.4 — it has its
-    /// own internal layout managed via the parent viewport.
+    /// NNW `scrollOrGoToNextUnread` for Space. Currently the article-pane
+    /// scroll is owned by WebKit (no parent `GtkScrolledWindow` since
+    /// pre1.6 — that wrapper's auto-viewport was clipping articles
+    /// silently because NNW themes set `html { overflow: hidden }`).
+    /// Without JS we can't query scroll position from the GTK side, so
+    /// the "advance at bottom" half of the NNW behavior is on hold. For
+    /// now Space falls through to WebKit's native page-down — this
+    /// handler is a no-op that holds the action slot. v1.3 polish will
+    /// reinstate the at-bottom advance via a webkit_load_changed scroll
+    /// monitor.
     pub(crate) fn act_smart_read(&self) {
-        let scroll = self.imp().article_scroll.get();
-        let vadj = scroll.vadjustment();
-        let at_bottom = vadj.value() + vadj.page_size() >= vadj.upper() - 1.0;
-        if !at_bottom {
-            let target = (vadj.value() + vadj.page_size()).min(vadj.upper() - vadj.page_size());
-            vadj.set_value(target);
-            return;
-        }
-        self.mark_current_read_then_advance();
+        // intentionally no-op — Space goes through to WebKit
     }
 
-    /// Port of NNW `scrollUp:` (Shift+Space). Page up inside the article pane.
-    /// At the top, does nothing — NNW doesn't go to previous article here.
+    /// Companion to `act_smart_read` — Shift+Space page-up is now
+    /// WebKit's native binding too. No-op shell kept so the action
+    /// remains registered.
     pub(crate) fn act_scroll_up(&self) {
-        let scroll = self.imp().article_scroll.get();
-        let vadj = scroll.vadjustment();
-        let target = (vadj.value() - vadj.page_size()).max(vadj.lower());
-        vadj.set_value(target);
+        // intentionally no-op — Shift+Space goes through to WebKit
     }
 
+    // Will be re-wired once the at-bottom scroll monitor returns —
+    // see act_smart_read.
+    #[allow(dead_code)]
     fn mark_current_read_then_advance(&self) {
         let imp = self.imp();
         let Some(selection) = imp.timeline_selection.get() else {
@@ -1497,8 +1493,9 @@ impl ViaductWindow {
             ("Up", "win.prev-unread"),
             ("k", "win.prev-unread"),
             ("minus", "win.prev-unread"),
-            ("space", "win.smart-read"),
-            ("<Shift>space", "win.scroll-up"),
+            // Space / Shift+Space removed — WebKit owns article-pane
+            // page-down/up natively (pre1.6). Re-add once we have an
+            // at-bottom monitor for the smart-read advance behaviour.
             ("r", "win.toggle-read"),
             ("m", "win.toggle-read"),
             ("<Shift>m", "win.mark-unread-advance"),

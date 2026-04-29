@@ -67,8 +67,13 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     //
     // gtk-rs accelerator strings use GTK's shorthand: "<Ctrl>r", "space",
     // "<Shift>space", "question", etc. — see gtk_accelerator_parse.
-    app.set_accels_for_action("win.smart-read", &["space"]);
-    app.set_accels_for_action("win.scroll-up", &["<Shift>space"]);
+    // Space / Shift+Space intentionally NOT bound at the window level —
+    // WebKit handles them natively for page-down / page-up inside the
+    // article pane. Reintroduces NNW's "advance at bottom" behaviour
+    // pending a webkit-side scroll-position monitor (deferred, requires
+    // JS bridge that's currently disabled by Phase 6 lockdown).
+    // The smart-read / scroll-up actions remain registered so any
+    // future binding (or programmatic activation) still routes here.
     app.set_accels_for_action("win.next-unread", &["n", "Down", "j"]);
     app.set_accels_for_action("win.prev-unread", &["minus", "Up", "k"]);
     app.set_accels_for_action("win.toggle-read", &["r", "m"]);

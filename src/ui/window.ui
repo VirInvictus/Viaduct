@@ -151,13 +151,9 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                         <property name="content">
                           <object class="GtkOverlay">
                             <property name="child">
-                              <object class="GtkScrolledWindow" id="article_scroll">
-                                <property name="child">
-                                  <object class="WebKitWebView" id="article_web_view">
-                                    <property name="vexpand">True</property>
-                                    <property name="hexpand">True</property>
-                                  </object>
-                                </property>
+                              <object class="WebKitWebView" id="article_web_view">
+                                <property name="vexpand">True</property>
+                                <property name="hexpand">True</property>
                               </object>
                             </property>
                             <child type="overlay">
