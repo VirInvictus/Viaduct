@@ -12,8 +12,9 @@
 //! search-and-replace through every `ui::*` file.
 
 pub use viaduct_core::{
-    block_on_runtime, database, error, init_runtime, is_debug_mode, models, network, parser, paths,
-    read_memory_mb, set_debug_mode, spawn_debug_memory_ticker, spawn_on_runtime,
+    MemoryBreakdown, block_on_runtime, database, error, init_runtime, is_debug_mode, models,
+    network, parser, paths, read_memory_mb, rss_breakdown, set_debug_mode,
+    spawn_debug_memory_ticker, spawn_on_runtime,
 };
 
 pub mod fonts;
@@ -44,5 +45,19 @@ pub fn mimalloc_collect() {
     }
     unsafe {
         mi_collect(true);
+    }
+}
+
+/// v2.6.16: dump mimalloc's heap stats to stderr. Triggered from the
+/// `--debug` "Memory snapshot" Debug-menu action so the user can grab
+/// per-arena / per-size-class allocator state any time RSS spikes.
+/// Mimalloc writes a few hundred lines of stats to stderr with size
+/// classes, page commit/decommit counts, segment counts, etc.
+pub fn mimalloc_print_stats() {
+    unsafe extern "C" {
+        fn mi_stats_print(out: *mut std::ffi::c_void);
+    }
+    unsafe {
+        mi_stats_print(std::ptr::null_mut());
     }
 }

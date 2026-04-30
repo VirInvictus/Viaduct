@@ -200,6 +200,7 @@ impl ViaductWindow {
             let debug_section = gio::Menu::new();
             debug_section.append(Some("Crash (Panic)"), Some("win.debug-crash"));
             debug_section.append(Some("Wipe Disk Caches"), Some("win.debug-clear-caches"));
+            debug_section.append(Some("Memory snapshot"), Some("win.debug-memory-snapshot"));
             window
                 .imp()
                 .sidebar_view
@@ -2287,6 +2288,33 @@ impl ViaductWindow {
         panic!("Intentional crash triggered from Debug menu");
     }
 
+    /// Debug-only memory snapshot (v2.6.16). Dumps the current
+    /// `/proc/self/smaps_rollup` breakdown and mimalloc heap stats on
+    /// demand. Useful when the user notices a spike between the
+    /// periodic `diag:` log lines and wants to localise it. The
+    /// `diag: memory snapshot` line goes to the normal tracing log
+    /// while `mi_stats_print` writes a few hundred lines of allocator
+    /// state to stderr (size classes, segment counts, commit /
+    /// decommit counters).
+    pub(crate) fn act_debug_memory_snapshot(&self) {
+        let now = crate::rss_breakdown();
+        let (rss, peak) = crate::read_memory_mb();
+        tracing::info!(
+            rss_mb = rss,
+            peak_mb = peak,
+            anon_mb = now.anon_mb,
+            file_mb = now.file_mb,
+            shmem_mb = now.shmem_mb,
+            swap_mb = now.swap_mb,
+            "diag: memory snapshot"
+        );
+        crate::mimalloc_print_stats();
+        self.show_toast(&format!(
+            "Snapshot: rss={} peak={} anon={} file={} shmem={} (mimalloc stats → stderr)",
+            rss, peak, now.anon_mb, now.file_mb, now.shmem_mb
+        ));
+    }
+
     /// v2.6.5: nuke every file in the three `~/.cache/viaduct/`
     /// subdirs and drop the in-memory LRU. Useful when triaging a
     /// favicon / image / video-thumb caching bug — restart with a
@@ -2600,13 +2628,20 @@ async fn run_refresh_with_tally(
         p.total
             .store(feeds_attempted, std::sync::atomic::Ordering::Relaxed);
     }
-    // v2.6.3: pre-cycle peak so the post-cycle line carries a delta.
-    // Climbing values across many cycles point at refresher-side
-    // retention (Arc<Account>, scheme-handler closures, glib cycles).
+    // v2.6.3 + v2.6.16: pre-cycle peak + breakdown so the post-cycle
+    // line carries deltas. The breakdown (anon_mb / file_mb /
+    // shmem_mb) localises growth — anon_mb climbing means heap
+    // (mimalloc / Rust allocations); file_mb means SQLite mmap or
+    // similar; shmem_mb means WebKit's shared regions with its
+    // WebProcess child.
     let (rss_before, peak_before) = crate::read_memory_mb();
+    let breakdown_before = crate::rss_breakdown();
     tracing::info!(
         rss_mb = rss_before,
         peak_mb = peak_before,
+        anon_mb = breakdown_before.anon_mb,
+        file_mb = breakdown_before.file_mb,
+        shmem_mb = breakdown_before.shmem_mb,
         feeds_attempted,
         force,
         "diag: refresh cycle pre"
@@ -2632,8 +2667,17 @@ async fn run_refresh_with_tally(
     } else {
         refresher.refresh_feeds(paired).await;
     }
+    // v2.6.16 stage checkpoint: per-feed pipelines have all
+    // completed but the drain task hasn't been awaited and
+    // mi_collect hasn't fired yet. Anon delta vs `pre` shows the
+    // peak transient that mimalloc is still holding from in-flight
+    // bodies / parses / favicon-discovery HTML; file_mb delta shows
+    // the WAL / SQLite mmap growth; shmem_mb delta shows whether
+    // WebKit shared regions moved.
+    log_cycle_stage("post-fetch", &breakdown_before);
     drop(refresher);
     let per_feed_new = drain.await.unwrap_or_default();
+    log_cycle_stage("post-drain", &breakdown_before);
     // v2.6.14: force mimalloc to return per-cycle transient pages to
     // the OS before we log post-cycle RSS. Without this, the cycle's
     // freed-but-cached allocations sit in mimalloc's internal pools
@@ -2643,10 +2687,17 @@ async fn run_refresh_with_tally(
     // cycle floor instead of an inflated transient.
     crate::mimalloc_collect();
     let (rss_after, peak_after) = crate::read_memory_mb();
+    let breakdown_after = crate::rss_breakdown();
     tracing::info!(
         rss_mb = rss_after,
         peak_mb = peak_after,
         peak_delta_mb = peak_after.saturating_sub(peak_before),
+        anon_mb = breakdown_after.anon_mb,
+        anon_delta_mb = (breakdown_after.anon_mb as i64) - (breakdown_before.anon_mb as i64),
+        file_mb = breakdown_after.file_mb,
+        file_delta_mb = (breakdown_after.file_mb as i64) - (breakdown_before.file_mb as i64),
+        shmem_mb = breakdown_after.shmem_mb,
+        shmem_delta_mb = (breakdown_after.shmem_mb as i64) - (breakdown_before.shmem_mb as i64),
         feeds_attempted,
         "diag: refresh cycle post"
     );
@@ -2654,6 +2705,24 @@ async fn run_refresh_with_tally(
         feeds_attempted,
         per_feed_new,
     }
+}
+
+/// v2.6.16: emit a `diag: cycle stage=<name>` line with the full RSS
+/// breakdown plus per-class deltas vs the pre-cycle snapshot. Lets us
+/// see *which stage* of a refresh allocates which class of memory.
+fn log_cycle_stage(stage: &'static str, before: &crate::MemoryBreakdown) {
+    let now = crate::rss_breakdown();
+    tracing::info!(
+        stage,
+        rss_mb = now.rss_mb,
+        anon_mb = now.anon_mb,
+        anon_delta_mb = (now.anon_mb as i64) - (before.anon_mb as i64),
+        file_mb = now.file_mb,
+        file_delta_mb = (now.file_mb as i64) - (before.file_mb as i64),
+        shmem_mb = now.shmem_mb,
+        shmem_delta_mb = (now.shmem_mb as i64) - (before.shmem_mb as i64),
+        "diag: cycle stage"
+    );
 }
 
 /// Pair of atomic counters threaded through `run_refresh_with_tally`

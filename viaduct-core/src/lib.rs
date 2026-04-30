@@ -69,6 +69,54 @@ pub fn spawn_debug_memory_ticker() {
     });
 }
 
+/// v2.6.16: RSS broken down by mapping class. Read from
+/// `/proc/self/smaps_rollup`. All fields in MB; sum of `anon_mb` +
+/// `file_mb` + `shmem_mb` ≈ `rss_mb` (with rounding + tiny
+/// kernel-internal accounting overlap). The breakdown answers the
+/// question the single `rss_mb` value can't: when memory grows during
+/// a refresh cycle, *which class* grew. Anon = mimalloc heap + tokio
+/// stacks + Rust allocations. File = SQLite mmap, binaries, fonts,
+/// installed shared objects. Shmem = WebKit's shared-memory regions
+/// between UIProcess and the WebProcess child (its private memory is
+/// in a separate process's smaps and not visible here).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MemoryBreakdown {
+    pub rss_mb: u64,
+    pub anon_mb: u64,
+    pub file_mb: u64,
+    pub shmem_mb: u64,
+    pub swap_mb: u64,
+}
+
+/// Parse `/proc/self/smaps_rollup` into a `MemoryBreakdown`. Returns
+/// the default (all zeros) if the file can't be read — non-Linux
+/// hosts, sandbox lockdown, etc. Caller can log unconditionally.
+pub fn rss_breakdown() -> MemoryBreakdown {
+    let Ok(rollup) = std::fs::read_to_string("/proc/self/smaps_rollup") else {
+        return MemoryBreakdown::default();
+    };
+    let mut out = MemoryBreakdown::default();
+    for line in rollup.lines() {
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let Some(kb_str) = rest.split_whitespace().next() else {
+            continue;
+        };
+        let kb: u64 = kb_str.parse().unwrap_or(0);
+        let mb = kb / 1024;
+        match key {
+            "Rss" => out.rss_mb = mb,
+            "Anonymous" => out.anon_mb = mb,
+            "Pss_File" => out.file_mb = mb,
+            "Pss_Shmem" => out.shmem_mb = mb,
+            "Swap" => out.swap_mb = mb,
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Read VmRSS + VmHWM from `/proc/self/status`, both in MB. Returns
 /// `(0, 0)` if the file can't be read (non-Linux test sandboxes, etc.) so
 /// callers can log unconditionally without branching on `Option`.

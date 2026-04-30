@@ -91,6 +91,9 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
         // Debug
         register(window, "debug-crash", |w| w.act_debug_crash());
         register(window, "debug-clear-caches", |w| w.act_debug_clear_caches());
+        register(window, "debug-memory-snapshot", |w| {
+            w.act_debug_memory_snapshot()
+        });
     }
 
     // Accelerators. NNW-exact where available; roadmap's additions stacked

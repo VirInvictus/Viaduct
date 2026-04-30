@@ -1,5 +1,46 @@
 # viaduct — Patch Notes
 
+## v2.6.16 — Memory X-ray instrumentation
+
+Pure-instrumentation release, no behavior change. Existing `diag:` lines told us *that* RSS grew during refresh cycles but nothing about *where*. Three additions to localise the source:
+
+### 1. `MemoryBreakdown` from `/proc/self/smaps_rollup`
+
+New `viaduct_core::rss_breakdown() -> MemoryBreakdown` returns `{ rss_mb, anon_mb, file_mb, shmem_mb, swap_mb }`. The kernel exposes these per-class fields so we can split the RSS into:
+
+- **anon** — anonymous heap (mimalloc / Rust allocations / tokio stacks)
+- **file** — file-backed mappings (SQLite mmap, binaries, fonts, installed shared objects)
+- **shmem** — shared anonymous regions (WebKit's IPC buffers / backing stores with the WebProcess child)
+
+The `diag: refresh cycle pre/post` lines now carry all three plus per-class deltas, so reading the log answers "growth was in *which* class."
+
+### 2. Stage checkpoints inside `run_refresh_with_tally`
+
+Two new `diag: cycle stage=<name>` log lines fire mid-cycle:
+
+- **post-fetch** — every per-feed pipeline has completed, drain task hasn't been awaited, mi_collect hasn't fired. Anon delta vs pre = peak transient mimalloc is still holding from in-flight bodies + parses + favicon-discovery HTML; file delta = WAL / SQLite mmap growth; shmem delta = WebKit shared-memory movement.
+- **post-drain** — change-drain task awaited, all `ArticleChanges` consumed, but mi_collect still pending. Anon should drop here vs post-fetch as the per-feed allocations finish unwinding.
+
+After mi_collect we get the regular `diag: refresh cycle post` line, also with full breakdown. Comparing the four points (pre / post-fetch / post-drain / post) tells us which stage allocates which class.
+
+### 3. `win.debug-memory-snapshot` action
+
+New entry in the Debug submenu (`--debug` only). Logs the breakdown + dumps mimalloc heap stats (size classes, segment counts, commit/decommit counters) to stderr via `mi_stats_print`. For when you notice a spike between the periodic `diag:` lines and want a snapshot at exactly that moment.
+
+### How to use the new diagnostics
+
+For the next test run: same realistic load (30-min cadence) for an hour or two. After, grep `diag:` lines and look at:
+
+- **`anon_delta_mb` climbing each cycle** → mimalloc / Rust allocator. Likely candidate: per-cycle parse output retained by something downstream.
+- **`file_delta_mb` climbing each cycle** → SQLite WAL or another mmap. WAL is capped at 64 MB; if `file_mb` exceeds 100 MB and grows, something else is mmapping.
+- **`shmem_delta_mb` climbing each cycle** → WebKit's shared regions with WebProcess. Each navigation in the article pane allocates more.
+
+Whichever class is leading the cycle deltas tells us where to look next.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.15 — Skip timeline repopulate while hidden
 
 A 5-hour realistic-load run (30-min refresh cadence) plateaued at **~785 MB pre-fix RSS**. Diagnosis credit to a Gemini Pro 3.1 review of `debug-memory.log` + the source: the `act_refresh` and `refresh_specific_feeds` post-handlers were calling `reload_current_timeline()` unconditionally after every refresh cycle — including while the window was hidden in run-in-background mode.
