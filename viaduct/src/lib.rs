@@ -20,3 +20,29 @@ pub mod fonts;
 pub mod preferences;
 pub mod tray;
 pub mod ui;
+
+/// v2.6.14: force mimalloc to return freed-but-cached pages to the
+/// OS. Called at the end of each refresh cycle so the per-cycle
+/// transient peak doesn't stick around as elevated RSS floor across
+/// cycles. mimalloc's default `purge_delay` is 1000 ms; we also set
+/// `MIMALLOC_PURGE_DELAY=100` at startup, but `mi_collect(true)` is
+/// the explicit "now please" signal — completes synchronously in
+/// ~1 ms on typical heaps.
+///
+/// Safe to call from any thread: `mi_collect` operates on the
+/// process-wide default heap that every allocation in this binary
+/// goes through (we registered mimalloc as the global allocator in
+/// `main.rs`).
+pub fn mimalloc_collect() {
+    // SAFETY: `mi_collect` is FFI-safe — it takes a bool and returns
+    // nothing. The libmimalloc-sys crate vendors the C library that
+    // mimalloc-rs already depends on, so the symbol is always
+    // resolvable in our binary; we don't need a dep declaration to
+    // reach an FFI symbol that's already linked in.
+    unsafe extern "C" {
+        fn mi_collect(force: bool);
+    }
+    unsafe {
+        mi_collect(true);
+    }
+}

@@ -23,6 +23,17 @@ use viaduct::database::accounts::Account;
 use viaduct::{database, fonts, paths, ui};
 
 fn main() -> glib::ExitCode {
+    // v2.6.14: tune mimalloc's idle-page purge before its global heap
+    // initializes. Default `MIMALLOC_PURGE_DELAY` is 1000 ms — pages
+    // freed by the application sit in mimalloc's pools for a full
+    // second before being decommitted. At 100 ms (10×) the OS reclaims
+    // memory much faster after each refresh cycle, which is the cadence
+    // we care about for the run-in-background long-session case.
+    // `unsafe` because Rust 2024 marks `env::set_var` unsafe (it mutates
+    // process-shared state without sync); we run before any thread is
+    // spawned so this is fine. Skip if the user has already exported the
+    // variable so a power user can tune higher / disable purging.
+    tune_mimalloc();
     init_tracing();
 
     // Point GSettings at our compiled schema dir before any gio call. Dev
@@ -130,6 +141,23 @@ fn log_session_memory_summary() {
         );
     } else {
         tracing::info!(rss_mb, peak_mb, budget_mb, "session exit: memory summary");
+    }
+}
+
+/// v2.6.14: install mimalloc tuning env vars before the global heap
+/// initializes. `MIMALLOC_PURGE_DELAY` controls how long freed pages
+/// sit in mimalloc's internal pools before being decommitted to the
+/// OS. Default 1000 ms; we drop to 100 ms so a refresh cycle's
+/// transient allocations come back to the OS quickly. Other defaults
+/// stay in place. User-supplied env vars win.
+fn tune_mimalloc() {
+    if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
+        // SAFETY: called before any thread is spawned and before any
+        // tokio runtime is built. The `env::set_var` 2024-edition
+        // unsafe marker exists for the multi-thread case.
+        unsafe {
+            std::env::set_var("MIMALLOC_PURGE_DELAY", "100");
+        }
     }
 }
 

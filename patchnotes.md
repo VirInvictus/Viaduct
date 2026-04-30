@@ -1,5 +1,37 @@
 # viaduct — Patch Notes
 
+## v2.6.14 — Aggressive mimalloc reclaim + WebKit cache off
+
+The 15-min cadence run after v2.6.13 produced clean per-cycle data:
+
+```
+Cycle 1: pre 424 → post 552 peak 563  Δpeak +139  (warm-up)
+Cycle 2: pre 583 → post 621 peak 648  Δpeak  +85
+Cycle 3: pre 627 → post 690 peak 725  Δpeak  +77
+```
+
+Cycle 2 → 3 went *up* (+85, +77), not down. mimalloc was working but not aggressive enough about returning idle pages to the OS, and `~/.cache/viaduct/WebKitCache/` had grown to 7.1 MB / 105 files of WebKit's own HTTP cache — useless for us since our locked-down article view forbids external loads anyway. Three knobs:
+
+### 1. `mi_collect(true)` at end of every refresh cycle
+
+`run_refresh_with_tally` now calls `crate::mimalloc_collect()` before the post-cycle `diag:` log line. The new helper in `viaduct/src/lib.rs` reaches the FFI symbol `mi_collect` directly (the `mimalloc-rs` crate doesn't expose it; libmimalloc-sys is already linked transitively). Forces mimalloc to decommit freed pages immediately instead of waiting for the purge timer. Cheap (~1 ms).
+
+### 2. `MIMALLOC_PURGE_DELAY=100`
+
+Set in `main.rs` before any allocation, in a new `tune_mimalloc()` helper that runs first thing in `fn main`. Default is 1000 ms — pages freed by the app sit in mimalloc's pools for a full second before being decommitted. At 100 ms the OS reclaims memory 10× faster after each cycle. User-supplied `MIMALLOC_PURGE_DELAY` env var still wins.
+
+### 3. WebKit disk cache off
+
+`ArticleRenderer::bootstrap` now calls `WebContext::set_cache_model(CacheModel::DocumentViewer)` (the freedesktop "no cache" preset) and constructs the `WebKitWebView` with a fresh `NetworkSession::new_ephemeral()`. Combined effect: no HTTP cache, no cookies on disk, no DOM storage. We render local article HTML through `viaduct-img://` + `viaduct-font://` schemes; WebKit had nothing meaningful to cache anyway. Pre-fix the cache had grown 7+ MB / 100+ files in a short run.
+
+### Expected impact
+
+The mimalloc tuning should drop per-cycle "stuck" peak delta meaningfully. The WebKit cache disable removes a slow-burn disk + RSS leak. Verify on the v2.6.3 `diag: refresh cycle` log line plus a `du -sh ~/.cache/viaduct/WebKitCache` check — the latter should stay near 0 across long sessions.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.13 — Refresh re-entry guard
 
 Latent bug surfaced by the v2.6.10 debug fast-refresh: the periodic-refresh `glib::timeout_add_seconds_local` calls `act_refresh()` directly, bypassing the action-group disable that `set_refresh_in_progress(true)` installs for menu / keyboard entry points. At normal 30-min cadence harmless. At sub-cycle-duration cadence (debug fast-refresh = 1 s while a cycle takes 5–13 s) the timer kicks off N overlapping cycles, each allocating its own per-cycle state, so peak appears as `N × per-cycle delta`. Made the v2.6.12 mimalloc data unreadable.

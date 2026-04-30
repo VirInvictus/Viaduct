@@ -2611,6 +2611,14 @@ async fn run_refresh_with_tally(
     }
     drop(refresher);
     let per_feed_new = drain.await.unwrap_or_default();
+    // v2.6.14: force mimalloc to return per-cycle transient pages to
+    // the OS before we log post-cycle RSS. Without this, the cycle's
+    // freed-but-cached allocations sit in mimalloc's internal pools
+    // until the default 1 s purge delay expires — even with the
+    // `MIMALLOC_PURGE_DELAY=100` startup tweak, the synchronous
+    // collect makes the diagnostic log line reflect the true post-
+    // cycle floor instead of an inflated transient.
+    crate::mimalloc_collect();
     let (rss_after, peak_after) = crate::read_memory_mb();
     tracing::info!(
         rss_mb = rss_after,

@@ -98,11 +98,24 @@ impl ArticleRenderer {
         // there used to leak our handlers into the embed iframe. With
         // a fresh context the handlers stay scoped to *this* renderer.
         let context = webkit6::WebContext::new();
+        // v2.6.14: kill WebKit's HTTP / disk cache. Articles render
+        // through our `viaduct-img://` + `viaduct-font://` schemes
+        // and the inner page wrapper's CSP forbids any external
+        // load, so WebKit has nothing meaningful to cache. Pre-fix
+        // it still wrote to `~/.cache/viaduct/WebKitCache/` (7+ MB
+        // and 100+ files in a short test) and held those records
+        // mmapped during runtime. `DocumentViewer` is the freedesktop
+        // "no cache" preset; the `NetworkSession::new_ephemeral`
+        // belt-and-braces makes sure cookies + DOM storage stay in-
+        // memory too — both unused by our locked-down article view.
+        context.set_cache_model(webkit6::CacheModel::DocumentViewer);
         article_renderer::install_image_uri_scheme(&context, image_cache);
         article_renderer::install_font_uri_scheme(&context);
 
+        let network_session = webkit6::NetworkSession::new_ephemeral();
         let web_view = webkit6::WebView::builder()
             .web_context(&context)
+            .network_session(&network_session)
             .vexpand(true)
             .hexpand(true)
             .build();
