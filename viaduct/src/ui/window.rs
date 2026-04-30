@@ -1906,14 +1906,30 @@ impl ViaductWindow {
                 return;
             };
             if let Some(window) = window_weak.upgrade() {
+                // v2.6.15: when run-in-background hid the window,
+                // skip the toast (no visible target) and the
+                // timeline ListStore repopulate (wasted work — the
+                // user can't see it, and `main.rs build_ui` already
+                // calls `reload_current_timeline` on re-summon).
+                // Pre-v2.6.15 we unconditionally repopulated the
+                // timeline every cycle while hidden, allocating
+                // ~20-30 MB of `ArticleNode` + `Article` structs +
+                // spawning a video-thumb fetch per row. The desktop
+                // notification + sidebar unread-count refresh stay
+                // unconditional: notifications go through the OS
+                // regardless of window visibility, and the unread
+                // walk is a cheap DB query so badges are accurate
+                // the moment the user re-shows the window.
                 window.dispatch_refresh_notification(&tally);
-                window.show_refresh_toast(&tally);
                 window.refresh_unread_counts();
-                // Re-fetch the timeline for the currently-selected sidebar
-                // item so newly-fetched articles appear without the user
-                // having to click around. Without this, the timeline shows
-                // stale (often empty) results until the next sidebar click.
-                window.reload_current_timeline();
+                if window.is_visible() {
+                    window.show_refresh_toast(&tally);
+                    // Re-fetch the timeline for the currently-selected sidebar
+                    // item so newly-fetched articles appear without the user
+                    // having to click around. Without this, the timeline shows
+                    // stale (often empty) results until the next sidebar click.
+                    window.reload_current_timeline();
+                }
                 window.imp().batch_update.end();
                 window.set_refresh_in_progress(false);
                 window.hide_refresh_progress();
@@ -2492,9 +2508,16 @@ impl ViaductWindow {
                 return;
             };
             if let Some(window) = window_weak.upgrade() {
+                // v2.6.15: same hidden-window short-circuit as
+                // `act_refresh`. Notifications + sidebar unread-count
+                // refresh stay unconditional; the timeline ListStore
+                // repopulate waits until the user re-summons the
+                // window (`main.rs build_ui` calls it on re-show).
                 window.dispatch_refresh_notification(&tally);
                 window.refresh_unread_counts();
-                window.reload_current_timeline();
+                if window.is_visible() {
+                    window.reload_current_timeline();
+                }
                 window.set_refresh_in_progress(false);
                 window.hide_refresh_progress();
             }

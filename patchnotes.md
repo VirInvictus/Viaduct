@@ -1,5 +1,28 @@
 # viaduct — Patch Notes
 
+## v2.6.15 — Skip timeline repopulate while hidden
+
+A 5-hour realistic-load run (30-min refresh cadence) plateaued at **~785 MB pre-fix RSS**. Diagnosis credit to a Gemini Pro 3.1 review of `debug-memory.log` + the source: the `act_refresh` and `refresh_specific_feeds` post-handlers were calling `reload_current_timeline()` unconditionally after every refresh cycle — including while the window was hidden in run-in-background mode.
+
+That populates the GTK timeline `ListStore` with hundreds of `ArticleNode` wrappers plus full `Article` clones (each carrying its `content_html` — typically 50 KB per item, 10–30 MB per cycle), plus spawns one video-thumb fetch task per row. All wasted: the user can't see the timeline, and `main.rs build_ui` already calls `reload_current_timeline` on re-summon so they land on fresh data either way.
+
+### Fix
+
+Both post-handlers now gate the timeline repopulate (and the toast in `act_refresh`, which would surface to an invisible `AdwToastOverlay`) on `self.is_visible()`. When hidden, the cycle still:
+
+- Fires `dispatch_refresh_notification` → `gio::Notification` (the OS surfaces these regardless of window state).
+- Calls `refresh_unread_counts` → cheap DB query, walks `TreeNode` tree to update sidebar badges. Keeps badges accurate so on re-show there's no stale-flicker.
+
+When visible, behavior is unchanged.
+
+### Honest scope
+
+This is a real win — no more 20–30 MB ListStore churn per cycle while hidden — but it doesn't move us off the architectural floor. The 5-hour plateau composition was roughly: WebKit baseline (150–200 MB) + GTK4/libadwaita/tokio (~80 MB) + SQLite mmap (50 MB) + mimalloc residual (100–150 MB) + DB worker heap (50–80 MB) + ImageCache LRUs (30–50 MB) + this fix's path (20–30 MB). Best estimate for post-fix plateau: **~720 MB** instead of 785, an 8% reduction. Useful but not transformative; the spec target of 100–300 MB idle is below what GTK4+WebKit imposes regardless.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.14 — Aggressive mimalloc reclaim + WebKit cache off
 
 The 15-min cadence run after v2.6.13 produced clean per-cycle data:
