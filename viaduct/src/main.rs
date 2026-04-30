@@ -42,9 +42,29 @@ fn main() -> glib::ExitCode {
     // ships in the runtime's prefix.
     ensure_schema_dir();
 
-    // Install the library-wide Tokio runtime. Multi-thread flavor because
-    // the refresher fans out per-feed fetches via tokio::spawn.
-    let rt = tokio::runtime::Runtime::new().expect("Unable to create Tokio runtime");
+    // Install the library-wide Tokio runtime. Multi-thread flavor
+    // because the refresher fans out per-feed fetches via tokio::spawn.
+    //
+    // **v2.6.18**: pin worker / blocking thread caps. Defaults are
+    // `worker_threads = num_cpus` (8 on a typical Ryzen) and
+    // `max_blocking_threads = 512`, both with a 10 s idle timeout —
+    // tokio churns blocking-pool threads up and down on demand. The
+    // v2.6.16 mimalloc dump caught this red-handed: a 143-second
+    // stress test logged **143 thread heaps spawned**, ~one new
+    // mimalloc per-thread heap per second. Each thread's heap holds
+    // segment caches; abandoned heaps reabandon their segments
+    // (5.2 K reabandons in that run) which mostly works but adds
+    // variance to per-cycle RSS. Pinning to 4 worker + 8 blocking
+    // caps the process at ~12 tokio threads steady-state. Worker
+    // count of 4 is comfortably above our `REFRESH_PARALLELISM = 8`
+    // semaphore (the per-feed pipeline is async, not CPU-bound, so
+    // 4 workers can multiplex 8 in-flight tasks without trouble).
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .max_blocking_threads(8)
+        .enable_all()
+        .build()
+        .expect("Unable to create Tokio runtime");
     viaduct::init_runtime(rt);
 
     if let Err(err) = paths::ensure_dirs() {

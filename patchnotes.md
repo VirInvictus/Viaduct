@@ -1,5 +1,60 @@
 # viaduct — Patch Notes
 
+## v2.6.18 — Cap tokio worker + blocking thread pools
+
+The v2.6.17 mimalloc dump from a 143-second 30s-cadence stress test caught the last actionable variance source: tokio churning blocking-pool threads.
+
+```
+theaps   peak 134  total 142  current 18
+threads  peak 135  total 143  current 19
+elapsed  142.882 s
+```
+
+**143 threads spawned in 143 seconds — roughly one new thread per second.** Each new thread takes a fresh mimalloc per-thread heap; tokio reabandons 5.2 K segment-handoffs over the run as workers age out (10 s idle default) and blocking tasks demand new ones. mimalloc handles it (the abandoned-heap mechanic correctly hands segments back), but the churn shows up as ±25–40 MB cycle-to-cycle variance in the anon delta.
+
+The same dump confirmed steady-state: peak hit 746 MB at cycle 5 and **stayed flat for the next 5 cycles** while anon oscillated 456–505 MB instead of climbing. Not a leak. Just allocator/threading variance on top of a high architectural floor.
+
+### Fix
+
+`tokio::runtime::Runtime::new()` defaults:
+- `worker_threads = num_cpus()` (8 on a typical Ryzen)
+- `max_blocking_threads = 512`
+
+Replaced with an explicit builder:
+```rust
+tokio::runtime::Builder::new_multi_thread()
+    .worker_threads(4)
+    .max_blocking_threads(8)
+    .enable_all()
+    .build()
+```
+
+Caps tokio's footprint at ~12 threads steady-state. 4 workers comfortably multiplexes our `REFRESH_PARALLELISM = 8` semaphore (per-feed work is async, network-bound, not CPU-bound — workers spend most of their time parked on `.await`). 8 blocking threads is generous for our actual `spawn_blocking` usage (cache-sweep at startup + the v2.6.5 wipe action, both rare).
+
+### Expected impact
+
+Fewer mimalloc per-thread heaps to manage → tighter cycle-to-cycle variance. Lower stack-reservation footprint (~8 MB virtual per thread; matters less for RSS than for VmSize but still real). Probably 30–80 MB lower steady-state plateau on stress tests; minimal effect on realistic 30-min cadence (where blocking-pool barely sees use).
+
+### Diagnostic chase: end of line
+
+This is the last meaningful knob inside our codebase. The chain that found us here:
+
+- **v2.6.3** added `diag:` log lines
+- **v2.6.10** added the debug fast-refresh harness
+- **v2.6.11** found the 149 MB SQLite WAL
+- **v2.6.12** swapped glibc malloc for mimalloc
+- **v2.6.14** added `mi_collect(true)` + `MIMALLOC_PURGE_DELAY=100` + WebKit cache off
+- **v2.6.15** skipped timeline repopulate while hidden
+- **v2.6.16** added the `/proc/self/smaps_rollup` X-ray (anon / file / shmem split)
+- **v2.6.17** routed mimalloc stats through tracing + tightened `--debug` filter
+- **v2.6.18** caps tokio thread pools
+
+Steady-state under 30 s force-refresh stress is ~620–700 MB RSS / ~750 peak. Under realistic 30-min cadence with conditional-GET 304s, expect noticeably lower. The remaining floor (~150 MB of anon outside mimalloc) is C-side allocations from GTK / GLib / WebKit / libxml2 — `#[global_allocator]` only redirects Rust code, so those C libraries continue to use glibc malloc independently. Not ours to control without removing the WebKit dependency.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.17 — Capture mimalloc stats + tighten --debug filter
 
 The v2.6.16 X-ray confirmed anon-heap is 100% of the per-cycle climb. To localise *what* on the heap, the v2.6.16 "Memory snapshot" action was supposed to dump mimalloc's per-size-class stats. The action fired but the output never reached the log. Two issues:
