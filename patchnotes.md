@@ -1,5 +1,17 @@
 # viaduct — Patch Notes
 
+## v2.6.13 — Refresh re-entry guard
+
+Latent bug surfaced by the v2.6.10 debug fast-refresh: the periodic-refresh `glib::timeout_add_seconds_local` calls `act_refresh()` directly, bypassing the action-group disable that `set_refresh_in_progress(true)` installs for menu / keyboard entry points. At normal 30-min cadence harmless. At sub-cycle-duration cadence (debug fast-refresh = 1 s while a cycle takes 5–13 s) the timer kicks off N overlapping cycles, each allocating its own per-cycle state, so peak appears as `N × per-cycle delta`. Made the v2.6.12 mimalloc data unreadable.
+
+### Fix
+
+Early-return at the top of both `act_refresh` and `refresh_specific_feeds` when `refresh_progress_source` is already `Some` (the canonical "cycle in flight" state — set by `show_refresh_progress`, cleared by `hide_refresh_progress`). Logs at `debug` level so the skip is visible in `--debug` runs but doesn't pollute normal output.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.12 — mimalloc
 
 The v2.6.11 SQLite + reqwest fixes flattened the worst of the per-cycle drift, but a follow-up 5-cycle run still showed RSS climbing cycle-over-cycle:

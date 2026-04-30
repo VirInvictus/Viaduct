@@ -1839,6 +1839,23 @@ impl ViaductWindow {
     /// across the whole cycle and routes the count back to the GTK thread for
     /// an optional desktop notification (see `dispatch_refresh_notification`).
     pub(crate) fn act_refresh(&self) {
+        // v2.6.13: re-entry guard. The periodic-refresh
+        // `glib::timeout_add_seconds_local` calls `act_refresh()`
+        // directly, bypassing the action-group disable that
+        // `set_refresh_in_progress(true)` installs for menu/keyboard
+        // entry points. At normal 30-min cadence this is harmless,
+        // but at debug fast-refresh cadence (sub-cycle-duration) the
+        // timer fires another refresh before the previous one
+        // completes, stacking N overlapping cycles — each allocates
+        // its own per-cycle state, so peak appears as N × per-cycle
+        // delta. `refresh_progress_source` is `Some` for the
+        // duration of a cycle (set by `show_refresh_progress`,
+        // cleared by `hide_refresh_progress`); checking it tells us
+        // whether we're already running.
+        if self.imp().refresh_progress_source.borrow().is_some() {
+            tracing::debug!("act_refresh: skipping — previous cycle still in flight");
+            return;
+        }
         let account = self.account();
         let window_weak = self.downgrade();
         let retention_days = current_retention_days();
@@ -2435,6 +2452,15 @@ impl ViaductWindow {
     }
 
     fn refresh_specific_feeds(&self, feeds: Vec<crate::models::Feed>) {
+        // v2.6.13: same re-entry guard as `act_refresh`. Used by the
+        // OPML-import + Add Feed paths; if a refresh is already
+        // running we skip and let the in-flight cycle pick up the
+        // new feeds at next cycle (Account::add_feed has already
+        // persisted them to OPML so they'll be in the next pair).
+        if self.imp().refresh_progress_source.borrow().is_some() {
+            tracing::debug!("refresh_specific_feeds: skipping — previous cycle still in flight");
+            return;
+        }
         let account = self.account();
         let window_weak = self.downgrade();
         let retention_days = current_retention_days();
