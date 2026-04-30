@@ -25,8 +25,25 @@
 //! `ACCEPT_HTML`.
 
 use reqwest::Client;
+use std::time::Duration;
 
 const VIADUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// v2.6.11: cap idle connections per origin. Defaults to `usize::MAX`
+/// in reqwest, which on a 130-feed corpus means we hold a TLS session
+/// per host indefinitely (each rustls session retains certs +
+/// session keys, several hundred KB easily). Four idle is enough to
+/// pipeline a single user's hot paths (article images on a chosen
+/// site, in-flight feed + favicon discovery against the same origin)
+/// without unbounded growth.
+const POOL_MAX_IDLE_PER_HOST: usize = 4;
+
+/// v2.6.11: how long an idle connection sits in the pool before
+/// being closed. reqwest's default is 90 s; we drop to 30 s so the
+/// steady-state pool drains faster after a refresh cycle ends.
+/// rustls session resumption tickets handle the cold-start cost on
+/// the next cycle.
+const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Composed at build time so the User-Agent always tracks the package
 /// version. Format mirrors NNW's `NetNewsWire/7.0.5 (Mac; +URL)` and
@@ -56,6 +73,8 @@ pub fn build_default_client() -> Result<Client, reqwest::Error> {
         .use_rustls_tls()
         .gzip(true)
         .brotli(true)
+        .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .build()
 }
 
@@ -68,4 +87,6 @@ pub fn client_builder() -> reqwest::ClientBuilder {
         .use_rustls_tls()
         .gzip(true)
         .brotli(true)
+        .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+        .pool_idle_timeout(POOL_IDLE_TIMEOUT)
 }

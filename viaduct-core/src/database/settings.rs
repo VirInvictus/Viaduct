@@ -29,6 +29,11 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
         PRAGMA journal_mode = WAL;
         PRAGMA synchronous = NORMAL;
         PRAGMA temp_store = MEMORY;
+        -- v2.6.11: cap WAL file on disk + in mmap. Same rationale as
+        -- the articles DB; settings is much smaller but still grew
+        -- WAL pages for every refresh cycle (favicon_url +
+        -- last_check_date + content_hash updates per feed).
+        PRAGMA journal_size_limit = 16777216;
 
         CREATE TABLE IF NOT EXISTS feed_settings (
             feed_id TEXT PRIMARY KEY,
@@ -99,7 +104,11 @@ fn collect_favicon_urls(conn: &mut Connection) -> Result<Vec<String>> {
     Ok(urls)
 }
 
+/// **v2.6.11**: also runs `PRAGMA wal_checkpoint(TRUNCATE)` first to
+/// reclaim WAL pages a prior session left behind. See the matching
+/// note in `articles::vacuum`.
 fn vacuum(conn: &mut Connection) -> Result<()> {
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     conn.execute_batch("VACUUM")?;
     Ok(())
 }

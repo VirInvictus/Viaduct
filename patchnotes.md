@@ -1,5 +1,50 @@
 # viaduct — Patch Notes
 
+## v2.6.11 — SQLite WAL containment + reqwest pool cap
+
+The v2.6.10 debug-refresh harness produced a clean answer in four cycles:
+
+```
+Cycle 1: pre 293 → post 370 (Δ77)
+Cycle 2: pre 372 → post 438 (Δ66)
+Cycle 3: pre 449 → post 508 (Δ59)
+Cycle 4: pre 509 → post 546 (Δ58)
+```
+
+Pre-cycle RSS climbed +60–80 MB per cycle. The `hide_for_background post-clear` snapshot only freed 0–2 MB, so the in-memory `ImageCache` LRU wasn't the source. On-disk inspection of `~/.local/share/viaduct/`:
+
+```
+articles.sqlite      52 MB
+articles.sqlite-wal  149 MB   ←
+articles.sqlite-shm  131 KB
+```
+
+### Root cause: 30 GB mmap × unbounded WAL
+
+The articles DB's `setup_schema` set `PRAGMA mmap_size = 30000000000` (30 GB request — SQLite treats this as "feel free to map the whole file"), with no `journal_size_limit` to cap the WAL. SQLite's default `wal_autocheckpoint` runs *passive* checkpoints which sync pages to the main DB but don't truncate the WAL file; with no size limit, the WAL grew monotonically. Every refresh cycle wrote a fresh batch of pages to the WAL, the mmap grew accordingly, and that mapped memory contributed directly to RSS — the kernel can evict mmap pages under pressure but they show up as resident regardless.
+
+Net effect: a 130-feed force-refresh ballooned WAL to ~150 MB, the mmap kept that mapped, RSS climbed ~60 MB per cycle on top of the genuinely transient peak the v2.6.9 semaphore already bounded.
+
+### Fix
+
+Three changes to `articles::setup_schema` and `settings::setup_schema`:
+
+- **`mmap_size = 67108864`** (64 MB) on articles, dropped from 30 GB. Plenty for SQLite's read-side optimizations on a database this size.
+- **`journal_size_limit = 67108864`** on articles, **`16777216`** on settings. SQLite truncates the WAL at the next checkpoint that crosses the limit, so steady-state WAL is bounded.
+- **`PRAGMA wal_checkpoint(TRUNCATE)`** prepended to the existing `vacuum()` ops. Reclaims any large WAL a prior session left behind on the existing user DB at the next startup; without it the new size limit only prevents future growth.
+
+### Secondary fix: reqwest connection pool cap
+
+reqwest's defaults are `pool_max_idle_per_host = usize::MAX` and `pool_idle_timeout = 90s`. With 130 feeds across many hosts, after one refresh we hold a TLS session per host indefinitely (rustls sessions retain certs + session keys, several hundred KB each). `viaduct-core/src/network/http.rs` now sets `pool_max_idle_per_host(4)` + `pool_idle_timeout(30s)` on both `build_default_client` and `client_builder`. Smaller magnitude than the WAL fix but compounds well — and applies to the favicon/image cache + reader-view clients too.
+
+### Expected impact
+
+For an existing user upgrading: the first startup post-v2.6.11 reclaims the existing oversized WAL via the `wal_checkpoint(TRUNCATE)` in cleanup. Steady-state RSS should sit near the v2.6.10 cycle-1 baseline (~290 MB on the test corpus) and stay there across many cycles instead of climbing.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.10 — Refresh progress bar + debug fast-refresh override
 
 Two paired additions in service of memory-growth diagnosis. The v2.6.9 concurrency cap dropped per-cycle peak by ~20% (124 → 99 MB on a 130-feed corpus) but a second source of accumulation is still climbing the high-water mark across cycles. To find it without waiting overnight:

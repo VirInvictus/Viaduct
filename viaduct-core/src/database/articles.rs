@@ -136,7 +136,24 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
         PRAGMA journal_mode = WAL;
         PRAGMA synchronous = NORMAL;
         PRAGMA temp_store = MEMORY;
-        PRAGMA mmap_size = 30000000000;
+        -- v2.6.11: cap the file→RSS mmap. Pre-v2.6.11 we requested
+        -- 30 GB (effectively 'map the whole DB + WAL') which made
+        -- every page the refresher wrote to the WAL contribute
+        -- directly to resident set size. With the WAL also uncapped
+        -- (see `journal_size_limit` below) a 130-feed force-refresh
+        -- cycle ballooned WAL to 149 MB and dragged ~150 MB into RSS
+        -- per session via the mmap. 64 MB is plenty for SQLite's
+        -- read-side optimizations on a database this size; the
+        -- per-page page cache handles writes regardless.
+        PRAGMA mmap_size = 67108864;
+        -- v2.6.11: bound the WAL on disk + in mmap. SQLite's default
+        -- behavior is to grow the WAL forever between full
+        -- checkpoints (passive checkpoints sync but don't truncate).
+        -- 64 MB cap means the periodic auto-checkpoint truncates the
+        -- file once it crosses the threshold; the cap is far above
+        -- our typical write-burst size (one refresh cycle = a few MB
+        -- of WAL on a no-changes corpus, more during heavy ingest).
+        PRAGMA journal_size_limit = 67108864;
 
         CREATE TABLE IF NOT EXISTS articles (
             article_id TEXT PRIMARY KEY,
@@ -1044,7 +1061,19 @@ fn delete_old_statuses(conn: &mut Connection, retention_days: i64) -> Result<usi
 /// any open transaction; the worker thread serializes ops so that holds
 /// naturally. Cheap on small DBs, expensive after a large prune — fire
 /// once per startup to amortize.
+///
+/// **v2.6.11**: also runs `PRAGMA wal_checkpoint(TRUNCATE)` first to
+/// reclaim any WAL pages a prior session left lying around. Without
+/// this, an existing 149-MB WAL (the diagnostic value that surfaced
+/// the issue) sticks around even after the new `journal_size_limit`
+/// would prevent fresh growth — SQLite truncates only at the next
+/// checkpoint that crosses the limit.
 fn vacuum(conn: &mut Connection) -> Result<()> {
+    // PRAGMA returns rows; query_row would error on no-result, but
+    // execute_batch tolerates the result set being discarded. The
+    // checkpoint runs serially relative to other DB ops because the
+    // worker holds the only connection.
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     conn.execute_batch("VACUUM")?;
     Ok(())
 }
