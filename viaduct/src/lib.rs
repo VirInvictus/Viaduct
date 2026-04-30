@@ -48,16 +48,39 @@ pub fn mimalloc_collect() {
     }
 }
 
-/// v2.6.16: dump mimalloc's heap stats to stderr. Triggered from the
+/// v2.6.16/v2.6.17: dump mimalloc's heap stats. Triggered from the
 /// `--debug` "Memory snapshot" Debug-menu action so the user can grab
 /// per-arena / per-size-class allocator state any time RSS spikes.
-/// Mimalloc writes a few hundred lines of stats to stderr with size
-/// classes, page commit/decommit counts, segment counts, etc.
+/// Output goes through `tracing::info` so it lands in the same log
+/// stream as everything else (the v2.6.16 path used `mi_stats_print`
+/// which writes to C `stderr`; with `2> file` redirection the C
+/// stream becomes fully-buffered and the lines never reached the
+/// file).
 pub fn mimalloc_print_stats() {
+    use std::ffi::{CStr, c_char, c_void};
+
+    /// SAFETY: invoked by mimalloc with a non-null UTF-8-ish C string
+    /// per line. We only read the string and immediately format it
+    /// into a tracing event; the buffer is owned by mimalloc and
+    /// stable for the duration of the call.
+    unsafe extern "C" fn line_sink(msg: *const c_char, _arg: *mut c_void) {
+        if msg.is_null() {
+            return;
+        }
+        let cstr = unsafe { CStr::from_ptr(msg) };
+        let s = cstr.to_string_lossy();
+        let trimmed = s.trim_end_matches('\n');
+        if trimmed.is_empty() {
+            return;
+        }
+        tracing::info!(target: "viaduct::mimalloc_stats", "{}", trimmed);
+    }
+
+    type StatsCallback = unsafe extern "C" fn(*const c_char, *mut c_void);
     unsafe extern "C" {
-        fn mi_stats_print(out: *mut std::ffi::c_void);
+        fn mi_stats_print_out(out: Option<StatsCallback>, arg: *mut c_void);
     }
     unsafe {
-        mi_stats_print(std::ptr::null_mut());
+        mi_stats_print_out(Some(line_sink), std::ptr::null_mut());
     }
 }

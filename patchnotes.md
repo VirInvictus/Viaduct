@@ -1,5 +1,27 @@
 # viaduct — Patch Notes
 
+## v2.6.17 — Capture mimalloc stats + tighten --debug filter
+
+The v2.6.16 X-ray confirmed anon-heap is 100% of the per-cycle climb. To localise *what* on the heap, the v2.6.16 "Memory snapshot" action was supposed to dump mimalloc's per-size-class stats. The action fired but the output never reached the log. Two issues:
+
+### 1. mimalloc stats now go through tracing
+
+`mi_stats_print(NULL)` writes to C `stderr`, which is fully-buffered when stderr is redirected to a file (`2> debug-memory.log`). The Rust-side fmt subscriber writes to its own copy of stderr; neither side flushes the other's buffer. mimalloc's lines sat in a 4 KB FILE buffer that never reached disk before exit.
+
+Fix: use `mi_stats_print_out` with a callback that emits each line through `tracing::info!` under the `viaduct::mimalloc_stats` target. Output now lands in the same log stream as everything else, no buffer-flush dance.
+
+### 2. `--debug` filter no longer drowns the log
+
+Pre-v2.6.17 `--debug` set `RUST_LOG=debug,viaduct=trace,html5ever=error`. Global `debug` lit up h2 / hyper / rustls / tokio at debug level, producing ~900 lines per second of GoAway-frame chatter. A 10-minute test logged **18 882 h2 debug lines vs 21 of our `diag:` lines** — a 900-to-1 noise ratio.
+
+Each tracing event allocates format strings + field captures + visit closure state. With 18k events per session that's a non-trivial allocator pressure all by itself, plausibly contributing to the per-cycle anon-heap climb we've been chasing.
+
+Now `--debug` sets `info,viaduct=debug,viaduct_core=debug,html5ever=error`. Our own modules stay at debug so the diagnostic surfaces fully, third-party crates drop back to info (where h2/hyper stay quiet). Override per-run via `RUST_LOG=...` if upstream-crate debug is genuinely needed.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.16 — Memory X-ray instrumentation
 
 Pure-instrumentation release, no behavior change. Existing `diag:` lines told us *that* RSS grew during refresh cycles but nothing about *where*. Three additions to localise the source:

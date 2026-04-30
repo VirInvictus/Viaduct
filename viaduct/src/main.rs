@@ -164,7 +164,19 @@ fn tune_mimalloc() {
 fn init_tracing() {
     let mut default_level = "info,html5ever=error";
     if std::env::args().any(|arg| arg == "--debug") {
-        default_level = "debug,viaduct=trace,html5ever=error";
+        // v2.6.17: pre-fix this said `debug,viaduct=trace,html5ever=error`
+        // — global `debug` lit up h2 / hyper / rustls / tokio at debug
+        // level, producing ~900 lines per second of GoAway frame
+        // spam. A 10-min run logged 18 882 h2 debug lines vs 21 of
+        // our `diag:` lines. Each tracing event allocates format
+        // strings + field captures; that volume of churn is itself
+        // a non-trivial contributor to per-cycle anon-heap growth.
+        // Now: still raise viaduct's own modules to debug (so the
+        // Debug menu's diagnostics surface fully) but keep
+        // third-party crates at info, where h2/hyper stay quiet.
+        // Override per-run via `RUST_LOG` if you genuinely need
+        // upstream debug detail.
+        default_level = "info,viaduct=debug,viaduct_core=debug,html5ever=error";
         viaduct::set_debug_mode(true);
     }
     let filter =
