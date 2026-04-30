@@ -12,47 +12,88 @@ Licensed under the MIT License. See LICENSE in the project root for details.
     <property name="content">
       <object class="AdwToastOverlay" id="toast_overlay">
         <property name="child">
-      <object class="AdwNavigationSplitView" id="outer_split_view">
-        <property name="min-sidebar-width">220</property>
-        <property name="max-sidebar-width">360</property>
-        <property name="sidebar-width-fraction">0.22</property>
-        <property name="sidebar">
-          <object class="AdwNavigationPage" id="sidebar_page">
-            <property name="title">Feeds</property>
-            <property name="child">
-              <object class="ViaductSidebarView" id="sidebar_view"/>
-            </property>
-          </object>
-        </property>
-        <property name="content">
-          <object class="AdwNavigationPage" id="content_page">
-            <property name="title">Articles</property>
-            <property name="child">
-              <object class="AdwNavigationSplitView" id="inner_split_view">
-                <property name="min-sidebar-width">320</property>
-                <property name="max-sidebar-width">480</property>
-                <property name="sidebar-width-fraction">0.32</property>
+          <object class="GtkBox">
+            <property name="orientation">vertical</property>
+            <child>
+              <object class="AdwNavigationSplitView" id="outer_split_view">
+                <property name="vexpand">True</property>
+                <property name="min-sidebar-width">220</property>
+                <property name="max-sidebar-width">360</property>
+                <property name="sidebar-width-fraction">0.22</property>
                 <property name="sidebar">
-                  <object class="AdwNavigationPage" id="timeline_page">
-                    <property name="title">Timeline</property>
+                  <object class="AdwNavigationPage" id="sidebar_page">
+                    <property name="title">Feeds</property>
                     <property name="child">
-                      <object class="ViaductTimelineView" id="timeline_view"/>
+                      <object class="ViaductSidebarView" id="sidebar_view"/>
                     </property>
                   </object>
                 </property>
                 <property name="content">
-                  <object class="AdwNavigationPage" id="article_page">
-                    <property name="title">Article</property>
+                  <object class="AdwNavigationPage" id="content_page">
+                    <property name="title">Articles</property>
                     <property name="child">
-                      <object class="ViaductArticlePaneView" id="article_pane"/>
+                      <object class="AdwNavigationSplitView" id="inner_split_view">
+                        <property name="min-sidebar-width">320</property>
+                        <property name="max-sidebar-width">480</property>
+                        <property name="sidebar-width-fraction">0.32</property>
+                        <property name="sidebar">
+                          <object class="AdwNavigationPage" id="timeline_page">
+                            <property name="title">Timeline</property>
+                            <property name="child">
+                              <object class="ViaductTimelineView" id="timeline_view"/>
+                            </property>
+                          </object>
+                        </property>
+                        <property name="content">
+                          <object class="AdwNavigationPage" id="article_page">
+                            <property name="title">Article</property>
+                            <property name="child">
+                              <object class="ViaductArticlePaneView" id="article_pane"/>
+                            </property>
+                          </object>
+                        </property>
+                      </object>
                     </property>
                   </object>
                 </property>
               </object>
-            </property>
+            </child>
+            <!-- v2.6.10 refresh progress strip. Hidden until the next
+                 refresh cycle starts; fades in via Revealer's slide-up,
+                 fades out when the cycle completes. -->
+            <child>
+              <object class="GtkRevealer" id="refresh_progress_revealer">
+                <property name="transition-type">slide-up</property>
+                <property name="reveal-child">False</property>
+                <property name="child">
+                  <object class="GtkBox">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">4</property>
+                    <property name="margin-start">12</property>
+                    <property name="margin-end">12</property>
+                    <property name="margin-top">6</property>
+                    <property name="margin-bottom">6</property>
+                    <child>
+                      <object class="GtkLabel" id="refresh_progress_label">
+                        <property name="halign">start</property>
+                        <property name="xalign">0</property>
+                        <property name="ellipsize">end</property>
+                        <style>
+                          <class name="caption"/>
+                          <class name="dim-label"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkProgressBar" id="refresh_progress_bar">
+                        <property name="hexpand">True</property>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
           </object>
-        </property>
-      </object>
         </property>
       </object>
     </property>

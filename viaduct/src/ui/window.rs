@@ -33,6 +33,17 @@ mod imp {
         pub article_pane: TemplateChild<crate::ui::article_pane_view::ArticlePaneView>,
         #[template_child]
         pub toast_overlay: TemplateChild<adw::ToastOverlay>,
+        // v2.6.10 refresh-progress strip (Revealer + label + bar at
+        // window bottom). Hidden until a refresh cycle starts; the
+        // poll loop in `show_refresh_progress` reads
+        // `refresh_progress_completed` (incremented by each per-feed
+        // task in the refresher) and updates fraction + label at 250ms.
+        #[template_child]
+        pub refresh_progress_revealer: TemplateChild<gtk::Revealer>,
+        #[template_child]
+        pub refresh_progress_label: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub refresh_progress_bar: TemplateChild<gtk::ProgressBar>,
 
         pub account: OnceCell<Arc<Account>>,
         pub image_cache: OnceCell<Arc<ImageCache>>,
@@ -58,6 +69,11 @@ mod imp {
         /// Climbing values across overnight runs = real leak; a stable
         /// oscillation = benign heap caching.
         pub hidden_state_ticker: RefCell<Option<glib::SourceId>>,
+        /// v2.6.10 refresh-progress poll loop. Set by
+        /// `show_refresh_progress` (which captures the per-cycle
+        /// counter into the closure and stores the SourceId here),
+        /// removed by `hide_refresh_progress` at completion.
+        pub refresh_progress_source: RefCell<Option<glib::SourceId>>,
         /// Whether `refresh_on_startup_if_enabled` has run. Belt-and-
         /// braces guard against the GTK Application activating twice
         /// (single-instance handoff or similar) double-refreshing.
@@ -756,11 +772,30 @@ impl ViaductWindow {
                 }
             },
         );
+        // v2.6.10: also re-arm when the debug fast-refresh override
+        // changes so flipping it from 0 → 30 in Preferences takes
+        // effect immediately, not at next minute boundary.
+        let weak_for_debug = self.downgrade();
+        settings.connect_changed(
+            Some(crate::preferences::keys::DEBUG_FAST_REFRESH_SECONDS),
+            move |s, _| {
+                if let Some(window) = weak_for_debug.upgrade() {
+                    window.arm_periodic_refresh(s);
+                }
+            },
+        );
     }
 
     /// Cancel any active periodic-refresh timer and start a new one
     /// based on the current `refresh-interval-minutes` setting. A value
     /// of 0 leaves the timer cancelled.
+    ///
+    /// **v2.6.10**: when viaduct is launched with `--debug` *and* the
+    /// `debug-fast-refresh-seconds` GSetting is non-zero, that
+    /// seconds-cadence overrides the minute-cadence so memory growth
+    /// across many cycles can be observed in minutes instead of hours.
+    /// The debug override is intentionally hidden from the Preferences
+    /// dialog in non-debug builds.
     fn arm_periodic_refresh(&self, settings: &gio::Settings) {
         // Always cancel the previous timer first; otherwise toggling
         // the dropdown a few times piles up handlers and we end up
@@ -768,11 +803,28 @@ impl ViaductWindow {
         if let Some(prev) = self.imp().periodic_refresh_timeout.borrow_mut().take() {
             prev.remove();
         }
-        let minutes = crate::preferences::refresh_interval_minutes(settings);
-        if minutes <= 0 {
-            return;
-        }
-        let secs = (minutes as u32).saturating_mul(60);
+        let secs: u32 = if crate::is_debug_mode() {
+            let debug_secs = crate::preferences::debug_fast_refresh_seconds(settings);
+            if debug_secs > 0 {
+                tracing::info!(
+                    debug_secs,
+                    "arm_periodic_refresh: debug fast-refresh override active"
+                );
+                debug_secs as u32
+            } else {
+                let minutes = crate::preferences::refresh_interval_minutes(settings);
+                if minutes <= 0 {
+                    return;
+                }
+                (minutes as u32).saturating_mul(60)
+            }
+        } else {
+            let minutes = crate::preferences::refresh_interval_minutes(settings);
+            if minutes <= 0 {
+                return;
+            }
+            (minutes as u32).saturating_mul(60)
+        };
         let weak = self.downgrade();
         let source_id = glib::timeout_add_seconds_local(secs, move || {
             if let Some(window) = weak.upgrade() {
@@ -1790,6 +1842,8 @@ impl ViaductWindow {
         let account = self.account();
         let window_weak = self.downgrade();
         let retention_days = current_retention_days();
+        let progress = RefreshProgress::new();
+        let progress_for_runtime = progress.clone();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<RefreshTally>();
         crate::spawn_on_runtime(async move {
             let opml = match account.load_opml().await {
@@ -1812,16 +1866,25 @@ impl ViaductWindow {
             let paired = pair_feeds_with_settings(&account, feeds).await;
             // Manual refresh = force=true. Bypasses the 29-min throttle so
             // an explicit user click always hits the network.
-            let tally = run_refresh_with_tally(account, paired, retention_days, true).await;
+            let tally = run_refresh_with_tally(
+                account,
+                paired,
+                retention_days,
+                true,
+                Some(progress_for_runtime),
+            )
+            .await;
             let _ = done_tx.send(tally);
         });
         self.imp().batch_update.start();
         self.set_refresh_in_progress(true);
+        self.show_refresh_progress(progress);
         glib::spawn_future_local(async move {
             let Ok(tally) = done_rx.await else {
                 if let Some(window) = window_weak.upgrade() {
                     window.imp().batch_update.end();
                     window.set_refresh_in_progress(false);
+                    window.hide_refresh_progress();
                 }
                 return;
             };
@@ -1836,6 +1899,7 @@ impl ViaductWindow {
                 window.reload_current_timeline();
                 window.imp().batch_update.end();
                 window.set_refresh_in_progress(false);
+                window.hide_refresh_progress();
             }
         });
     }
@@ -1858,6 +1922,68 @@ impl ViaductWindow {
         {
             simple.set_enabled(!on);
         }
+    }
+
+    /// v2.6.10: reveal the bottom progress strip and start a 250 ms
+    /// poll loop that reads the cycle's `RefreshProgress` counters
+    /// and updates the bar fraction + label. Call at the same time as
+    /// `set_refresh_in_progress(true)`. The poll loop pulses
+    /// indeterminately while `total == 0` (the refresher hasn't yet
+    /// computed `paired.len()`) and switches to a determinate
+    /// `completed / total` fraction once the total is published.
+    pub(crate) fn show_refresh_progress(&self, progress: RefreshProgress) {
+        let imp = self.imp();
+        // If a previous cycle's poll loop is somehow still active
+        // (manual + auto refresh racing), drop it so we don't
+        // double-update.
+        if let Some(source) = imp.refresh_progress_source.borrow_mut().take() {
+            source.remove();
+        }
+        let bar = imp.refresh_progress_bar.get();
+        let label = imp.refresh_progress_label.get();
+        bar.set_fraction(0.0);
+        label.set_text("Refreshing feeds…");
+        imp.refresh_progress_revealer.get().set_reveal_child(true);
+
+        let bar_weak = bar.downgrade();
+        let label_weak = label.downgrade();
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+            use std::sync::atomic::Ordering;
+            let total = progress.total.load(Ordering::Relaxed);
+            let completed = progress.completed.load(Ordering::Relaxed);
+            let Some(bar) = bar_weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let Some(label) = label_weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if total == 0 {
+                // Pulse-mode: refresher hasn't published the count
+                // yet (load_opml + pairing still running). Keeps the
+                // user-visible bar moving so they know we're alive.
+                bar.pulse();
+                label.set_text("Refreshing feeds…");
+            } else {
+                let fraction = (completed as f64 / total as f64).clamp(0.0, 1.0);
+                bar.set_fraction(fraction);
+                label.set_text(&format!("Refreshing feeds… {completed} / {total}"));
+            }
+            glib::ControlFlow::Continue
+        });
+        imp.refresh_progress_source.borrow_mut().replace(source);
+    }
+
+    /// v2.6.10: cancel the poll loop, reset the bar to 0, and slide
+    /// the strip out of view. Call at the same time as
+    /// `set_refresh_in_progress(false)`.
+    pub(crate) fn hide_refresh_progress(&self) {
+        let imp = self.imp();
+        if let Some(source) = imp.refresh_progress_source.borrow_mut().take() {
+            source.remove();
+        }
+        imp.refresh_progress_revealer.get().set_reveal_child(false);
+        imp.refresh_progress_bar.get().set_fraction(0.0);
+        imp.refresh_progress_label.get().set_text("");
     }
 
     fn show_refresh_toast(&self, tally: &RefreshTally) {
@@ -2312,19 +2438,30 @@ impl ViaductWindow {
         let account = self.account();
         let window_weak = self.downgrade();
         let retention_days = current_retention_days();
+        let progress = RefreshProgress::new();
+        let progress_for_runtime = progress.clone();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<RefreshTally>();
         self.set_refresh_in_progress(true);
+        self.show_refresh_progress(progress);
         crate::spawn_on_runtime(async move {
             let paired = pair_feeds_with_settings(&account, feeds).await;
             // Force=true: post-import re-fetch is also an explicit user
             // intent, not auto-refresh.
-            let tally = run_refresh_with_tally(account, paired, retention_days, true).await;
+            let tally = run_refresh_with_tally(
+                account,
+                paired,
+                retention_days,
+                true,
+                Some(progress_for_runtime),
+            )
+            .await;
             let _ = done_tx.send(tally);
         });
         glib::spawn_future_local(async move {
             let Ok(tally) = done_rx.await else {
                 if let Some(window) = window_weak.upgrade() {
                     window.set_refresh_in_progress(false);
+                    window.hide_refresh_progress();
                 }
                 return;
             };
@@ -2333,6 +2470,7 @@ impl ViaductWindow {
                 window.refresh_unread_counts();
                 window.reload_current_timeline();
                 window.set_refresh_in_progress(false);
+                window.hide_refresh_progress();
             }
         });
     }
@@ -2404,8 +2542,15 @@ async fn run_refresh_with_tally(
     paired: Vec<(crate::models::Feed, crate::models::FeedSettings)>,
     retention_days: i64,
     force: bool,
+    progress: Option<RefreshProgress>,
 ) -> RefreshTally {
     let feeds_attempted = paired.len();
+    // v2.6.10: publish the total to the GTK side BEFORE running so the
+    // poll loop can switch from indeterminate-pulse to fraction mode.
+    if let Some(p) = progress.as_ref() {
+        p.total
+            .store(feeds_attempted, std::sync::atomic::Ordering::Relaxed);
+    }
     // v2.6.3: pre-cycle peak so the post-cycle line carries a delta.
     // Climbing values across many cycles point at refresher-side
     // retention (Arc<Account>, scheme-handler closures, glib cycles).
@@ -2429,7 +2574,10 @@ async fn run_refresh_with_tally(
         }
         per_feed
     });
-    let refresher = crate::network::AccountRefresher::new(account, changes_tx, retention_days);
+    let mut refresher = crate::network::AccountRefresher::new(account, changes_tx, retention_days);
+    if let Some(p) = progress.as_ref() {
+        refresher = refresher.with_completion_counter(p.completed.clone());
+    }
     if force {
         refresher.refresh_feeds_forced(paired).await;
     } else {
@@ -2448,6 +2596,27 @@ async fn run_refresh_with_tally(
     RefreshTally {
         feeds_attempted,
         per_feed_new,
+    }
+}
+
+/// Pair of atomic counters threaded through `run_refresh_with_tally`
+/// so the GTK-side progress poll loop can render a determinate bar.
+/// `total` starts at 0 (poll loop pulses indeterminately); set to
+/// `paired.len()` once the refresher has it. `completed` increments
+/// in the per-feed task tail (success / 304 / error all count) and
+/// also at the skip branch in the refresher loop.
+#[derive(Clone)]
+pub(crate) struct RefreshProgress {
+    pub completed: Arc<std::sync::atomic::AtomicUsize>,
+    pub total: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl RefreshProgress {
+    pub fn new() -> Self {
+        Self {
+            completed: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            total: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
     }
 }
 

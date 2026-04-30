@@ -258,6 +258,11 @@ pub struct AccountRefresher {
     account: Arc<Account>,
     changes_sender: tokio::sync::mpsc::UnboundedSender<ArticleChanges>,
     retention_days: i64,
+    /// v2.6.10 progress counter — Some when the caller wants per-feed
+    /// completion notifications (the GTK window polls this to update
+    /// the bottom progress bar). None when we're refreshing in a
+    /// context with no UI to drive (mem_check, internal sync).
+    completion_counter: Option<Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl AccountRefresher {
@@ -271,7 +276,18 @@ impl AccountRefresher {
             account,
             changes_sender,
             retention_days,
+            completion_counter: None,
         }
+    }
+
+    /// v2.6.10: install a per-feed completion counter so the GTK
+    /// window can render a progress bar. The counter is incremented
+    /// once per per-feed task on completion (regardless of whether
+    /// the feed produced new articles, was 304, or failed); call
+    /// before `refresh_feeds` / `refresh_feeds_forced`.
+    pub fn with_completion_counter(mut self, counter: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        self.completion_counter = Some(counter);
+        self
     }
 
     pub async fn refresh_feeds(&self, feeds: Vec<(Feed, FeedSettings)>) {
@@ -309,6 +325,14 @@ impl AccountRefresher {
             if !force && Self::feed_should_be_skipped(&feed, &settings, special_case_cutoff_date) {
                 debug!("Skipping feed: {}", feed.url);
                 skipped += 1;
+                // v2.6.10: count skipped feeds so the progress-bar
+                // denominator (= paired.len()) matches and the bar
+                // reaches 100% at cycle end. Otherwise an
+                // auto-refresh that skips every feed in the 29-min
+                // throttle would leave the bar stuck near 0.
+                if let Some(c) = self.completion_counter.as_ref() {
+                    c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 continue;
             }
 
@@ -317,6 +341,7 @@ impl AccountRefresher {
             let sender = self.changes_sender.clone();
             let retention_days = self.retention_days;
             let permit_source = semaphore.clone();
+            let counter = self.completion_counter.clone();
 
             futures.push(tokio::spawn(async move {
                 // Acquire blocks the per-feed task at the start of
@@ -340,6 +365,13 @@ impl AccountRefresher {
                     force,
                 )
                 .await;
+                // v2.6.10: bump the GTK-side progress counter on
+                // every completion (success, 304, error — all count
+                // toward "feeds we attempted"). The window's poll
+                // loop reads through this and updates the bar.
+                if let Some(c) = counter {
+                    c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }));
         }
 

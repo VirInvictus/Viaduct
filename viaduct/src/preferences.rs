@@ -29,6 +29,7 @@ pub mod keys {
     pub const ARTICLE_LINE_HEIGHT: &str = "article-line-height";
     pub const VIDEO_PLAYBACK_MODE: &str = "video-playback-mode";
     pub const RUN_IN_BACKGROUND: &str = "run-in-background";
+    pub const DEBUG_FAST_REFRESH_SECONDS: &str = "debug-fast-refresh-seconds";
 }
 
 /// Open the user-visible preferences. Returns `None` when the schema isn't
@@ -190,6 +191,17 @@ pub fn retention_days(settings: &gio::Settings) -> i64 {
 /// system-tray indicator (see `tray.rs`).
 pub fn run_in_background(settings: &gio::Settings) -> bool {
     settings.boolean(keys::RUN_IN_BACKGROUND)
+}
+
+/// v2.6.10: debug-only override for the periodic-refresh cadence.
+/// Schema constrains to `[0, 3600]`; clamped here regardless. Only
+/// honored by `arm_periodic_refresh` when `crate::is_debug_mode()`
+/// returns true. Returns 0 when disabled (caller falls back to
+/// `refresh_interval_minutes`).
+pub fn debug_fast_refresh_seconds(settings: &gio::Settings) -> i32 {
+    settings
+        .int(keys::DEBUG_FAST_REFRESH_SECONDS)
+        .clamp(0, 3600)
 }
 
 /// v2.3.0: article font-size multiplier as a fraction (1.0 = native).

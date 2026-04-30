@@ -1,5 +1,30 @@
 # viaduct — Patch Notes
 
+## v2.6.10 — Refresh progress bar + debug fast-refresh override
+
+Two paired additions in service of memory-growth diagnosis. The v2.6.9 concurrency cap dropped per-cycle peak by ~20% (124 → 99 MB on a 130-feed corpus) but a second source of accumulation is still climbing the high-water mark across cycles. To find it without waiting overnight:
+
+### Bottom progress bar
+
+A `GtkRevealer` containing a `GtkLabel` + `GtkProgressBar` lives below the navigation split views, hidden until a refresh cycle starts. New `RefreshProgress` (paired `Arc<AtomicUsize>` for `completed` and `total`) threads through `run_refresh_with_tally` → `AccountRefresher::with_completion_counter` → the per-feed task tail. The window-side `show_refresh_progress` reveals the strip and installs a 250 ms `glib::timeout_add_local` that reads the atomics and updates the bar:
+
+- **`total == 0`** — refresher hasn't yet computed `paired.len()` (load_opml + pairing still running). Bar pulses indeterminately, label reads "Refreshing feeds…".
+- **`total > 0`** — fraction = `completed / total`, label reads "Refreshing feeds… 47 / 130".
+
+`hide_refresh_progress` cancels the poll loop and slides the strip back down. Hooked at the same callsites as `set_refresh_in_progress(true/false)` (`act_refresh` + `refresh_specific_feeds`).
+
+The completion counter increments in **every** per-feed task tail (success / 304 / fetch error / parse error all count) and at the skip branch in the refresher loop, so the bar reaches 100 % cleanly even when half the feeds got throttled or 304'd.
+
+### Debug fast-refresh override
+
+New GSetting `debug-fast-refresh-seconds` (i, default 0, range `[0, 3600]`). When viaduct is launched with `--debug` *and* this is non-zero, `arm_periodic_refresh` installs a `glib::timeout_add_seconds_local` at this seconds-cadence instead of the user-facing `refresh-interval-minutes`. So `--debug` + setting "30 seconds" simulates ~120 cycles per hour, surfacing cumulative growth in minutes instead of overnight.
+
+Surfaced in the Preferences dialog as an `AdwSpinRow` "Debug: refresh every N seconds", added to the Sync group **only when `crate::is_debug_mode()` returns true**. End users never see it. Re-arms the periodic-refresh timer immediately on change (same connect_changed pattern as the user-facing minute setting).
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.9 — Bound refresh-cycle concurrency
 
 The v2.6.3 diagnostics caught a real signal in a user's run on a 130-feed corpus:
