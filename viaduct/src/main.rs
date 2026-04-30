@@ -2,6 +2,17 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
+// v2.6.12: replace glibc malloc with mimalloc for the binary. The
+// v2.6.11 SQLite WAL containment bounded the file→RSS contribution,
+// but RSS still drifted up cycle-over-cycle due to glibc's per-thread
+// arena retention — freed memory stays in the arena and never returns
+// to the OS. mimalloc returns aggressively, typically 30–50% lower
+// steady-state RSS on bursty workloads exactly like a refresh cycle.
+// Global-allocator declarations affect the binary only; `viaduct-core`
+// stays allocator-agnostic.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use adw::prelude::*;
 use gtk::glib;
 use std::sync::Arc;

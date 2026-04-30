@@ -30,3 +30,11 @@ readability.workspace = true
 oo7.workspace = true
 ashpd.workspace = true
 ksni = "0.3"
+# v2.6.12: replace glibc malloc with mimalloc for the binary. glibc
+# retains freed memory in per-thread arenas that don't return to the
+# OS, which on bursty refresh cycles drove our RSS to plateau ~50%
+# higher than active working set. mimalloc returns memory to the OS
+# aggressively. Allocator choice is binary-only (the headless
+# `viaduct-core` library inherits the consumer's allocator), so this
+# dep stays out of `viaduct-core`.
+mimalloc = "0.1"

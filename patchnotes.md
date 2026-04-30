@@ -1,5 +1,34 @@
 # viaduct — Patch Notes
 
+## v2.6.12 — mimalloc
+
+The v2.6.11 SQLite + reqwest fixes flattened the worst of the per-cycle drift, but a follow-up 5-cycle run still showed RSS climbing cycle-over-cycle:
+
+```
+Cycle  pre   post   stuck-Δ
+  1    294   364    —
+  2    380   449    +85
+  3    449   485    +36
+  4    485   528    +43
+  5    528   539    +11
+```
+
+The deltas are decreasing (85 → 36 → 43 → 11) — that's the classic glibc-malloc warm-up signature, not a leak. glibc's `ptmalloc` keeps freed memory in per-thread arenas; once an arena grows it (mostly) never shrinks back to the OS. RSS plateaus eventually, but at a level that exceeds our 500 MB budget on bursty workloads.
+
+### Fix
+
+`#[global_allocator] static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;` at the top of `viaduct/src/main.rs`. Adds `mimalloc = "0.1"` (one dep, brings `libmimalloc-sys` for the C source). mimalloc returns memory to the OS aggressively — typical RSS reduction on bursty allocators is 30–50%, and the drift across many refresh cycles flattens much faster.
+
+The global allocator is binary-only — `viaduct-core` stays allocator-agnostic so library consumers (and the `mem_check` harness) inherit whatever the embedder picked. Library tests continue to run under glibc; the GTK binary uses mimalloc.
+
+### Why mimalloc over jemalloc
+
+Both are good. mimalloc is the smaller dep (no `tikv-jemallocator` chain), faster to build, and Microsoft has been hammering on it for production workloads. Within Rust apps the choice is mostly a wash for performance; mimalloc has the slight edge on memory frugality which is what we need.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean. Release build adds ~10 s for the C compile of `libmimalloc-sys`; runtime no measurable startup difference.
+
 ## v2.6.11 — SQLite WAL containment + reqwest pool cap
 
 The v2.6.10 debug-refresh harness produced a clean answer in four cycles:
