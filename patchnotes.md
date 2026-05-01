@@ -1,5 +1,35 @@
 # viaduct — Patch Notes
 
+## v2.6.20 — Periodic refresh uses conditional-GET
+
+Two unrelated cleanup items.
+
+### Periodic refresh stops bypassing 304s
+
+`act_refresh()` was hard-coded `force = true` and **both** the manual sync button *and* the periodic-refresh timer routed through it. force=true drops `If-None-Match` / `If-Modified-Since` headers and bypasses the content-hash short-circuit, so every periodic cycle did a full GET + parse of all 130 feeds even when the server would have returned `304 Not Modified`. The comment on the line literally said "manual refresh = force=true" but it was lying — periodic refresh hit the same path. NetNewsWire's behavior is the opposite: only explicit user clicks force a re-fetch.
+
+Refactored:
+
+- New `act_refresh_periodic()` calls a shared `start_refresh(false)` helper.
+- `act_refresh()` (the action-group entry point: sync button, Ctrl+R) calls `start_refresh(true)`.
+- Both timer-driven callsites — `refresh-on-startup` (1500 ms after window shown) and the `refresh-interval-minutes` periodic timer — now use `act_refresh_periodic`.
+
+Behavioral change: most timer-driven cycles now produce zero DB writes (304s short-circuit before parse, conditional-GET round-trips are the only network work). Expected impact: peak under realistic 15–30 min cadence drops from the v2.6.18 ~538 MB stress ceiling to roughly 450–500 MB. Manual refresh from the UI is unchanged.
+
+### spec.md memory budget rewritten
+
+Original §10 criterion #3 promised "idle 100–300 MB, peak < 500 MB." That target was set before any toolkit cost was measured and has been unreachable since v1.1.0. Rewritten with the realistic numbers we actually achieve, plus a new §11 **Memory Budget Post-Mortem** documenting:
+
+- Measured RSS plateaus across three workloads (idle, realistic cadence, continuous force-refresh)
+- The /proc/self/smaps_rollup composition at steady state — what's mimalloc vs C-side anon vs file-mmap vs stacks
+- Per-version impact table for v2.6.9 → v2.6.20 (the diagnostic chain in numerical order)
+- What was *not* achievable and why (GTK4 + WebKit C-side allocations are outside `#[global_allocator]`'s reach)
+- Hard invariants (single WebView, mimalloc stays, tokio thread caps stay, SQLite caps stay, periodic = force=false)
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.19 — dead weight
 
 Removes the diagnostic-only knobs left over from the v2.6.3 → v2.6.18 memory chase now that the chase is done.

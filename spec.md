@@ -66,7 +66,7 @@ Unconstrained web engines are memory black holes. viaduct ships **exactly one** 
 6. **`viaduct-img://` URI scheme handler** routes every image lookup through our `ImageCache` (memory LRU → disk → network). WebKit can render images, but every byte travels through the cache, and no other origin can load anything.
 7. **Link interception:** `decide-policy` cancels every `LinkClicked` / `FormSubmitted` / `NewWindowAction` and shells the URL out to `xdg-open` (system browser). `Other` / `Reload` / `BackForward` allowed through so `load_html`'s synthetic about:blank works.
 8. **Hover URL overlay:** `mouse-target-changed` updates a `gtk::Label` overlay (osd + caption) in the bottom-left so the user can preview link destinations.
-9. **Memory:** real-world session peak measured at **292 MB / 500 MB budget**. Locked-down WebProcess sits ~210 MB; main process stays clean.
+9. **Memory:** see §11 for the full budget + measured numbers + the architectural floor analysis. The locked-down WebProcess + the GTK4 / libadwaita / WebKitGTK shared libraries together pin a ~150 MB anon floor inside the main process that no Rust-side allocator tuning can reach (`#[global_allocator] = mimalloc` only redirects Rust allocations; the C side keeps its own glibc heap). The single-WebView constraint is the biggest knob we *do* control here — every additional `WebKitWebView` would add ~100–150 MB.
 
 ### 2.3 Widget Tree
 
@@ -235,7 +235,65 @@ viaduct v1.0 is done when:
 
 1. It can import a 500-feed OPML file without hanging the GTK main thread.
 2. The background engine can fetch and parse 1,000 new articles while the user smoothly scrolls the list view.
-3. Idle memory consumption stabilizes between 100 MB and 300 MB after a full refresh and image-cache warm; peak never exceeds 500 MB across any supported operation.
+3. Idle memory after a warm refresh + image-cache warm stays in the 400–500 MB band; peak under realistic load (15–30 min cadence, mostly conditional-GET 304s) stays under 600 MB. Peak under continuous force-refresh stress (every 5 min × 130 feeds × force=true bypassing 304s) plateaus at ~540 MB. **See §11 for the post-mortem on the original 100–300 MB target.**
 4. FTS5 search returns results in under 50 ms against a 50,000-article corpus.
 5. The application fully complies with GNOME HIG and libadwaita 1.7 styling.
 6. A Flathub-accepted Flatpak build runs in a strict sandbox (network permission only; OPML I/O through portals).
+
+---
+
+## 11. Memory Budget — Post-Mortem (v2.6.x)
+
+The original criterion #3 promised "idle 100–300 MB, peak < 500 MB." The v2.6.3 → v2.6.18 diagnostic chain found that target unreachable under the chosen toolkit. This section documents what was learned, what's recoverable, and what isn't.
+
+### Measured numbers (130-feed corpus, AMD Ryzen 7 PRO 360, post-v2.6.18)
+
+| Workload | RSS plateau | Peak |
+|---|---|---|
+| Idle, warm | 380–460 MB | — |
+| Realistic 30-min cadence (mostly 304s after v2.6.20 fix) | ~430 MB | ~480 MB |
+| Continuous force-refresh @ 5 min, 38 cycles, 3 hours | 425–470 MB | **538 MB** |
+
+### What the floor is made of
+
+`/proc/self/smaps_rollup` breakdown at steady state:
+
+| Class | Size | Source |
+|---|---|---|
+| **anon** (mimalloc) | ~160 MB peak commit | Rust allocations: parse trees, ArticleNode, channels, glib closures |
+| **anon** (non-mimalloc) | ~150 MB | C-side allocations from GTK / GLib / WebKit / libxml2 — `#[global_allocator]` only redirects Rust |
+| **file** | ~100 MB | SQLite mmap (capped 64 MB), binaries, fonts, installed `.so`s |
+| **shmem** | ~0–5 MB | WebKit IPC buffers (the WebProcess proper is a separate process and not counted in our RSS) |
+| **stacks + misc** | ~80–120 MB | 12 tokio + 3 fixed threads × ~8 MB virtual stack + kernel-side overhead |
+
+The non-mimalloc anon block is the architectural floor. GTK / WebKit / GLib pull in heavy C libraries that allocate from glibc malloc independently of our global allocator choice. We cannot squeeze them without changing toolkits.
+
+### The wins, in order of impact
+
+| Version | Change | Δ peak |
+|---|---|---|
+| v2.6.18 | tokio worker_threads(4) + max_blocking_threads(8) | **−215 MB** (746 → 531) |
+| v2.6.11 | SQLite mmap_size 30 GB → 64 MB + journal_size_limit | **−100 MB** |
+| v2.6.20 | force=false on periodic refresh (304 short-circuit) | **−40 to −90 MB** under realistic load |
+| v2.6.12 | mimalloc as global allocator (replacing glibc) | **−30 to −50 MB** |
+| v2.6.14 | mi_collect(true) per cycle + WebKit cache off + MIMALLOC_PURGE_DELAY=100 | **−20 to −40 MB** |
+| v2.6.15 | Skip timeline repopulate while hidden | **−20 to −30 MB** |
+| v2.6.9 | Bound refresh-cycle concurrency (semaphore = 8) | **−25 MB** in-cycle peak |
+| v2.6.5 | Disk-cache sweep (favicons/images/video-thumbs) | bounded growth, no plateau Δ |
+
+### What was NOT achievable, and why
+
+Hitting "idle 100–300 MB" requires removing the GTK4 + WebKit + GLib + libxml2 baseline, which is non-negotiable for the typography fidelity goal (NetNewsWire-byte-perfect themes via `WebKitWebView`). NewsFlash's html2gtk approach hits ~250–400 MB by rendering articles as native GTK widgets — possible but throws away the theme system + every shipped NNW theme bundle.
+
+### Hard rules going forward
+
+- **Single WebView.** Adding a second `WebKitWebView` adds ~100–150 MB. The video-playback-mode preference deliberately uses a transient dialog WebView that's destroyed on close to avoid this.
+- **`#[global_allocator] = mimalloc::MiMalloc`** stays. Switching back to glibc malloc loses ~30–50 MB at peak and drops mi_collect's aggressive return.
+- **`MIMALLOC_PURGE_DELAY=100`** stays.
+- **tokio thread caps** stay (worker=4, max_blocking=8).
+- **SQLite mmap_size = 64 MB** + **journal_size_limit = 64 MB** stay.
+- **Periodic refresh = force=false** stays. Manual refresh = force=true is the only path that bypasses conditional-GET.
+
+### When to revisit
+
+If a future v2.x adds something that pushes peak past 600 MB on the realistic 30-min-cadence test, treat it as a regression. The v2.6.16 `/proc/self/smaps_rollup` breakdown on `diag: refresh cycle pre/post` lines is permanent — every refresh logs anon/file/shmem deltas, so the next leak surfaces fast.

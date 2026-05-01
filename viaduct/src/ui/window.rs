@@ -757,7 +757,7 @@ impl ViaductWindow {
                         return;
                     }
                     window.imp().did_startup_refresh.set(true);
-                    window.act_refresh();
+                    window.act_refresh_periodic();
                 }
             });
         }
@@ -793,7 +793,7 @@ impl ViaductWindow {
         let weak = self.downgrade();
         let source_id = glib::timeout_add_seconds_local(secs, move || {
             if let Some(window) = weak.upgrade() {
-                window.act_refresh();
+                window.act_refresh_periodic();
                 glib::ControlFlow::Continue
             } else {
                 glib::ControlFlow::Break
@@ -1798,27 +1798,43 @@ impl ViaductWindow {
         }
     }
 
-    /// Drive `AccountRefresher::refresh_feeds` for every feed in the
-    /// current OPML. Refresher needs a tokio runtime context, so we dispatch
-    /// on the global runtime (not the GLib main loop). Tallies `new_articles`
-    /// across the whole cycle and routes the count back to the GTK thread for
-    /// an optional desktop notification (see `dispatch_refresh_notification`).
+    /// User-initiated refresh (sync button, Ctrl+R, OPML import). Always
+    /// `force = true`: bypasses the 29-min skip throttle and the
+    /// content-hash short-circuit so an explicit click always hits the
+    /// network and re-parses. Driven from the `win.refresh` action.
     pub(crate) fn act_refresh(&self) {
+        self.start_refresh(true);
+    }
+
+    /// Timer-initiated refresh (the `refresh-on-startup` and
+    /// `refresh-interval-minutes` paths). Always `force = false`:
+    /// conditional-GET headers stay in the request, the 29-min skip
+    /// applies, and content-hash matches short-circuit before parse.
+    /// Most periodic cycles produce no DB writes — they 304 and exit.
+    pub(crate) fn act_refresh_periodic(&self) {
+        self.start_refresh(false);
+    }
+
+    /// Shared body of `act_refresh` and `act_refresh_periodic`. Drives
+    /// `AccountRefresher::refresh_feeds[_forced]` over the full OPML.
+    /// Refresher needs a tokio runtime context, so we dispatch on the
+    /// global runtime. Tallies `new_articles` across the whole cycle
+    /// and routes the count back to the GTK thread for an optional
+    /// desktop notification.
+    fn start_refresh(&self, force: bool) {
         // v2.6.13: re-entry guard. The periodic-refresh
-        // `glib::timeout_add_seconds_local` calls `act_refresh()`
-        // directly, bypassing the action-group disable that
+        // `glib::timeout_add_seconds_local` calls into this directly,
+        // bypassing the action-group disable that
         // `set_refresh_in_progress(true)` installs for menu/keyboard
         // entry points. At normal 30-min cadence this is harmless,
-        // but at debug fast-refresh cadence (sub-cycle-duration) the
-        // timer fires another refresh before the previous one
-        // completes, stacking N overlapping cycles — each allocates
-        // its own per-cycle state, so peak appears as N × per-cycle
-        // delta. `refresh_progress_source` is `Some` for the
-        // duration of a cycle (set by `show_refresh_progress`,
-        // cleared by `hide_refresh_progress`); checking it tells us
-        // whether we're already running.
+        // but at sub-cycle-duration cadence the timer fires another
+        // refresh before the previous one completes, stacking N
+        // overlapping cycles — each allocates its own per-cycle state,
+        // so peak appears as N × per-cycle delta.
+        // `refresh_progress_source` is `Some` for the duration of a
+        // cycle; checking it tells us whether we're already running.
         if self.imp().refresh_progress_source.borrow().is_some() {
-            tracing::debug!("act_refresh: skipping — previous cycle still in flight");
+            tracing::debug!("start_refresh: skipping — previous cycle still in flight");
             return;
         }
         let account = self.account();
@@ -1846,13 +1862,11 @@ impl ViaductWindow {
                 return;
             }
             let paired = pair_feeds_with_settings(&account, feeds).await;
-            // Manual refresh = force=true. Bypasses the 29-min throttle so
-            // an explicit user click always hits the network.
             let tally = run_refresh_with_tally(
                 account,
                 paired,
                 retention_days,
-                true,
+                force,
                 Some(progress_for_runtime),
             )
             .await;
