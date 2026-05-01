@@ -52,13 +52,6 @@ pub fn present(parent: &ViaductWindow) {
         sync.add(&refresh_on_startup_row(&settings));
         sync.add(&refresh_interval_row(&settings));
         sync.add(&run_in_background_row(&settings, parent));
-        // v2.6.10: debug fast-refresh override. Surfaced only when
-        // viaduct was launched with `--debug` (i.e. memory diagnostic
-        // mode); otherwise hidden so end users don't see a knob that
-        // silently ignores their click.
-        if crate::is_debug_mode() {
-            sync.add(&debug_fast_refresh_row(&settings));
-        }
         notifications.add(&notifications_row(&settings));
         playback.add(&video_playback_row(&settings));
     } else {
@@ -322,54 +315,6 @@ fn refresh_interval_row(settings: &gio::Settings) -> adw::ComboRow {
                 row.set_selected(refresh_interval_to_index(
                     s.int(keys::REFRESH_INTERVAL_MINUTES),
                 ));
-            }
-        ),
-    );
-
-    row
-}
-
-/// v2.6.10: debug-only spin row that overrides the periodic-refresh
-/// cadence in seconds. Bound to the `debug-fast-refresh-seconds`
-/// GSetting (range `[0, 3600]`). Setting > 0 makes
-/// `arm_periodic_refresh` install a seconds-cadence timer instead of
-/// the user-facing minutes one — useful for catching cumulative
-/// memory growth in minutes instead of hours. 0 disables (use the
-/// minute setting). Re-arms the periodic-refresh timer on change.
-fn debug_fast_refresh_row(settings: &gio::Settings) -> adw::SpinRow {
-    let row = adw::SpinRow::builder()
-        .title("Debug: refresh every N seconds")
-        .subtitle("0 = use the minute setting above. Only honored in --debug.")
-        .build();
-    row.set_adjustment(Some(&gtk::Adjustment::new(
-        settings.int(keys::DEBUG_FAST_REFRESH_SECONDS) as f64,
-        0.0,
-        3600.0,
-        1.0,
-        10.0,
-        0.0,
-    )));
-
-    let settings_for_row = settings.clone();
-    row.connect_value_notify(move |row| {
-        let value = row.value() as i32;
-        if settings_for_row.int(keys::DEBUG_FAST_REFRESH_SECONDS) != value
-            && let Err(e) = settings_for_row.set_int(keys::DEBUG_FAST_REFRESH_SECONDS, value)
-        {
-            tracing::warn!(?e, "failed to write debug-fast-refresh-seconds");
-        }
-    });
-
-    settings.connect_changed(
-        Some(keys::DEBUG_FAST_REFRESH_SECONDS),
-        glib::clone!(
-            #[weak]
-            row,
-            move |s, _| {
-                let v = s.int(keys::DEBUG_FAST_REFRESH_SECONDS) as f64;
-                if (row.value() - v).abs() > f64::EPSILON {
-                    row.set_value(v);
-                }
             }
         ),
     );

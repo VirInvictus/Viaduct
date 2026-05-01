@@ -1,5 +1,18 @@
 # viaduct — Patch Notes
 
+## v2.6.19 — dead weight
+
+Removes the diagnostic-only knobs left over from the v2.6.3 → v2.6.18 memory chase now that the chase is done.
+
+- **`debug-fast-refresh-seconds`** GSetting + the matching `AdwSpinRow` in Preferences → Sync. Was the v2.6.10 harness that let us simulate hours of refresh cycles in minutes; we have the data we need. Schema key removed; `arm_periodic_refresh` collapses back to its original minute-only branch.
+- **`diag: cycle stage` logging** — the v2.6.16 mid-cycle checkpoints (`post-fetch`, `post-drain`). The breakdown they reported is preserved on the existing `diag: refresh cycle pre/post` lines, which stay in place — those are cheap and still useful background instrumentation if anything regresses later. Just the per-stage sub-lines and the `log_cycle_stage` helper go away.
+
+What stays: `diag: refresh cycle pre/post` with the v2.6.16 anon/file/shmem breakdown, the v2.6.3 background-mode `diag:` checkpoints (hide / re-show / refresh-cycle / hidden-tick / tray Show+Quit), the `--debug` Memory Snapshot Debug-menu action, `mi_collect(true)` per cycle, and the `MIMALLOC_PURGE_DELAY=100` startup tweak.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.18 — Cap tokio worker + blocking thread pools
 
 The v2.6.17 mimalloc dump from a 143-second 30s-cadence stress test caught the last actionable variance source: tokio churning blocking-pool threads.

@@ -773,30 +773,11 @@ impl ViaductWindow {
                 }
             },
         );
-        // v2.6.10: also re-arm when the debug fast-refresh override
-        // changes so flipping it from 0 → 30 in Preferences takes
-        // effect immediately, not at next minute boundary.
-        let weak_for_debug = self.downgrade();
-        settings.connect_changed(
-            Some(crate::preferences::keys::DEBUG_FAST_REFRESH_SECONDS),
-            move |s, _| {
-                if let Some(window) = weak_for_debug.upgrade() {
-                    window.arm_periodic_refresh(s);
-                }
-            },
-        );
     }
 
     /// Cancel any active periodic-refresh timer and start a new one
     /// based on the current `refresh-interval-minutes` setting. A value
     /// of 0 leaves the timer cancelled.
-    ///
-    /// **v2.6.10**: when viaduct is launched with `--debug` *and* the
-    /// `debug-fast-refresh-seconds` GSetting is non-zero, that
-    /// seconds-cadence overrides the minute-cadence so memory growth
-    /// across many cycles can be observed in minutes instead of hours.
-    /// The debug override is intentionally hidden from the Preferences
-    /// dialog in non-debug builds.
     fn arm_periodic_refresh(&self, settings: &gio::Settings) {
         // Always cancel the previous timer first; otherwise toggling
         // the dropdown a few times piles up handlers and we end up
@@ -804,28 +785,11 @@ impl ViaductWindow {
         if let Some(prev) = self.imp().periodic_refresh_timeout.borrow_mut().take() {
             prev.remove();
         }
-        let secs: u32 = if crate::is_debug_mode() {
-            let debug_secs = crate::preferences::debug_fast_refresh_seconds(settings);
-            if debug_secs > 0 {
-                tracing::info!(
-                    debug_secs,
-                    "arm_periodic_refresh: debug fast-refresh override active"
-                );
-                debug_secs as u32
-            } else {
-                let minutes = crate::preferences::refresh_interval_minutes(settings);
-                if minutes <= 0 {
-                    return;
-                }
-                (minutes as u32).saturating_mul(60)
-            }
-        } else {
-            let minutes = crate::preferences::refresh_interval_minutes(settings);
-            if minutes <= 0 {
-                return;
-            }
-            (minutes as u32).saturating_mul(60)
-        };
+        let minutes = crate::preferences::refresh_interval_minutes(settings);
+        if minutes <= 0 {
+            return;
+        }
+        let secs: u32 = (minutes as u32).saturating_mul(60);
         let weak = self.downgrade();
         let source_id = glib::timeout_add_seconds_local(secs, move || {
             if let Some(window) = weak.upgrade() {
@@ -2667,17 +2631,8 @@ async fn run_refresh_with_tally(
     } else {
         refresher.refresh_feeds(paired).await;
     }
-    // v2.6.16 stage checkpoint: per-feed pipelines have all
-    // completed but the drain task hasn't been awaited and
-    // mi_collect hasn't fired yet. Anon delta vs `pre` shows the
-    // peak transient that mimalloc is still holding from in-flight
-    // bodies / parses / favicon-discovery HTML; file_mb delta shows
-    // the WAL / SQLite mmap growth; shmem_mb delta shows whether
-    // WebKit shared regions moved.
-    log_cycle_stage("post-fetch", &breakdown_before);
     drop(refresher);
     let per_feed_new = drain.await.unwrap_or_default();
-    log_cycle_stage("post-drain", &breakdown_before);
     // v2.6.14: force mimalloc to return per-cycle transient pages to
     // the OS before we log post-cycle RSS. Without this, the cycle's
     // freed-but-cached allocations sit in mimalloc's internal pools
@@ -2705,24 +2660,6 @@ async fn run_refresh_with_tally(
         feeds_attempted,
         per_feed_new,
     }
-}
-
-/// v2.6.16: emit a `diag: cycle stage=<name>` line with the full RSS
-/// breakdown plus per-class deltas vs the pre-cycle snapshot. Lets us
-/// see *which stage* of a refresh allocates which class of memory.
-fn log_cycle_stage(stage: &'static str, before: &crate::MemoryBreakdown) {
-    let now = crate::rss_breakdown();
-    tracing::info!(
-        stage,
-        rss_mb = now.rss_mb,
-        anon_mb = now.anon_mb,
-        anon_delta_mb = (now.anon_mb as i64) - (before.anon_mb as i64),
-        file_mb = now.file_mb,
-        file_delta_mb = (now.file_mb as i64) - (before.file_mb as i64),
-        shmem_mb = now.shmem_mb,
-        shmem_delta_mb = (now.shmem_mb as i64) - (before.shmem_mb as i64),
-        "diag: cycle stage"
-    );
 }
 
 /// Pair of atomic counters threaded through `run_refresh_with_tally`

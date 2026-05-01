@@ -161,18 +161,5 @@
       </description>
     </key>
 
-    <key name="debug-fast-refresh-seconds" type="i">
-      <default>0</default>
-      <range min="0" max="3600"/>
-      <summary>Debug-only override for the periodic refresh interval (seconds)</summary>
-      <description>
-        Only applied when viaduct is launched with `--debug`. When set to
-        a non-zero value, a `glib::timeout_add_seconds_local` at this
-        cadence overrides `refresh-interval-minutes` so memory + cache
-        behavior across many cycles can be observed in minutes instead
-        of hours. 0 disables (use the user-facing minute setting).
-        Surfaced in the Preferences dialog only in `--debug` mode.
-      </description>
-    </key>
   </schema>
 </schemalist>

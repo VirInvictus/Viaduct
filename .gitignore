@@ -24,3 +24,7 @@ data/gschemas.compiled
 # Reference repos. Cloned manually, never pushed.
 .netnewswire/
 .newsflash/
+
+# Memory-diagnostic capture file. Produced by `--debug` runs, regenerated
+# every time, never committed.
+debug-memory.log
