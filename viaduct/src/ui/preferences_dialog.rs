@@ -31,6 +31,13 @@ pub fn present(parent: &ViaductWindow) {
     appearance.set_title("Appearance");
     page.add(&appearance);
 
+    let typography = adw::PreferencesGroup::new();
+    typography.set_title("Typography");
+    typography.set_description(Some(
+        "Override the font family for each surface. Empty = use system default. Type a family name (e.g. \"Atkinson Hyperlegible\") exactly as installed.",
+    ));
+    page.add(&typography);
+
     let sync = adw::PreferencesGroup::new();
     sync.set_title("Sync");
     sync.set_description(Some(
@@ -49,6 +56,24 @@ pub fn present(parent: &ViaductWindow) {
     if let Some(settings) = crate::preferences::settings() {
         appearance.add(&color_scheme_row(&settings));
         appearance.add(&article_theme_row(&settings));
+        typography.add(&font_row(
+            &settings,
+            keys::FONT_UI,
+            "App font",
+            "Sidebar, timeline, header bars, dialogs.",
+        ));
+        typography.add(&font_row(
+            &settings,
+            keys::FONT_SERIF,
+            "Reading font",
+            "Article body in the reading pane. Layered after the article theme.",
+        ));
+        typography.add(&font_row(
+            &settings,
+            keys::FONT_MONOSPACE,
+            "Monospace font",
+            "Code and pre blocks (article pane + chrome).",
+        ));
         sync.add(&refresh_on_startup_row(&settings));
         sync.add(&refresh_interval_row(&settings));
         sync.add(&run_in_background_row(&settings, parent));
@@ -244,6 +269,30 @@ fn video_mode_index_to_nick(index: u32) -> &'static str {
         2 => "disabled",
         _ => "in-pane",
     }
+}
+
+// v2.6.21: free-form font-family entry row. Each of the three
+// font-override GSettings (font-ui, font-serif for the reading pane,
+// font-monospace) wires through this same helper. The text is bound
+// bidirectionally to the GSetting; empty string means "use default",
+// which the CSS pipeline in preferences::apply_fonts and
+// article_renderer::render_themed reads as "skip the override rule
+// entirely". A free-text row rather than gtk::FontDialogButton because
+// the font picker yields a full pango::FontDescription (family + size
+// + weight + style) and we only persist the family name; round-tripping
+// through the picker would be lossy and awkward.
+fn font_row(
+    settings: &gio::Settings,
+    key: &'static str,
+    title: &str,
+    subtitle: &str,
+) -> adw::EntryRow {
+    let row = adw::EntryRow::builder().title(title).build();
+    row.set_show_apply_button(false);
+    let placeholder = format!("{subtitle}  (empty = default)");
+    row.set_tooltip_text(Some(&placeholder));
+    settings.bind(key, &row, "text").build();
+    row
 }
 
 fn notifications_row(settings: &gio::Settings) -> adw::SwitchRow {

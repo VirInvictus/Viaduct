@@ -1029,12 +1029,14 @@ pub fn render_themed(
         .accent_hex
         .map(|s| s.to_string())
         .or_else(system_accent_hex);
-    let (font_scale, line_height) = match crate::preferences::settings() {
+    let (font_scale, line_height, reading_font, mono_font) = match crate::preferences::settings() {
         Some(s) => (
             crate::preferences::article_font_scale(&s),
             crate::preferences::article_line_height(&s),
+            crate::preferences::font_serif(&s),
+            crate::preferences::font_monospace(&s),
         ),
-        None => (1.0, 1.0),
+        None => (1.0, 1.0, String::new(), String::new()),
     };
     let mut root_decls = String::new();
     if let Some(hex) = effective_accent {
@@ -1044,29 +1046,56 @@ pub fn render_themed(
     root_decls.push_str(&format!(" --article-line-height: {:.3};", line_height));
     let accent_root_css = format!(":root {{{} }}\n", root_decls);
 
+    // v2.6.21 user font overrides for the reading pane. Built per-
+    // render so a Preferences flip takes effect on the next theme
+    // refresh. Layered after `VIADUCT_PANE_OVERRIDE_CSS` so the
+    // user's choice wins over both theme styles and our scrollbar /
+    // accent overrides. `!important` is necessary because byte-
+    // perfect NNW theme stylesheets specify `body { font-family: … }`
+    // with high specificity; without `!important` our later rule
+    // doesn't override the theme's pinned family. Each rule is
+    // emitted only when the corresponding GSetting is non-empty —
+    // empty means "let the theme decide", which is the default.
+    let mut user_font_css = String::new();
+    if !reading_font.is_empty() {
+        user_font_css.push_str(&format!(
+            "body {{ font-family: \"{}\", inherit !important; }}\n",
+            crate::preferences::css_escape(&reading_font)
+        ));
+    }
+    if !mono_font.is_empty() {
+        user_font_css.push_str(&format!(
+            "code, pre, kbd, samp, tt {{ font-family: \"{}\", monospace !important; }}\n",
+            crate::preferences::css_escape(&mono_font)
+        ));
+    }
+
     // Style cascade: accent custom property → bundled @font-face
     // rules (so themes can reference 'Atkinson Hyperlegible' etc.) →
     // byte-perfect NNW theme stylesheet → optional dark-mode
     // adaptation overlay (per-theme, hand-tuned prefers-color-scheme
     // block that activates when the system color scheme is dark) →
-    // viaduct GTK-pane override (last so it wins). Themes that adapt
-    // to dark mode internally (Adwaita) or are dark-only (Tiqoe Dark)
-    // carry None for the overlay slot.
+    // viaduct GTK-pane override → v2.6.21 user font overrides (last
+    // so they win). Themes that adapt to dark mode internally
+    // (Adwaita) or are dark-only (Tiqoe Dark) carry None for the
+    // overlay slot.
     let style = match theme.dark_overlay {
         Some(overlay) => format!(
-            "{}{}\n{}\n{}\n{}",
+            "{}{}\n{}\n{}\n{}\n{}",
             accent_root_css,
             font_face_css(),
             theme.stylesheet,
             overlay,
             VIADUCT_PANE_OVERRIDE_CSS,
+            user_font_css,
         ),
         None => format!(
-            "{}{}\n{}\n{}",
+            "{}{}\n{}\n{}\n{}",
             accent_root_css,
             font_face_css(),
             theme.stylesheet,
             VIADUCT_PANE_OVERRIDE_CSS,
+            user_font_css,
         ),
     };
     outer_subs.insert("style", style);

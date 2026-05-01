@@ -89,21 +89,39 @@
       </description>
     </key>
 
+    <key name="font-ui" type="s">
+      <default>""</default>
+      <summary>UI font override</summary>
+      <description>
+        Optional font family name override for the GTK application chrome
+        (sidebar, timeline, header bars, dialogs). Empty string means
+        "follow the system default" (inherits whatever the user has set
+        in GNOME tweaks / Adwaita's font preferences).
+      </description>
+    </key>
+
     <key name="font-monospace" type="s">
       <default>""</default>
       <summary>Monospace font override</summary>
       <description>
-        Optional font family name override for monospace article content.
+        Optional font family name override for monospace content. Applied
+        to `code` / `pre` elements rendered inside the article reading
+        pane (WebKit) and to any monospace surfaces in the GTK chrome.
         Empty string means "follow system default".
       </description>
     </key>
 
     <key name="font-serif" type="s">
       <default>""</default>
-      <summary>Serif font override</summary>
+      <summary>Reading font override</summary>
       <description>
-        Optional font family name override for serif article content. Empty
-        string means "follow system default".
+        Optional font family name override for the article reading pane
+        body text. Applied as a CSS body { font-family: … } rule layered
+        after the active article theme's stylesheet. Empty string means
+        "use the article theme's font" (which respects the bundled NNW
+        theme typography choices). Named historically `font-serif` because
+        early NNW themes defaulted to serif; the override applies
+        regardless of family classification.
       </description>
     </key>
 

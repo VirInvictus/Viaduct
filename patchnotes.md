@@ -1,5 +1,33 @@
 # viaduct — Patch Notes
 
+## v2.6.21 — Multi-surface font overrides
+
+The `font-monospace` and `font-serif` GSettings have been declared in the schema since v0.8.0 with no UI to set them and a CSS provider that targeted nonexistent widget IDs (`#article_text_view`, dating from before the v1.1.0 WebKit migration). v2.6.21 finishes the feature: three independent surfaces, three working overrides, real Preferences UI.
+
+### Three surfaces
+
+- **App font (`font-ui`, new GSetting)** — the GTK chrome: sidebar feed names, timeline rows, header bars, dialogs, toasts. Wired through a global CSS provider with `window { font-family: "<name>", inherit; }`. Inherits Adwaita / GNOME tweaks defaults when empty.
+- **Reading font (`font-serif`, repurposed)** — article body text inside the WebKit reading pane. Layered after the active article theme's stylesheet via `body { font-family: "<name>", inherit !important; }` in the per-render style cascade. The `!important` is necessary because byte-perfect NNW theme stylesheets pin `body { font-family }` with high specificity. Empty = use the theme's font (preserves NNW byte-perfect typography by default).
+- **Monospace font (`font-monospace`)** — `code` / `pre` / `kbd` / `samp` / `tt` in the article pane plus any chrome monospace surfaces. Same `!important` reading-pane override; same chrome global provider.
+
+### Preferences UI
+
+New "Typography" `AdwPreferencesGroup` between Appearance and Sync. Three `AdwEntryRow`s (App font / Reading font / Monospace font), each bound bidirectionally to its GSetting. Free-form text entry rather than `gtk::FontDialogButton` — the picker yields a full `pango::FontDescription` (family + size + weight + style) and we only persist family; the round-trip would be lossy. Empty value = use default.
+
+### Live re-render
+
+Article-pane re-renders on `font-serif` / `font-monospace` change so the user sees the result without re-selecting an article. App font + monospace propagate live via the global CSS provider. Both watchers re-use the existing `article-font-scale` / `article-line-height` re-render hook in `ArticlePaneView::bootstrap`.
+
+### Implementation notes
+
+- `css_escape` helper in `preferences.rs` neutralises `\` and `"` in user-supplied family names so an adversarial GSettings value can't break out of the quoted CSS string.
+- Schema descriptions for `font-serif` and `font-monospace` rewritten — `font-serif` was always documented as "for serif article content" but the rule it generated targeted nothing. The override now actually applies.
+- `apply_fonts` no longer touches `code, pre` selectors with hard-coded values; the article-pane mono path is the single source of truth.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.20 — Periodic refresh uses conditional-GET
 
 Two unrelated cleanup items.

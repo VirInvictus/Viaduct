@@ -22,6 +22,7 @@ pub mod keys {
     pub const REFRESH_ON_STARTUP: &str = "refresh-on-startup";
     pub const REFRESH_INTERVAL_MINUTES: &str = "refresh-interval-minutes";
     pub const RETENTION_DAYS: &str = "retention-days";
+    pub const FONT_UI: &str = "font-ui";
     pub const FONT_MONOSPACE: &str = "font-monospace";
     pub const FONT_SERIF: &str = "font-serif";
     pub const ARTICLE_THEME: &str = "article-theme";
@@ -75,8 +76,20 @@ pub fn apply_color_scheme(settings: &gio::Settings) {
     );
 }
 
-/// Apply typography overrides to the application using a global CSS provider.
-/// Syncs live when settings change.
+/// Apply typography overrides to the GTK application chrome via a
+/// global CSS provider. Three GSettings keys are honored:
+///
+/// * `font-ui` — affects every `window` (sidebar, timeline, header
+///   bars, preferences dialog, toasts).
+/// * `font-monospace` — affects any chrome `code` / `pre` elements
+///   (mostly nothing today; harmless to wire). The article-pane
+///   monospace override lives in `article_renderer::render_themed`
+///   because that pane is WebKit, not GTK.
+/// * `font-serif` is intentionally NOT applied here. It targets the
+///   WebKit reading pane and is consumed by `article_renderer`.
+///
+/// Syncs live when any of the three change. Empty string ⇒ inherit
+/// system default (Adwaita / GNOME tweaks).
 pub fn apply_fonts(settings: &gio::Settings) {
     // No-op when there's no display attached (headless test runners,
     // dev environments without a Wayland session). Without this guard
@@ -93,56 +106,53 @@ pub fn apply_fonts(settings: &gio::Settings) {
     );
 
     update_fonts(settings, &provider);
-    settings.connect_changed(
-        Some(keys::FONT_SERIF),
-        glib::clone!(
-            #[weak]
-            provider,
-            move |s, _| update_fonts(s, &provider)
-        ),
-    );
-    settings.connect_changed(
-        Some(keys::FONT_MONOSPACE),
-        glib::clone!(
-            #[weak]
-            provider,
-            move |s, _| update_fonts(s, &provider)
-        ),
-    );
+    for key in [keys::FONT_UI, keys::FONT_MONOSPACE] {
+        settings.connect_changed(
+            Some(key),
+            glib::clone!(
+                #[weak]
+                provider,
+                move |s, _| update_fonts(s, &provider)
+            ),
+        );
+    }
 }
 
 fn update_fonts(settings: &gio::Settings, provider: &gtk::CssProvider) {
-    let mut css = String::from(
-        "window { font-family: \"Inter\", system-ui, sans-serif; }
-        #article_text_view { font-size: 17px; line-height: 1.7; }
-        #article_title_label { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 8px; }
-        #article_meta_label { font-size: 14px; font-weight: 500; letter-spacing: 0.01em; }
-        ",
-    );
+    let mut css = String::new();
 
-    let serif = font_serif(settings);
-    if !serif.is_empty() {
+    let ui = font_ui(settings);
+    if !ui.is_empty() {
+        // `window` is GTK's root selector for application widgets; the
+        // rule cascades to every label/entry/button inside. Specifying
+        // a single family + the inherit fallback so weight / style are
+        // unchanged.
         css.push_str(&format!(
-            "#article_text_view {{ font-family: \"{}\", serif; }}\n",
-            serif
+            "window {{ font-family: \"{}\", inherit; }}\n",
+            css_escape(&ui)
         ));
-    } else {
-        css.push_str(
-            "#article_text_view { font-family: \"Source Serif 4\", \"Georgia\", serif; }\n",
-        );
     }
 
     let mono = font_monospace(settings);
     if !mono.is_empty() {
         css.push_str(&format!(
-            "code, pre {{ font-family: \"{}\", monospace; }}\n",
-            mono
+            "code, pre, .monospace {{ font-family: \"{}\", monospace; }}\n",
+            css_escape(&mono)
         ));
-    } else {
-        css.push_str("code, pre { font-family: \"JetBrains Mono\", monospace; }\n");
     }
 
     provider.load_from_string(&css);
+}
+
+/// Escape user-supplied font names for safe interpolation into the
+/// CSS `font-family: "..."` slot. The CSS spec allows backslash and
+/// double-quote inside a quoted font family; we just neutralise them
+/// so an adversarial GSettings value (or one with stray punctuation)
+/// can't break out of the string and inject arbitrary CSS. Shared
+/// with `article_renderer` which uses the same idiom for the
+/// reading-pane font override.
+pub(crate) fn css_escape(name: &str) -> String {
+    name.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn update_style_manager(settings: &gio::Settings, manager: &adw::StyleManager) {
@@ -205,14 +215,23 @@ pub fn article_line_height(settings: &gio::Settings) -> f32 {
     settings.int(keys::ARTICLE_LINE_HEIGHT).clamp(100, 250) as f32 / 100.0
 }
 
-/// Monospace font family override for the article body. Empty string means
-/// "use system/app default".
+/// UI font family override (GTK chrome: sidebar, timeline, header bars,
+/// dialogs). Empty string means "use system / Adwaita default".
+pub fn font_ui(settings: &gio::Settings) -> String {
+    settings.string(keys::FONT_UI).to_string()
+}
+
+/// Monospace font family override. Applied to `code` / `pre` in the
+/// article reading pane and to any chrome monospace surfaces. Empty
+/// string means "use system / theme default".
 pub fn font_monospace(settings: &gio::Settings) -> String {
     settings.string(keys::FONT_MONOSPACE).to_string()
 }
 
-/// Serif font family override for the article body. Empty string means
-/// "use system/app default".
+/// Reading-pane font family override (article body inside the
+/// WebKitWebView). Layered after the active article theme's
+/// stylesheet. Empty string means "use the theme's font". Named
+/// `font-serif` historically; the override applies to any family.
 pub fn font_serif(settings: &gio::Settings) -> String {
     settings.string(keys::FONT_SERIF).to_string()
 }

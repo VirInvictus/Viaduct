@@ -300,6 +300,22 @@ impl ArticlePaneView {
                     }
                 },
             );
+            // v2.6.21: re-render when the user-supplied reading-pane
+            // font overrides change. Both ride into the cascade after
+            // VIADUCT_PANE_OVERRIDE_CSS in render_themed; an explicit
+            // re-render picks them up without waiting for the next
+            // article selection.
+            for key in [
+                crate::preferences::keys::FONT_SERIF,
+                crate::preferences::keys::FONT_MONOSPACE,
+            ] {
+                let weak_for_font = self.downgrade();
+                settings.connect_changed(Some(key), move |_, _| {
+                    if let Some(view) = weak_for_font.upgrade() {
+                        view.refresh_render();
+                    }
+                });
+            }
         }
 
         // v2.3.0: build the appearance popover lazily and attach it to
