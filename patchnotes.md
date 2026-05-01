@@ -1,5 +1,27 @@
 # viaduct — Patch Notes
 
+## v2.6.22 — Article sort options
+
+Steal-from-NNW item #1 from the post-shipped feature audit. NNW's timeline supports newest-first / oldest-first sorting; viaduct hard-coded newest-first everywhere. Now flippable from the timeline header.
+
+### Backend
+
+New `viaduct_core::database::articles::SortOrder` enum (NewestFirst / OldestFirst). Five `ArticlesDbOp` variants take it now: `FetchByFeed`, `FetchByFeeds`, `FetchUnread`, `FetchStarred`, `FetchToday`. The two `order_by_clause` methods on `SortOrder` render the SQL tail with the right direction + stable `rowid` secondary key. Search results (FTS5) keep ordering by `rank` regardless — relevance order is always more useful than chronological for a hit list.
+
+`Account::fetch_articles_by_feed` and friends gain a `SortOrder` parameter; mark-as-read paths pass `SortOrder::default()` (sort doesn't matter for marking).
+
+### Settings
+
+New `timeline-sort-order` GSetting (enum: newest-first / oldest-first, default newest-first). New `viaduct::preferences::timeline_sort_order(settings)` reader maps string nicks to the enum.
+
+### UI
+
+New GtkMenuButton in the timeline header bar (`view-sort-descending-symbolic`) opening a GMenu with two radio items wired to a stateful `win.timeline-sort` action. Action's initial state pulled from the GSetting; activation writes the new state back to the GSetting and triggers `reload_current_timeline` so the user sees the new order immediately. External GSetting flips (dconf-editor) sync the action state via `connect_changed`.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.21 — Multi-surface font overrides
 
 The `font-monospace` and `font-serif` GSettings have been declared in the schema since v0.8.0 with no UI to set them and a CSS provider that targeted nonexistent widget IDs (`#article_text_view`, dating from before the v1.1.0 WebKit migration). v2.6.21 finishes the feature: three independent surfaces, three working overrides, real Preferences UI.

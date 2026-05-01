@@ -481,15 +481,18 @@ impl ViaductWindow {
             };
             glib::spawn_future_local(async move {
                 let click_at = std::time::Instant::now();
+                let sort = current_timeline_sort();
                 let result: crate::error::Result<Vec<_>> = match item {
-                    SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id).await,
+                    SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id, sort).await,
                     SidebarItem::SmartFeed(name) => match name.as_str() {
-                        "Today" => account.fetch_today_articles().await,
-                        "All Unread" => account.fetch_unread_articles().await,
-                        "Starred" => account.fetch_starred_articles().await,
+                        "Today" => account.fetch_today_articles(sort).await,
+                        "All Unread" => account.fetch_unread_articles(sort).await,
+                        "Starred" => account.fetch_starred_articles(sort).await,
                         _ => Ok(Vec::new()),
                     },
-                    SidebarItem::Folder(folder) => fetch_folder_articles(&account, &folder).await,
+                    SidebarItem::Folder(folder) => {
+                        fetch_folder_articles(&account, &folder, sort).await
+                    }
                     SidebarItem::SmartFeedGroup => Ok(Vec::new()),
                 };
                 let fetch_ms = click_at.elapsed().as_millis();
@@ -1692,7 +1695,10 @@ impl ViaductWindow {
         let account = self.account();
         let window_weak = self.downgrade();
         glib::spawn_future_local(async move {
-            let articles = match account.fetch_articles_by_feed(feed.id.clone()).await {
+            // Sort doesn't matter for mark-as-read — we iterate to mark
+            // every article. Use the default to satisfy the API.
+            let sort = crate::database::articles::SortOrder::default();
+            let articles = match account.fetch_articles_by_feed(feed.id.clone(), sort).await {
                 Ok(a) => a,
                 Err(e) => {
                     tracing::warn!(?e, "mark-feed-read: fetch_articles_by_feed failed");
@@ -1731,9 +1737,10 @@ impl ViaductWindow {
         let window_weak = self.downgrade();
         glib::spawn_future_local(async move {
             let now = chrono::Utc::now();
+            let sort = crate::database::articles::SortOrder::default();
             let mut statuses: Vec<crate::models::ArticleStatus> = Vec::new();
             for feed in &folder.feeds {
-                match account.fetch_articles_by_feed(feed.id.clone()).await {
+                match account.fetch_articles_by_feed(feed.id.clone(), sort).await {
                     Ok(arts) => {
                         for a in arts {
                             statuses.push(crate::models::ArticleStatus {
@@ -2389,15 +2396,16 @@ impl ViaductWindow {
         let account = self.account();
         let weak_window = self.downgrade();
         glib::spawn_future_local(async move {
+            let sort = current_timeline_sort();
             let result: crate::error::Result<Vec<_>> = match item {
-                SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id).await,
+                SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id, sort).await,
                 SidebarItem::SmartFeed(name) => match name.as_str() {
-                    "Today" => account.fetch_today_articles().await,
-                    "All Unread" => account.fetch_unread_articles().await,
-                    "Starred" => account.fetch_starred_articles().await,
+                    "Today" => account.fetch_today_articles(sort).await,
+                    "All Unread" => account.fetch_unread_articles(sort).await,
+                    "Starred" => account.fetch_starred_articles(sort).await,
                     _ => Ok(Vec::new()),
                 },
-                SidebarItem::Folder(folder) => fetch_folder_articles(&account, &folder).await,
+                SidebarItem::Folder(folder) => fetch_folder_articles(&account, &folder, sort).await,
                 SidebarItem::SmartFeedGroup => Ok(Vec::new()),
             };
             match result {
@@ -2707,6 +2715,17 @@ fn current_retention_days() -> i64 {
         .unwrap_or(30)
 }
 
+/// v2.6.22: read `timeline-sort-order` fresh from GSettings on the
+/// GTK thread. Falls back to `NewestFirst` (the schema default) when
+/// the schema isn't installed. Same `!Send` rationale as
+/// `current_retention_days`.
+fn current_timeline_sort() -> crate::database::articles::SortOrder {
+    use crate::database::articles::SortOrder;
+    crate::preferences::settings()
+        .map(|s| crate::preferences::timeline_sort_order(&s))
+        .unwrap_or(SortOrder::NewestFirst)
+}
+
 #[derive(Copy, Clone)]
 enum Direction {
     Next,
@@ -2817,6 +2836,7 @@ fn sidebar_item_label(item: &SidebarItem) -> String {
 async fn fetch_folder_articles(
     account: &std::sync::Arc<Account>,
     folder: &crate::models::Folder,
+    sort: crate::database::articles::SortOrder,
 ) -> crate::error::Result<Vec<crate::models::Article>> {
     if folder.feeds.is_empty() {
         return Ok(Vec::new());
@@ -2825,13 +2845,8 @@ async fn fetch_folder_articles(
     // the doc-comment claim of parallelism. Now one bulk DB op via the
     // FetchByFeeds variant (IN clause). For a folder with 50 feeds
     // this drops folder-selection latency from O(N · channel + plan)
-    // to O(1 · channel + plan).
+    // to O(1 · channel + plan). v2.6.22: the bulk op handles cross-
+    // chunk sort internally per `SortOrder`, so no second pass needed.
     let feed_ids: Vec<String> = folder.feeds.iter().map(|f| f.id.clone()).collect();
-    let mut merged = account.fetch_articles_by_feeds(feed_ids).await?;
-    // Sort newest-first. Articles without a published date sink to the
-    // bottom (matches NNW's ordering for missing dates). The DB layer
-    // already sorted within each chunk; this final pass is the
-    // cross-chunk merge.
-    merged.sort_by_key(|a| std::cmp::Reverse(a.date_published));
-    Ok(merged)
+    account.fetch_articles_by_feeds(feed_ids, sort).await
 }

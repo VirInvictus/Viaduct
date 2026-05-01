@@ -2,14 +2,33 @@
 <interface>
   <requires lib="gtk" version="4.16"/>
   <requires lib="libadwaita" version="1.7"/>
+  <menu id="sort_menu">
+    <section>
+      <attribute name="label" translatable="yes">Sort by date</attribute>
+      <item>
+        <attribute name="label" translatable="yes">Newest first</attribute>
+        <attribute name="action">win.timeline-sort</attribute>
+        <attribute name="target">newest-first</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Oldest first</attribute>
+        <attribute name="action">win.timeline-sort</attribute>
+        <attribute name="target">oldest-first</attribute>
+      </item>
+    </section>
+  </menu>
   <template class="ViaductTimelineView" parent="AdwBin">
     <child>
       <object class="AdwToolbarView">
         <child type="top">
           <object class="AdwHeaderBar">
-            <!-- Empty header bar for visual consistency with the sidebar /
-                 article panes. v1.x left this empty intentionally; future
-                 work may add a per-feed action button here. -->
+            <child type="end">
+              <object class="GtkMenuButton" id="sort_menu_btn">
+                <property name="icon-name">view-sort-descending-symbolic</property>
+                <property name="tooltip-text">Sort articles</property>
+                <property name="menu-model">sort_menu</property>
+              </object>
+            </child>
           </object>
         </child>
         <child type="top">

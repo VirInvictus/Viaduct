@@ -25,6 +25,11 @@
     <value nick="disabled" value="2"/>
   </enum>
 
+  <enum id="org.virinvictus.Viaduct.TimelineSortOrder">
+    <value nick="newest-first" value="0"/>
+    <value nick="oldest-first" value="1"/>
+  </enum>
+
   <schema id="org.virinvictus.Viaduct" path="/org/virinvictus/Viaduct/">
     <key name="color-scheme" enum="org.virinvictus.Viaduct.ColorScheme">
       <default>"default"</default>
@@ -163,6 +168,19 @@
         an integer for the schema's `range` declaration; converted to a
         float and injected into the page wrapper's
         `--article-line-height` custom property.
+      </description>
+    </key>
+
+    <key name="timeline-sort-order" enum="org.virinvictus.Viaduct.TimelineSortOrder">
+      <default>"newest-first"</default>
+      <summary>Timeline article sort order</summary>
+      <description>
+        Direction the article timeline is sorted. "newest-first" lists the
+        most recently published article at the top (default; matches NNW
+        and most other readers); "oldest-first" reverses for catch-up
+        reading on a fresh feed. The setting is read every time the
+        timeline reloads so flipping it in the timeline header bar
+        re-sorts immediately.
       </description>
     </key>
 

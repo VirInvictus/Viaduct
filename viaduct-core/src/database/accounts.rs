@@ -102,10 +102,14 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
-    pub async fn fetch_articles_by_feed(&self, feed_id: String) -> Result<Vec<Article>> {
+    pub async fn fetch_articles_by_feed(
+        &self,
+        feed_id: String,
+        sort: crate::database::articles::SortOrder,
+    ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
         self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchByFeed(feed_id, tx)))
+            .send(DbOp::Articles(ArticlesDbOp::FetchByFeed(feed_id, sort, tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
@@ -117,30 +121,42 @@ impl Account {
     /// SQLite's parameter limit) instead of N round-trips. Used by the
     /// folder-aggregate view (`fetch_folder_articles`); previously that
     /// fanned out N sequential single-feed queries.
-    pub async fn fetch_articles_by_feeds(&self, feed_ids: Vec<String>) -> Result<Vec<Article>> {
+    pub async fn fetch_articles_by_feeds(
+        &self,
+        feed_ids: Vec<String>,
+        sort: crate::database::articles::SortOrder,
+    ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
         self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchByFeeds(feed_ids, tx)))
+            .send(DbOp::Articles(ArticlesDbOp::FetchByFeeds(
+                feed_ids, sort, tx,
+            )))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
-    pub async fn fetch_unread_articles(&self) -> Result<Vec<Article>> {
+    pub async fn fetch_unread_articles(
+        &self,
+        sort: crate::database::articles::SortOrder,
+    ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
         self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchUnread(tx)))
+            .send(DbOp::Articles(ArticlesDbOp::FetchUnread(sort, tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
-    pub async fn fetch_starred_articles(&self) -> Result<Vec<Article>> {
+    pub async fn fetch_starred_articles(
+        &self,
+        sort: crate::database::articles::SortOrder,
+    ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
         self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchStarred(tx)))
+            .send(DbOp::Articles(ArticlesDbOp::FetchStarred(sort, tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
@@ -201,10 +217,13 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
-    pub async fn fetch_today_articles(&self) -> Result<Vec<Article>> {
+    pub async fn fetch_today_articles(
+        &self,
+        sort: crate::database::articles::SortOrder,
+    ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
         self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchToday(tx)))
+            .send(DbOp::Articles(ArticlesDbOp::FetchToday(sort, tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

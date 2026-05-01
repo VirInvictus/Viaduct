@@ -30,6 +30,7 @@ pub mod keys {
     pub const ARTICLE_LINE_HEIGHT: &str = "article-line-height";
     pub const VIDEO_PLAYBACK_MODE: &str = "video-playback-mode";
     pub const RUN_IN_BACKGROUND: &str = "run-in-background";
+    pub const TIMELINE_SORT_ORDER: &str = "timeline-sort-order";
 }
 
 /// Open the user-visible preferences. Returns `None` when the schema isn't
@@ -219,6 +220,20 @@ pub fn article_line_height(settings: &gio::Settings) -> f32 {
 /// dialogs). Empty string means "use system / Adwaita default".
 pub fn font_ui(settings: &gio::Settings) -> String {
     settings.string(keys::FONT_UI).to_string()
+}
+
+/// v2.6.22: read the `timeline-sort-order` GSetting and map to
+/// the headless `SortOrder` enum the DB worker consumes. Defaults to
+/// `NewestFirst` for any unrecognized nick (forward compat if the
+/// schema gains a new value but the binary is older).
+pub fn timeline_sort_order(
+    settings: &gio::Settings,
+) -> viaduct_core::database::articles::SortOrder {
+    use viaduct_core::database::articles::SortOrder;
+    match settings.string(keys::TIMELINE_SORT_ORDER).as_str() {
+        "oldest-first" => SortOrder::OldestFirst,
+        _ => SortOrder::NewestFirst,
+    }
 }
 
 /// Monospace font family override. Applied to `code` / `pre` in the

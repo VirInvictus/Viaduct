@@ -20,23 +20,60 @@ const STALE_INTERVAL_DAYS: i64 = 180;
 /// from GSettings instead.
 pub const DEFAULT_RETENTION_DAYS: i64 = 30;
 
+/// v2.6.22: timeline sort direction. Drives the `ORDER BY` clause on
+/// every timeline-feeding query (`FetchByFeed`, `FetchByFeeds`,
+/// `FetchUnread`, `FetchStarred`, `FetchToday`). Search results
+/// continue to sort by FTS5 `rank` regardless — relevance order is
+/// always more useful than chronological for a search hit list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SortOrder {
+    #[default]
+    NewestFirst,
+    OldestFirst,
+}
+
+impl SortOrder {
+    /// Render to the SQL `ORDER BY` tail. Includes the `rowid`
+    /// secondary key so two articles published the same second still
+    /// have a deterministic order.
+    pub fn order_by_clause(&self) -> &'static str {
+        match self {
+            SortOrder::NewestFirst => "ORDER BY date_published DESC, rowid DESC",
+            SortOrder::OldestFirst => "ORDER BY date_published ASC, rowid ASC",
+        }
+    }
+
+    /// Same as `order_by_clause` but with the `a.` table alias used by
+    /// the smart-feed JOIN queries.
+    pub fn order_by_clause_aliased(&self) -> &'static str {
+        match self {
+            SortOrder::NewestFirst => "ORDER BY a.date_published DESC, a.rowid DESC",
+            SortOrder::OldestFirst => "ORDER BY a.date_published ASC, a.rowid ASC",
+        }
+    }
+}
+
 pub enum ArticlesDbOp {
     BatchInsert(Vec<Article>, oneshot::Sender<Result<()>>),
     UpsertStatuses(Vec<ArticleStatus>, oneshot::Sender<Result<()>>),
-    FetchByFeed(String, oneshot::Sender<Result<Vec<Article>>>),
+    FetchByFeed(String, SortOrder, oneshot::Sender<Result<Vec<Article>>>),
     /// Bulk variant of `FetchByFeed`. One SQL query with an `IN (?, ?, …)`
     /// clause replaces the previous N-round-trip fan-out used by folder
     /// aggregate views. Empty input is a no-op.
-    FetchByFeeds(Vec<String>, oneshot::Sender<Result<Vec<Article>>>),
+    FetchByFeeds(
+        Vec<String>,
+        SortOrder,
+        oneshot::Sender<Result<Vec<Article>>>,
+    ),
     FetchByArticleId(String, oneshot::Sender<Result<Option<Article>>>),
-    FetchUnread(oneshot::Sender<Result<Vec<Article>>>),
-    FetchStarred(oneshot::Sender<Result<Vec<Article>>>),
+    FetchUnread(SortOrder, oneshot::Sender<Result<Vec<Article>>>),
+    FetchStarred(SortOrder, oneshot::Sender<Result<Vec<Article>>>),
     FetchUnreadArticleIds(oneshot::Sender<Result<HashSet<String>>>),
     FetchStarredArticleIds(oneshot::Sender<Result<HashSet<String>>>),
     UpdateStatusesRead(Vec<String>, bool, oneshot::Sender<Result<()>>),
     UpdateStatusesStarred(Vec<String>, bool, oneshot::Sender<Result<()>>),
     FetchMissingArticleIds(oneshot::Sender<Result<Vec<String>>>),
-    FetchToday(oneshot::Sender<Result<Vec<Article>>>),
+    FetchToday(SortOrder, oneshot::Sender<Result<Vec<Article>>>),
     Search(String, oneshot::Sender<Result<Vec<Article>>>),
     SearchWithSnippets(
         String,
@@ -256,24 +293,24 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
             let res = upsert_statuses(conn, statuses);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchByFeed(feed_id, tx) => {
-            let res = fetch_by_feed(conn, &feed_id);
+        ArticlesDbOp::FetchByFeed(feed_id, sort, tx) => {
+            let res = fetch_by_feed(conn, &feed_id, sort);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchByFeeds(feed_ids, tx) => {
-            let res = fetch_by_feeds(conn, &feed_ids);
+        ArticlesDbOp::FetchByFeeds(feed_ids, sort, tx) => {
+            let res = fetch_by_feeds(conn, &feed_ids, sort);
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchByArticleId(article_id, tx) => {
             let res = fetch_by_article_id(conn, &article_id);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchUnread(tx) => {
-            let res = fetch_unread(conn);
+        ArticlesDbOp::FetchUnread(sort, tx) => {
+            let res = fetch_unread(conn, sort);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchStarred(tx) => {
-            let res = fetch_starred(conn);
+        ArticlesDbOp::FetchStarred(sort, tx) => {
+            let res = fetch_starred(conn, sort);
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchUnreadArticleIds(tx) => {
@@ -296,8 +333,8 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
             let res = fetch_missing_article_ids(conn);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchToday(tx) => {
-            let res = fetch_today(conn);
+        ArticlesDbOp::FetchToday(sort, tx) => {
+            let res = fetch_today(conn, sort);
             let _ = tx.send(res);
         }
         ArticlesDbOp::Search(query, tx) => {
@@ -479,10 +516,12 @@ fn row_to_article(row: &rusqlite::Row) -> rusqlite::Result<Article> {
     })
 }
 
-fn fetch_by_feed(conn: &mut Connection, feed_id: &str) -> Result<Vec<Article>> {
-    let mut stmt = conn.prepare(
-        "SELECT * FROM articles WHERE feed_id = ? ORDER BY date_published DESC, rowid DESC",
-    )?;
+fn fetch_by_feed(conn: &mut Connection, feed_id: &str, sort: SortOrder) -> Result<Vec<Article>> {
+    let sql = format!(
+        "SELECT * FROM articles WHERE feed_id = ? {}",
+        sort.order_by_clause()
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([feed_id], row_to_article)?;
     let mut articles = Vec::new();
     for row in rows {
@@ -501,7 +540,11 @@ fn fetch_by_feed(conn: &mut Connection, feed_id: &str) -> Result<Vec<Article>> {
 ///
 /// Chunks at 500 IDs (SQLite's default `SQLITE_LIMIT_VARIABLE_NUMBER`
 /// is 999; we leave headroom). Empty input is a no-op.
-fn fetch_by_feeds(conn: &mut Connection, feed_ids: &[String]) -> Result<Vec<Article>> {
+fn fetch_by_feeds(
+    conn: &mut Connection,
+    feed_ids: &[String],
+    sort: SortOrder,
+) -> Result<Vec<Article>> {
     if feed_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -511,8 +554,8 @@ fn fetch_by_feeds(conn: &mut Connection, feed_ids: &[String]) -> Result<Vec<Arti
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT * FROM articles WHERE feed_id IN ({placeholders}) \
-             ORDER BY date_published DESC, rowid DESC"
+            "SELECT * FROM articles WHERE feed_id IN ({placeholders}) {}",
+            sort.order_by_clause()
         );
         let mut stmt = conn.prepare(&sql)?;
         let params: Vec<&dyn rusqlite::ToSql> =
@@ -523,8 +566,13 @@ fn fetch_by_feeds(conn: &mut Connection, feed_ids: &[String]) -> Result<Vec<Arti
         }
     }
     // Per-chunk results are each individually sorted; chunks need a
-    // final merge-sort pass so the aggregate view stays newest-first.
-    articles.sort_by_key(|a| std::cmp::Reverse(a.date_published));
+    // final merge-sort pass so the aggregate view honours the global
+    // sort order. Comparator branches on `sort` since `Reverse` only
+    // flips for newest-first.
+    match sort {
+        SortOrder::NewestFirst => articles.sort_by_key(|a| std::cmp::Reverse(a.date_published)),
+        SortOrder::OldestFirst => articles.sort_by_key(|a| a.date_published),
+    }
     Ok(articles)
 }
 
@@ -534,13 +582,14 @@ fn fetch_by_article_id(conn: &mut Connection, article_id: &str) -> Result<Option
     Ok(article)
 }
 
-fn fetch_unread(conn: &mut Connection) -> Result<Vec<Article>> {
-    let mut stmt = conn.prepare(
-        "SELECT a.* FROM articles a 
-         INNER JOIN statuses s ON a.article_id = s.article_id 
-         WHERE s.read = 0 
-         ORDER BY a.date_published DESC, a.rowid DESC",
-    )?;
+fn fetch_unread(conn: &mut Connection, sort: SortOrder) -> Result<Vec<Article>> {
+    let sql = format!(
+        "SELECT a.* FROM articles a \
+         INNER JOIN statuses s ON a.article_id = s.article_id \
+         WHERE s.read = 0 {}",
+        sort.order_by_clause_aliased()
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_article)?;
     let mut articles = Vec::new();
     for row in rows {
@@ -549,13 +598,14 @@ fn fetch_unread(conn: &mut Connection) -> Result<Vec<Article>> {
     Ok(articles)
 }
 
-fn fetch_starred(conn: &mut Connection) -> Result<Vec<Article>> {
-    let mut stmt = conn.prepare(
-        "SELECT a.* FROM articles a 
-         INNER JOIN statuses s ON a.article_id = s.article_id 
-         WHERE s.starred = 1 
-         ORDER BY a.date_published DESC, a.rowid DESC",
-    )?;
+fn fetch_starred(conn: &mut Connection, sort: SortOrder) -> Result<Vec<Article>> {
+    let sql = format!(
+        "SELECT a.* FROM articles a \
+         INNER JOIN statuses s ON a.article_id = s.article_id \
+         WHERE s.starred = 1 {}",
+        sort.order_by_clause_aliased()
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_article)?;
     let mut articles = Vec::new();
     for row in rows {
@@ -675,14 +725,15 @@ fn local_midnight_utc_seconds() -> i64 {
     }
 }
 
-fn fetch_today(conn: &mut Connection) -> Result<Vec<Article>> {
+fn fetch_today(conn: &mut Connection, sort: SortOrder) -> Result<Vec<Article>> {
     let today_start = local_midnight_utc_seconds();
-    let mut stmt = conn.prepare(
-        "SELECT a.* FROM articles a
-         INNER JOIN statuses s ON a.article_id = s.article_id
-         WHERE s.date_arrived >= ? OR a.date_published >= ?
-         ORDER BY a.date_published DESC, a.rowid DESC",
-    )?;
+    let sql = format!(
+        "SELECT a.* FROM articles a \
+         INNER JOIN statuses s ON a.article_id = s.article_id \
+         WHERE s.date_arrived >= ? OR a.date_published >= ? {}",
+        sort.order_by_clause_aliased()
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([today_start, today_start], row_to_article)?;
     let mut articles = Vec::new();
     for row in rows {

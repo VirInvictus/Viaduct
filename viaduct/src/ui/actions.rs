@@ -96,6 +96,18 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
         });
     }
 
+    // v2.6.22: stateful timeline-sort action backing the
+    // `view-sort-descending-symbolic` MenuButton in the timeline
+    // header. Initial state pulled from `timeline-sort-order`
+    // GSetting; on activate the parameter ("newest-first" /
+    // "oldest-first") is the next state. We propagate the change
+    // back to the GSetting so the choice persists across runs and
+    // any external dconf flip syncs the action state. The window's
+    // sidebar-selection handler reads the GSetting fresh each cycle
+    // (`current_timeline_sort()`), so a flip + reload-current-
+    // timeline picks up the new sort order on the very next click.
+    register_stateful_timeline_sort(window);
+
     // Accelerators. NNW-exact where available; roadmap's additions stacked
     // on top as alternates so both muscle memories work.
     //
@@ -143,4 +155,65 @@ where
     window.add_action(&action);
     // Silence unused-import on glib if nothing else references it.
     let _ = glib::MainContext::default();
+}
+
+/// v2.6.22: install the `win.timeline-sort` stateful action.
+/// Parameter type `"s"` (a string nick — "newest-first" or
+/// "oldest-first"). Initial state read from the `timeline-sort-order`
+/// GSetting; activation writes the new state back to the GSetting
+/// and re-fetches the timeline so the user sees the new order
+/// immediately. External flips of the GSetting (dconf, another
+/// process) sync via `connect_changed`.
+fn register_stateful_timeline_sort(window: &ViaductWindow) {
+    let initial: glib::Variant = crate::preferences::settings()
+        .map(|s| s.string(crate::preferences::keys::TIMELINE_SORT_ORDER))
+        .map(|s| s.as_str().to_variant())
+        .unwrap_or_else(|| "newest-first".to_variant());
+
+    let action =
+        gio::SimpleAction::new_stateful("timeline-sort", Some(glib::VariantTy::STRING), &initial);
+
+    // Activation: GMenu sends the radio target as `parameter`. Hand
+    // it to `change_state` so the standard activate→change-state
+    // chain fires.
+    action.connect_activate(|action, parameter| {
+        if let Some(target) = parameter {
+            action.change_state(target);
+        }
+    });
+
+    let weak = window.downgrade();
+    action.connect_change_state(move |action, value| {
+        let Some(value) = value else { return };
+        let Some(nick) = value.str() else { return };
+        action.set_state(value);
+        if let Some(s) = crate::preferences::settings()
+            && s.string(crate::preferences::keys::TIMELINE_SORT_ORDER)
+                .as_str()
+                != nick
+            && let Err(e) = s.set_string(crate::preferences::keys::TIMELINE_SORT_ORDER, nick)
+        {
+            tracing::warn!(?e, "failed to write timeline-sort-order");
+        }
+        if let Some(w) = weak.upgrade() {
+            w.reload_current_timeline();
+        }
+    });
+
+    // External flips sync the action state back so the menu's radio
+    // mark stays accurate.
+    if let Some(settings) = crate::preferences::settings() {
+        let action_weak = action.downgrade();
+        settings.connect_changed(
+            Some(crate::preferences::keys::TIMELINE_SORT_ORDER),
+            move |s, _| {
+                let nick = s.string(crate::preferences::keys::TIMELINE_SORT_ORDER);
+                if let Some(action) = action_weak.upgrade() {
+                    action.set_state(&nick.as_str().to_variant());
+                }
+            },
+        );
+    }
+
+    window.add_action(&action);
 }
