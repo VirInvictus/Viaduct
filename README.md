@@ -6,7 +6,6 @@
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Language-Rust-blue" alt="Language: Rust"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://github.com/Ranchero-Software/NetNewsWire"><img src="https://img.shields.io/badge/inspired_by-NetNewsWire-d86f1a" alt="Inspired by NetNewsWire"></a>
-  <a href="https://ko-fi.com/bdkl"><img src="https://img.shields.io/badge/support-Ko--fi-ff5f5f?logo=kofi" alt="Ko-fi"></a>
 </p>
 
 ---
@@ -125,5 +124,8 @@ MIT. See [LICENSE](LICENSE).
 
 ## Support
 
-Support me by donating bitcoin (even a coffee would help):  
+If Viaduct's useful to you and you'd like to chip in:
+
+```
 bc1qkge6zr45tzqfwfmvma2ylumt6mg7wlwmhr05yv
+```
