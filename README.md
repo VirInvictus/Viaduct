@@ -20,7 +20,7 @@ Viaduct translates NetNewsWire's local-account architecture, parsing pipeline, a
 
 ## Why this exists
 
-Modern feed readers tend to be Electron / browser-engine apps with sprawling memory footprints. The closest comparable Linux RSS reader idles at **600 MB** with the same OPML file Viaduct peaks at under **300 MB**. Viaduct gets there by porting NetNewsWire's discipline — single-writer SQLite worker, OPML on disk as the source of truth, FTS5 search, hard 250-entry per-kind LRU caches, exactly one neutered WebKit instance for the article pane — into Rust + tokio + GTK4. Idle target: 100–300 MB. Hard peak ceiling: 500 MB, enforced by an in-tree `mem_check` harness.
+Modern feed readers tend to be Electron / browser-engine apps with sprawling memory footprints. The closest comparable Linux RSS reader idles at **600 MB** with the same OPML file Viaduct peaks at under **470MB**. Viaduct gets there by porting NetNewsWire's discipline — single-writer SQLite worker, OPML on disk as the source of truth, FTS5 search, hard 250-entry per-kind LRU caches, exactly one neutered WebKit instance for the article pane — into Rust + tokio + GTK4. Idle target: 100–300 MB. Hard peak ceiling: 500 MB, enforced by an in-tree `mem_check` harness.
 
 ## Features
 
