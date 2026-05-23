@@ -47,12 +47,22 @@ mod imp {
 
         pub account: OnceCell<Arc<Account>>,
         pub image_cache: OnceCell<Arc<ImageCache>>,
+        /// v2.6.24 process-wide activity log shared with every
+        /// AccountRefresher constructed by the window. Read-only
+        /// snapshot consumed by the Activity dialog.
+        pub activity_log: OnceCell<Arc<crate::network::activity::ActivityLog>>,
         pub batch_update: crate::ui::batch::BatchUpdate,
         /// Right-click context-menu state for the timeline (v1.7.1). The
         /// sidebar's equivalent right_clicked_feed/folder cells live on
         /// `SidebarView` (v2.0.0-pre3). Window-level action bodies read
         /// through `sidebar_view.take_right_clicked_*()` accessors.
         pub right_clicked_article: RefCell<Option<crate::models::Article>>,
+        /// v2.7.0 — right-clicked custom Smart Feed used by the
+        /// `win.delete-smart-feed` action body. Populated by the
+        /// sidebar's right-click gesture handler before the popover
+        /// shows; `take()` on use so the value can't bleed into a
+        /// later activation.
+        pub right_clicked_smart_feed: RefCell<Option<crate::smart_feeds::SmartFeed>>,
         /// Timeline right-click popover. Window-owned because the action
         /// bodies it triggers (`win.toggle-read`, `win.toggle-star`,
         /// `win.open-in-browser`, `win.open-enclosure`, `win.copy-url`)
@@ -144,6 +154,11 @@ impl ViaductWindow {
             .image_cache
             .set(Arc::new(ImageCache::new(favicons, images, video_thumbs)))
             .ok();
+        window
+            .imp()
+            .activity_log
+            .set(crate::network::activity::ActivityLog::new())
+            .ok();
         // Phase 18 (v2.0.0-pre1): the article-pane WebView lives inside
         // the ViaductArticlePaneView custom widget now. Bootstrap it with
         // the shared ImageCache so the `viaduct-img://` scheme resolves;
@@ -218,6 +233,14 @@ impl ViaductWindow {
             .get()
             .cloned()
             .expect("ViaductWindow constructed without Account")
+    }
+
+    pub(crate) fn activity_log(&self) -> Arc<crate::network::activity::ActivityLog> {
+        self.imp()
+            .activity_log
+            .get()
+            .cloned()
+            .expect("ViaductWindow constructed without ActivityLog")
     }
 
     pub(crate) fn image_cache(&self) -> Arc<ImageCache> {
@@ -402,8 +425,20 @@ impl ViaductWindow {
             match load_rx.await {
                 Ok(Ok(opml)) => {
                     if let Some(window) = window_weak_for_load.upgrade() {
+                        // v2.6.23: first-launch welcome dialog. Fires
+                        // when the OPML is empty (no standalone feeds,
+                        // no folder feeds) AND the welcome-shown
+                        // GSetting is false. Modal over the main
+                        // window so the user gets a clear next action
+                        // instead of an empty sidebar.
+                        let opml_empty = opml.standalone_feeds.is_empty()
+                            && opml.folders.iter().all(|f| f.feeds.is_empty());
                         window.imp().sidebar_view.get().apply_opml(opml);
                         window.refresh_unread_counts();
+                        window.reload_custom_smart_feeds();
+                        if opml_empty && crate::ui::welcome_dialog::should_present() {
+                            crate::ui::welcome_dialog::present(&window);
+                        }
                     }
                 }
                 Ok(Err(e)) => {
@@ -493,7 +528,12 @@ impl ViaductWindow {
                     SidebarItem::Folder(folder) => {
                         fetch_folder_articles(&account, &folder, sort).await
                     }
-                    SidebarItem::SmartFeedGroup => Ok(Vec::new()),
+                    SidebarItem::CustomSmartFeed(sf) => {
+                        account.fetch_smart_feed_articles(sf.rules, sort).await
+                    }
+                    SidebarItem::SmartFeedGroup | SidebarItem::CustomSmartFeedsGroup => {
+                        Ok(Vec::new())
+                    }
                 };
                 let fetch_ms = click_at.elapsed().as_millis();
 
@@ -839,6 +879,15 @@ impl ViaductWindow {
         open_section.append(Some("Copy URL"), Some("win.copy-url"));
         timeline_menu.append_section(None, &open_section);
 
+        // v2.6.25 share submenu — same items as the article-pane
+        // header-bar share menu so muscle memory transfers.
+        let share_submenu = gio::Menu::new();
+        share_submenu.append(Some("Copy URL with Title"), Some("win.copy-title-and-url"));
+        share_submenu.append(Some("Email Link…"), Some("win.share-email"));
+        share_submenu.append(Some("Save to Pocket"), Some("win.share-pocket"));
+        share_submenu.append(Some("Save to Instapaper"), Some("win.share-instapaper"));
+        timeline_menu.append_submenu(Some("Send to"), &share_submenu);
+
         let timeline_popover = gtk::PopoverMenu::from_model(Some(&timeline_menu));
         timeline_popover.set_has_arrow(false);
         timeline_popover.set_parent(&self.imp().timeline_view.get().list_view());
@@ -1169,6 +1218,99 @@ impl ViaductWindow {
         self.imp()
             .toast_overlay
             .add_toast(adw::Toast::new("Article URL copied."));
+    }
+
+    /// v2.6.25 — copy "Title <newline> URL" to the clipboard. Common
+    /// quick-share pattern for chat / forum quoting where pasting just
+    /// a URL loses context.
+    pub(crate) fn act_copy_title_and_url(&self) {
+        let Some((title, url)) = self.current_article_title_and_url() else {
+            self.imp()
+                .toast_overlay
+                .add_toast(adw::Toast::new("This article has no URL to copy."));
+            return;
+        };
+        let payload = if title.is_empty() {
+            url
+        } else {
+            format!("{title}\n{url}")
+        };
+        self.clipboard().set_text(&payload);
+        self.imp()
+            .toast_overlay
+            .add_toast(adw::Toast::new("Article title and URL copied."));
+    }
+
+    /// v2.6.25 — open the user's default mail client with a prefilled
+    /// `mailto:` carrying the article title in the subject and the URL
+    /// in the body. Body uses the URL only (not the article HTML);
+    /// recipients will have to click through.
+    pub(crate) fn act_share_email(&self) {
+        let Some((title, url)) = self.current_article_title_and_url() else {
+            self.imp()
+                .toast_overlay
+                .add_toast(adw::Toast::new("This article has no URL to share."));
+            return;
+        };
+        let subject = mailto_encode(&title);
+        let body = mailto_encode(&url);
+        let mailto = format!("mailto:?subject={subject}&body={body}");
+        if let Err(e) =
+            gio::AppInfo::launch_default_for_uri(&mailto, None::<&gio::AppLaunchContext>)
+        {
+            tracing::warn!(?e, "failed to launch mail client");
+            self.imp()
+                .toast_overlay
+                .add_toast(adw::Toast::new("Couldn't open your mail client."));
+        }
+    }
+
+    /// v2.6.25 — hand the article URL to Pocket's web "save" intent.
+    /// Pocket's `https://getpocket.com/edit?url=…` redirects to login
+    /// if needed; afterward the article ends up in their reading list.
+    pub(crate) fn act_share_pocket(&self) {
+        self.share_to(
+            "https://getpocket.com/edit?url=",
+            "This article has no URL to send to Pocket.",
+            "Couldn't open Pocket.",
+        );
+    }
+
+    /// v2.6.25 — same shape as Pocket but pointed at Instapaper.
+    pub(crate) fn act_share_instapaper(&self) {
+        self.share_to(
+            "https://www.instapaper.com/edit?url=",
+            "This article has no URL to send to Instapaper.",
+            "Couldn't open Instapaper.",
+        );
+    }
+
+    fn share_to(&self, prefix: &str, no_url_msg: &'static str, fail_msg: &'static str) {
+        let Some((_title, url)) = self.current_article_title_and_url() else {
+            self.imp()
+                .toast_overlay
+                .add_toast(adw::Toast::new(no_url_msg));
+            return;
+        };
+        let target = format!("{prefix}{}", percent_encode_uri_component(&url));
+        if let Err(e) =
+            gio::AppInfo::launch_default_for_uri(&target, None::<&gio::AppLaunchContext>)
+        {
+            tracing::warn!(target = %target, ?e, "failed to launch share target");
+            self.imp()
+                .toast_overlay
+                .add_toast(adw::Toast::new(fail_msg));
+        }
+    }
+
+    fn current_article_title_and_url(&self) -> Option<(String, String)> {
+        let selection = self.imp().timeline_view.get().selection();
+        let item = selection.selected_item()?;
+        let node = item.downcast_ref::<ArticleNode>()?;
+        let article = node.article()?;
+        let url = article.external_url.clone().or(article.url.clone())?;
+        let title = article.title.clone().unwrap_or_default();
+        Some((title, url))
     }
 
     /// Programmatic toggle of the Reader View button. Lets users flip in
@@ -1845,6 +1987,7 @@ impl ViaductWindow {
             return;
         }
         let account = self.account();
+        let activity_log = Some(self.activity_log());
         let window_weak = self.downgrade();
         let retention_days = current_retention_days();
         let progress = RefreshProgress::new();
@@ -1875,6 +2018,7 @@ impl ViaductWindow {
                 retention_days,
                 force,
                 Some(progress_for_runtime),
+                activity_log,
             )
             .await;
             let _ = done_tx.send(tally);
@@ -2119,6 +2263,14 @@ impl ViaductWindow {
         crate::ui::preferences_dialog::present(self);
     }
 
+    /// v2.6.24 — open the Activity Log dialog. Renders a snapshot of
+    /// the per-feed terminal events recorded by the refresher (success
+    /// counts, 304s, HTTP / network / parse / DB errors, skips with
+    /// reason). NetNewsWire's "Activity Log" surface.
+    pub(crate) fn act_activity_log(&self) {
+        crate::ui::activity_dialog::present(self);
+    }
+
     /// Open the Add Feed dialog. Port of NNW's `Add Feed` window:
     /// URL field (feed or website — discovery handles either), optional
     /// name override, optional folder selection. On submit, runs the
@@ -2128,6 +2280,77 @@ impl ViaductWindow {
     /// user sees its articles immediately.
     pub(crate) fn act_add_feed(&self) {
         crate::ui::add_feed_dialog::present(self);
+    }
+
+    /// v2.7.0 — open the New Smart Feed dialog. Reads the loaded OPML's
+    /// feed list to populate the "Feed is" rule's dropdown.
+    pub(crate) fn act_new_smart_feed(&self) {
+        crate::ui::smart_feed_dialog::present(self);
+    }
+
+    /// v2.7.0 — delete the right-clicked custom Smart Feed. Reads the
+    /// stashed `right_clicked_smart_feed` cell populated by the
+    /// gesture handler before the popover was shown.
+    pub(crate) fn act_delete_clicked_smart_feed(&self) {
+        let Some(sf) = self.imp().right_clicked_smart_feed.take() else {
+            return;
+        };
+        let account = self.account();
+        let weak_window = self.downgrade();
+        let id = sf.id.clone();
+        let name = sf.name.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let _ = tx.send(account.delete_smart_feed(id).await);
+        });
+        glib::spawn_future_local(async move {
+            let Some(window) = weak_window.upgrade() else {
+                return;
+            };
+            match rx.await {
+                Ok(Ok(true)) => {
+                    window.show_toast_public(&format!("Removed Smart Feed “{name}”."));
+                    window.reload_custom_smart_feeds();
+                }
+                Ok(Ok(false)) => {
+                    window.show_toast_public("Smart Feed wasn't found.");
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(?e, "delete_smart_feed failed");
+                    window.show_toast_public("Couldn't remove Smart Feed.");
+                }
+                Err(_) => {}
+            }
+        });
+    }
+
+    /// v2.7.0 — reload custom Smart Feeds from disk and rebuild the
+    /// sidebar tree. Called on startup and after every add/delete.
+    pub(crate) fn reload_custom_smart_feeds(&self) {
+        let account = self.account();
+        let weak_window = self.downgrade();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let _ = tx.send(account.list_smart_feeds().await);
+        });
+        glib::spawn_future_local(async move {
+            let Some(window) = weak_window.upgrade() else {
+                return;
+            };
+            match rx.await {
+                Ok(Ok(feeds)) => {
+                    window
+                        .imp()
+                        .sidebar_view
+                        .get()
+                        .apply_custom_smart_feeds(feeds);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(?e, "list_smart_feeds failed");
+                }
+                Err(_) => {}
+            }
+        });
     }
 
     /// Import OPML — port of NNW `ImportOPMLWindowController.importOPML`.
@@ -2406,7 +2629,10 @@ impl ViaductWindow {
                     _ => Ok(Vec::new()),
                 },
                 SidebarItem::Folder(folder) => fetch_folder_articles(&account, &folder, sort).await,
-                SidebarItem::SmartFeedGroup => Ok(Vec::new()),
+                SidebarItem::CustomSmartFeed(sf) => {
+                    account.fetch_smart_feed_articles(sf.rules, sort).await
+                }
+                SidebarItem::SmartFeedGroup | SidebarItem::CustomSmartFeedsGroup => Ok(Vec::new()),
             };
             match result {
                 Ok(articles) => {
@@ -2492,6 +2718,7 @@ impl ViaductWindow {
             return;
         }
         let account = self.account();
+        let activity_log = Some(self.activity_log());
         let window_weak = self.downgrade();
         let retention_days = current_retention_days();
         let progress = RefreshProgress::new();
@@ -2509,6 +2736,7 @@ impl ViaductWindow {
                 retention_days,
                 true,
                 Some(progress_for_runtime),
+                activity_log,
             )
             .await;
             let _ = done_tx.send(tally);
@@ -2606,6 +2834,7 @@ async fn run_refresh_with_tally(
     retention_days: i64,
     force: bool,
     progress: Option<RefreshProgress>,
+    activity_log: Option<Arc<crate::network::activity::ActivityLog>>,
 ) -> RefreshTally {
     let feeds_attempted = paired.len();
     // v2.6.10: publish the total to the GTK side BEFORE running so the
@@ -2647,6 +2876,9 @@ async fn run_refresh_with_tally(
     let mut refresher = crate::network::AccountRefresher::new(account, changes_tx, retention_days);
     if let Some(p) = progress.as_ref() {
         refresher = refresher.with_completion_counter(p.completed.clone());
+    }
+    if let Some(log) = activity_log {
+        refresher = refresher.with_activity_log(log);
     }
     if force {
         refresher.refresh_feeds_forced(paired).await;
@@ -2713,6 +2945,21 @@ fn current_retention_days() -> i64 {
     crate::preferences::settings()
         .map(|s| crate::preferences::retention_days(&s))
         .unwrap_or(30)
+}
+
+/// v2.6.25 — RFC 3986 unreserved-set encoder used by share targets
+/// (Pocket / Instapaper / mailto). Reuses the encoder already vetted
+/// for the `viaduct-img://` scheme.
+fn percent_encode_uri_component(input: &str) -> String {
+    crate::ui::article_renderer::percent_encode(input)
+}
+
+/// v2.6.25 — `mailto:` subject/body encoder. RFC 6068 §2 uses standard
+/// percent-encoding plus `%20` for space (rather than `+`). The
+/// unreserved set already encodes space as `%20`, so the same encoder
+/// works for both URI-component and mailto form fields.
+fn mailto_encode(input: &str) -> String {
+    percent_encode_uri_component(input)
 }
 
 /// v2.6.22: read `timeline-sort-order` fresh from GSettings on the
@@ -2824,6 +3071,8 @@ fn sidebar_item_label(item: &SidebarItem) -> String {
         SidebarItem::Folder(folder) => format!("[{}]", folder.name),
         SidebarItem::SmartFeed(name) => format!("Smart: {name}"),
         SidebarItem::SmartFeedGroup => "Smart Feeds (group)".to_string(),
+        SidebarItem::CustomSmartFeed(sf) => format!("Custom Smart Feed: {}", sf.name),
+        SidebarItem::CustomSmartFeedsGroup => "My Smart Feeds (group)".to_string(),
     }
 }
 

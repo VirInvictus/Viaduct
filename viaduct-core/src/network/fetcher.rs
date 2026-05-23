@@ -263,6 +263,11 @@ pub struct AccountRefresher {
     /// the bottom progress bar). None when we're refreshing in a
     /// context with no UI to drive (mem_check, internal sync).
     completion_counter: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    /// v2.6.24 activity log — Some when the caller wants per-feed
+    /// terminal-state events (success / 304 / HTTP / network / parse /
+    /// DB / skipped) recorded for the GTK Activity Log dialog. None
+    /// for headless contexts (mem_check, integration tests).
+    activity_log: Option<Arc<crate::network::activity::ActivityLog>>,
 }
 
 impl AccountRefresher {
@@ -277,6 +282,7 @@ impl AccountRefresher {
             changes_sender,
             retention_days,
             completion_counter: None,
+            activity_log: None,
         }
     }
 
@@ -287,6 +293,14 @@ impl AccountRefresher {
     /// before `refresh_feeds` / `refresh_feeds_forced`.
     pub fn with_completion_counter(mut self, counter: Arc<std::sync::atomic::AtomicUsize>) -> Self {
         self.completion_counter = Some(counter);
+        self
+    }
+
+    /// v2.6.24: install an activity log so per-feed terminal states are
+    /// recorded for the Activity dialog. Pre-pipeline skips (disallowed
+    /// host, cache-control freshness, 29-min throttle) push too.
+    pub fn with_activity_log(mut self, log: Arc<crate::network::activity::ActivityLog>) -> Self {
+        self.activity_log = Some(log);
         self
     }
 
@@ -322,14 +336,20 @@ impl AccountRefresher {
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(REFRESH_PARALLELISM));
         let mut futures = Vec::new();
         for (feed, settings) in feeds {
-            if !force && Self::feed_should_be_skipped(&feed, &settings, special_case_cutoff_date) {
-                debug!("Skipping feed: {}", feed.url);
+            if !force
+                && let Some(reason) = Self::skip_reason(&feed, &settings, special_case_cutoff_date)
+            {
+                debug!("Skipping feed: {} ({:?})", feed.url, reason);
                 skipped += 1;
-                // v2.6.10: count skipped feeds so the progress-bar
-                // denominator (= paired.len()) matches and the bar
-                // reaches 100% at cycle end. Otherwise an
-                // auto-refresh that skips every feed in the 29-min
-                // throttle would leave the bar stuck near 0.
+                if let Some(log) = self.activity_log.as_ref() {
+                    log.push(crate::network::activity::ActivityEvent {
+                        at: Utc::now(),
+                        feed_id: feed.id.clone(),
+                        feed_url: feed.url.clone(),
+                        feed_name: settings.edited_name.clone(),
+                        kind: crate::network::activity::ActivityKind::Skipped(reason),
+                    });
+                }
                 if let Some(c) = self.completion_counter.as_ref() {
                     c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -342,6 +362,7 @@ impl AccountRefresher {
             let retention_days = self.retention_days;
             let permit_source = semaphore.clone();
             let counter = self.completion_counter.clone();
+            let log = self.activity_log.clone();
 
             futures.push(tokio::spawn(async move {
                 // Acquire blocks the per-feed task at the start of
@@ -363,6 +384,7 @@ impl AccountRefresher {
                     settings,
                     retention_days,
                     force,
+                    log,
                 )
                 .await;
                 // v2.6.10: bump the GTK-side progress counter on
@@ -389,12 +411,16 @@ impl AccountRefresher {
         }
     }
 
-    fn feed_should_be_skipped(
+    /// v2.6.24 — returns Some(reason) when the feed should be skipped
+    /// for this cycle, None when it should fetch. Replaces the prior
+    /// bool-returning helper so the activity log can record the why.
+    fn skip_reason(
         feed: &Feed,
         settings: &FeedSettings,
         special_case_cutoff_date: DateTime<Utc>,
-    ) -> bool {
-        // Disallowed hosts
+    ) -> Option<crate::network::activity::SkipReason> {
+        use crate::network::activity::SkipReason;
+
         if let Ok(url) = url::Url::parse(&feed.url)
             && let Some(host) = url.host_str()
         {
@@ -404,39 +430,34 @@ impl AccountRefresher {
                 || host == "x.com"
                 || host == "www.x.com"
             {
-                return true;
+                return Some(SkipReason::DisallowedHost);
             }
         }
 
-        // Cache-control max age (already capped at 5h on persistence)
         if let (Some(last_check), Some(max_age)) = (settings.last_check_date, settings.max_age) {
             let elapsed = (Utc::now() - last_check).num_seconds();
             if elapsed < max_age {
-                return true;
+                return Some(SkipReason::CacheControl);
             }
         }
 
-        // Timing logic — order matches NNW
-        // `feedShouldBeSkippedForTimingReasons`.
         if let Some(last_check) = settings.last_check_date {
-            // domainsWithNoMinimumTime short-circuits to false: these hosts
-            // are checked on every refresh attempt regardless of timing.
             if is_no_minimum_time_domain(&feed.url) {
-                return false;
+                return None;
             }
             if is_special_case_host(&feed.url) {
                 if last_check > special_case_cutoff_date {
-                    return true;
+                    return Some(SkipReason::Throttled);
                 }
             } else {
                 let minutes_elapsed = (Utc::now() - last_check).num_minutes();
                 if minutes_elapsed < 29 {
-                    return true;
+                    return Some(SkipReason::Throttled);
                 }
             }
         }
 
-        false
+        None
     }
 }
 
@@ -526,6 +547,7 @@ fn maybe_expire_conditional_get_info(
     (settings.etag.clone(), settings.last_modified.clone())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn refresh_one_feed(
     fetcher: Fetcher,
     account: Arc<Account>,
@@ -534,6 +556,7 @@ async fn refresh_one_feed(
     settings: FeedSettings,
     retention_days: i64,
     force: bool,
+    activity_log: Option<Arc<crate::network::activity::ActivityLog>>,
 ) {
     // On force, drop conditional-GET headers entirely so the server can't
     // 304 us into a no-op when the local article store is missing.
@@ -545,6 +568,18 @@ async fn refresh_one_feed(
     let mut new_settings = settings.clone();
     new_settings.last_check_date = Some(Utc::now());
 
+    let log_event = |kind: crate::network::activity::ActivityKind| {
+        if let Some(log) = activity_log.as_ref() {
+            log.push(crate::network::activity::ActivityEvent {
+                at: Utc::now(),
+                feed_id: feed.id.clone(),
+                feed_url: feed.url.clone(),
+                feed_name: settings.edited_name.clone(),
+                kind,
+            });
+        }
+    };
+
     match fetcher
         .fetch(&feed.url, etag.as_deref(), last_modified.as_deref())
         .await
@@ -552,11 +587,15 @@ async fn refresh_one_feed(
         Ok(result) => {
             if result.status == 304 {
                 debug!("Feed not modified (304): {}", feed.url);
+                log_event(crate::network::activity::ActivityKind::NotModified);
                 let _ = account.upsert_feed_settings(new_settings).await;
                 return;
             }
             if result.status != 200 {
                 warn!("Feed HTTP {}: {}", result.status, feed.url);
+                log_event(crate::network::activity::ActivityKind::HttpError {
+                    status: result.status,
+                });
                 let _ = account.upsert_feed_settings(new_settings).await;
                 return;
             }
@@ -646,10 +685,18 @@ async fn refresh_one_feed(
                                 changes.updated_articles.len(),
                                 changes.deleted_article_ids.len(),
                             );
+                            log_event(crate::network::activity::ActivityKind::Success {
+                                new: changes.new_articles.len(),
+                                updated: changes.updated_articles.len(),
+                                deleted: changes.deleted_article_ids.len(),
+                            });
                             let _ = sender.send(changes);
                         }
                         Err(e) => {
                             error!("DB update failed for {}: {:?}", feed.url, e);
+                            log_event(crate::network::activity::ActivityKind::DbError {
+                                detail: format!("{e}"),
+                            });
                         }
                     }
                 }
@@ -666,6 +713,9 @@ async fn refresh_one_feed(
                         error = ?e,
                         "Parse failed"
                     );
+                    log_event(crate::network::activity::ActivityKind::ParseError {
+                        detail: format!("{e}"),
+                    });
                 }
             }
 
@@ -673,6 +723,9 @@ async fn refresh_one_feed(
         }
         Err(e) => {
             error!("Failed to fetch feed {}: {:?}", feed.url, e);
+            log_event(crate::network::activity::ActivityKind::NetworkError {
+                detail: format!("{e}"),
+            });
         }
     }
 }

@@ -19,6 +19,13 @@ use std::sync::Arc;
 pub enum SidebarItem {
     SmartFeedGroup,
     SmartFeed(String), // e.g., "Today", "All Unread", "Starred"
+    /// v2.7.0 — header row for the user-defined Smart Feeds section.
+    /// Only populated when at least one custom Smart Feed exists.
+    CustomSmartFeedsGroup,
+    /// v2.7.0 — a user-defined Smart Feed. Carries the full record
+    /// (name + rules) so the timeline-fetch can run without a second
+    /// store lookup.
+    CustomSmartFeed(crate::smart_feeds::SmartFeed),
     Folder(Folder),
     Feed(Feed),
 }
@@ -27,6 +34,11 @@ pub enum SidebarItem {
 pub struct SidebarTreeControllerDelegate {
     pub opml_file: RefCell<Option<Rc<OpmlFile>>>,
     pub is_read_filtered: std::cell::Cell<bool>,
+    /// v2.7.0 — user-defined Smart Feeds. Empty by default; set via
+    /// `set_custom_smart_feeds` after Account loads them. The delegate
+    /// emits a top-level `CustomSmartFeedsGroup` only when the list
+    /// is non-empty so first-launch doesn't show an empty section.
+    pub custom_smart_feeds: RefCell<Vec<crate::smart_feeds::SmartFeed>>,
 }
 
 impl Default for SidebarTreeControllerDelegate {
@@ -40,11 +52,19 @@ impl SidebarTreeControllerDelegate {
         Self {
             opml_file: RefCell::new(None),
             is_read_filtered: std::cell::Cell::new(false),
+            custom_smart_feeds: RefCell::new(Vec::new()),
         }
     }
 
     pub fn set_opml_file(&self, opml_file: OpmlFile) {
         self.opml_file.replace(Some(Rc::new(opml_file)));
+    }
+
+    /// v2.7.0 — replace the user-defined Smart Feed list. Call before
+    /// `controller.rebuild()` so the new list lands in the next tree
+    /// build.
+    pub fn set_custom_smart_feeds(&self, feeds: Vec<crate::smart_feeds::SmartFeed>) {
+        self.custom_smart_feeds.replace(feeds);
     }
 
     fn child_nodes_for_root(&self, root_node: &TreeNode) -> Vec<TreeNode> {
@@ -57,6 +77,17 @@ impl SidebarTreeControllerDelegate {
         smart_feeds_node.set_can_have_child_nodes(true);
         smart_feeds_node.set_is_group_item(true);
         top_level_nodes.push(smart_feeds_node);
+
+        // v2.7.0 — Custom Smart Feeds group, only when the user has
+        // any. The empty-state cue lives in the "New Smart Feed…"
+        // primary-menu entry, not as a perpetually-empty header.
+        if !self.custom_smart_feeds.borrow().is_empty() {
+            let csf_obj = Rc::new(SidebarItem::CustomSmartFeedsGroup);
+            let csf_node = TreeNode::new(csf_obj, Some(root_node));
+            csf_node.set_can_have_child_nodes(true);
+            csf_node.set_is_group_item(true);
+            top_level_nodes.push(csf_node);
+        }
 
         // Feeds and Folders from OPML
         if let Some(opml) = self.opml_file.borrow().as_ref() {
@@ -74,6 +105,17 @@ impl SidebarTreeControllerDelegate {
         }
 
         top_level_nodes
+    }
+
+    fn child_nodes_for_custom_smart_feeds(&self, parent_node: &TreeNode) -> Vec<TreeNode> {
+        self.custom_smart_feeds
+            .borrow()
+            .iter()
+            .map(|sf| {
+                let obj = Rc::new(SidebarItem::CustomSmartFeed(sf.clone()));
+                TreeNode::new(obj, Some(parent_node))
+            })
+            .collect()
     }
 
     fn child_nodes_for_smart_feeds(&self, parent_node: &TreeNode) -> Vec<TreeNode> {
@@ -116,6 +158,9 @@ impl TreeControllerDelegate for SidebarTreeControllerDelegate {
             match sidebar_item {
                 SidebarItem::SmartFeedGroup => {
                     return self.child_nodes_for_smart_feeds(node);
+                }
+                SidebarItem::CustomSmartFeedsGroup => {
+                    return self.child_nodes_for_custom_smart_feeds(node);
                 }
                 SidebarItem::Folder(folder) => {
                     return self.child_nodes_for_folder(node, folder);
@@ -408,6 +453,17 @@ pub fn setup_sidebar_list_view(
                     SidebarItem::SmartFeed(name) => {
                         label.set_text(name);
                         icon_image.set_icon_name(Some(smart_feed_icon(name)));
+                        icon_stack.set_visible_child_name("icon");
+                    }
+                    SidebarItem::CustomSmartFeedsGroup => {
+                        label.set_text("My Smart Feeds");
+                        label.add_css_class("viaduct-sidebar-heading");
+                        icon_image.set_icon_name(Some("emblem-symbolic-link-symbolic"));
+                        icon_stack.set_visible_child_name("icon");
+                    }
+                    SidebarItem::CustomSmartFeed(sf) => {
+                        label.set_text(&sf.name);
+                        icon_image.set_icon_name(Some("system-search-symbolic"));
                         icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::Folder(folder) => {

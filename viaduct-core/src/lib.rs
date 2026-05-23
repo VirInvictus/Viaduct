@@ -19,6 +19,7 @@ pub mod models;
 pub mod network;
 pub mod parser;
 pub mod paths;
+pub mod smart_feeds;
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};

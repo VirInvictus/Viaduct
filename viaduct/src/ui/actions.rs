@@ -56,6 +56,19 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     register(window, "toggle-sidebar", |w| w.act_toggle_sidebar());
     register(window, "shortcuts", |w| w.act_shortcuts());
     register(window, "preferences", |w| w.act_preferences());
+    register(window, "activity-log", |w| w.act_activity_log());
+
+    // v2.6.25 share / send-to surface.
+    register(window, "copy-title-and-url", |w| w.act_copy_title_and_url());
+    register(window, "share-email", |w| w.act_share_email());
+    register(window, "share-pocket", |w| w.act_share_pocket());
+    register(window, "share-instapaper", |w| w.act_share_instapaper());
+
+    // v2.7.0 — custom Smart Feeds.
+    register(window, "new-smart-feed", |w| w.act_new_smart_feed());
+    register(window, "delete-smart-feed", |w| {
+        w.act_delete_clicked_smart_feed()
+    });
 
     // Feed management
     register(window, "add-feed", |w| w.act_add_feed());

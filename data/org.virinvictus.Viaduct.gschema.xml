@@ -72,6 +72,17 @@
       </description>
     </key>
 
+    <key name="welcome-shown" type="b">
+      <default>false</default>
+      <summary>Whether the first-launch welcome dialog has been shown</summary>
+      <description>
+        Set to true after the user dismisses the welcome dialog (or
+        adds their first feed via any path). Once true, the dialog
+        never reappears — even if the user later removes every feed.
+        Reset to false in dconf-editor to see the welcome dialog again.
+      </description>
+    </key>
+
     <key name="run-in-background" type="b">
       <default>false</default>
       <summary>Keep refreshing feeds after the window is closed</summary>

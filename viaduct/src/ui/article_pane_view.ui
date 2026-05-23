@@ -2,6 +2,32 @@
 <interface>
   <requires lib="gtk" version="4.16"/>
   <requires lib="libadwaita" version="1.7"/>
+  <menu id="share_menu">
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">Copy URL</attribute>
+        <attribute name="action">win.copy-url</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Copy URL with Title</attribute>
+        <attribute name="action">win.copy-title-and-url</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">Email Link…</attribute>
+        <attribute name="action">win.share-email</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Save to Pocket</attribute>
+        <attribute name="action">win.share-pocket</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Save to Instapaper</attribute>
+        <attribute name="action">win.share-instapaper</attribute>
+      </item>
+    </section>
+  </menu>
   <template class="ViaductArticlePaneView" parent="AdwBin">
     <child>
       <object class="AdwToolbarView">
@@ -11,6 +37,13 @@
               <object class="GtkMenuButton" id="appearance_btn">
                 <property name="icon-name">font-x-generic-symbolic</property>
                 <property name="tooltip-text">Article appearance</property>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkMenuButton" id="share_btn">
+                <property name="icon-name">send-to-symbolic</property>
+                <property name="tooltip-text">Send to…</property>
+                <property name="menu-model">share_menu</property>
               </object>
             </child>
             <child type="end">

@@ -4,6 +4,7 @@
 
 // UI layer for GTK4/Libadwaita
 pub mod actions;
+pub mod activity_dialog;
 pub mod add_feed_dialog;
 pub mod article_pane_view;
 pub mod article_renderer;
@@ -15,9 +16,11 @@ pub mod preferences_dialog;
 pub mod reader_view;
 pub mod sidebar;
 pub mod sidebar_view;
+pub mod smart_feed_dialog;
 pub mod timeline;
 pub mod timeline_view;
 pub mod tree;
+pub mod welcome_dialog;
 pub mod window;
 
 pub fn init_ui() {

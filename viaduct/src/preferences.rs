@@ -31,6 +31,7 @@ pub mod keys {
     pub const VIDEO_PLAYBACK_MODE: &str = "video-playback-mode";
     pub const RUN_IN_BACKGROUND: &str = "run-in-background";
     pub const TIMELINE_SORT_ORDER: &str = "timeline-sort-order";
+    pub const WELCOME_SHOWN: &str = "welcome-shown";
 }
 
 /// Open the user-visible preferences. Returns `None` when the schema isn't

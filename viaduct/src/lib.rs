@@ -13,7 +13,7 @@
 
 pub use viaduct_core::{
     MemoryBreakdown, block_on_runtime, database, error, init_runtime, is_debug_mode, models,
-    network, parser, paths, read_memory_mb, rss_breakdown, set_debug_mode,
+    network, parser, paths, read_memory_mb, rss_breakdown, set_debug_mode, smart_feeds,
     spawn_debug_memory_ticker, spawn_on_runtime,
 };
 

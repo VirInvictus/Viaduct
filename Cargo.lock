@@ -327,6 +327,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -3514,7 +3515,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viaduct"
-version = "2.6.22"
+version = "2.7.0"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -3543,7 +3544,7 @@ dependencies = [
 
 [[package]]
 name = "viaduct-core"
-version = "2.6.22"
+version = "2.7.0"
 dependencies = [
  "ammonia",
  "anyhow",

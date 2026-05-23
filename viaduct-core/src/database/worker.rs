@@ -148,6 +148,7 @@ fn articles_op_label(op: &crate::database::articles::ArticlesDbOp) -> &'static s
         UpdateStatusesStarred(..) => "UpdateStatusesStarred",
         FetchMissingArticleIds(..) => "FetchMissingArticleIds",
         FetchToday(..) => "FetchToday",
+        FetchSmartFeed(..) => "FetchSmartFeed",
         Search(..) => "Search",
         SearchWithSnippets(..) => "SearchWithSnippets",
         FetchStatusesByIds(..) => "FetchStatusesByIds",

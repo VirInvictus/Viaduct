@@ -13,6 +13,10 @@
         <attribute name="label" translatable="yes">New Folder…</attribute>
         <attribute name="action">win.new-folder</attribute>
       </item>
+      <item>
+        <attribute name="label" translatable="yes">New Smart Feed…</attribute>
+        <attribute name="action">win.new-smart-feed</attribute>
+      </item>
     </section>
     <section>
       <item>
@@ -30,6 +34,10 @@
       </item>
     </section>
     <section>
+      <item>
+        <attribute name="label" translatable="yes">Activity Log…</attribute>
+        <attribute name="action">win.activity-log</attribute>
+      </item>
       <item>
         <attribute name="label" translatable="yes">Preferences</attribute>
         <attribute name="action">win.preferences</attribute>

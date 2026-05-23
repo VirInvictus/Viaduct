@@ -62,6 +62,7 @@ mod imp {
         pub feed_names: OnceCell<FeedNameMap>,
         pub feed_popover: OnceCell<gtk::PopoverMenu>,
         pub folder_popover: OnceCell<gtk::PopoverMenu>,
+        pub smart_feed_popover: OnceCell<gtk::PopoverMenu>,
         /// Right-click context. The gesture handler stashes the model
         /// object before showing the popover; action bodies on
         /// `ViaductWindow` take it via the accessors below.
@@ -171,6 +172,14 @@ impl SidebarView {
         folder_popover.set_parent(&imp.sidebar_list_view.get());
         let _ = imp.folder_popover.set(folder_popover);
 
+        // ---- Custom Smart Feed popover (v2.7.0) — just delete ----
+        let sf_menu = gio::Menu::new();
+        sf_menu.append(Some("Delete Smart Feed"), Some("win.delete-smart-feed"));
+        let sf_popover = gtk::PopoverMenu::from_model(Some(&sf_menu));
+        sf_popover.set_has_arrow(false);
+        sf_popover.set_parent(&imp.sidebar_list_view.get());
+        let _ = imp.smart_feed_popover.set(sf_popover);
+
         let sidebar_gesture = gtk::GestureClick::new();
         sidebar_gesture.set_button(gdk::BUTTON_SECONDARY);
         let weak = self.downgrade();
@@ -192,7 +201,16 @@ impl SidebarView {
                     *view.imp().right_clicked_folder.borrow_mut() = Some(folder);
                     view.show_folder_popover(x, y);
                 }
-                // Smart feeds and the smart-feed group have no destructive
+                SidebarItem::CustomSmartFeed(sf) => {
+                    if let Some(window) = view
+                        .root()
+                        .and_then(|r| r.dynamic_cast::<crate::ui::window::ViaductWindow>().ok())
+                    {
+                        *window.imp().right_clicked_smart_feed.borrow_mut() = Some(sf);
+                        view.show_smart_feed_popover(x, y);
+                    }
+                }
+                // Built-in smart feeds + group rows have no destructive
                 // actions to expose — skip the popover entirely.
                 _ => {}
             }
@@ -306,6 +324,22 @@ impl SidebarView {
         }
     }
 
+    /// v2.7.0 — replace the user-defined Smart Feed list and rebuild
+    /// the sidebar tree. Called from `wire_models` on startup after
+    /// `Account::list_smart_feeds`, and from the new-smart-feed /
+    /// delete-smart-feed action bodies.
+    pub fn apply_custom_smart_feeds(&self, feeds: Vec<crate::smart_feeds::SmartFeed>) {
+        if let Some(delegate) = self.imp().delegate.get() {
+            delegate.borrow().set_custom_smart_feeds(feeds);
+        }
+        if let Some(controller) = self.imp().controller.get() {
+            controller.rebuild();
+        }
+        if let Some(data_source) = self.imp().data_source.get() {
+            data_source.refresh_root();
+        }
+    }
+
     /// Walk the tree and set leaf-level unread counts. **v2.0.0-pre5**:
     /// folder and smart-feed-group totals auto-aggregate via the
     /// `notify::unread-count` subscriptions wired in
@@ -342,7 +376,9 @@ impl SidebarView {
                         // Standalone feed (not in a folder).
                         top.set_unread_count(count_for_feed(&feed.id));
                     }
-                    SidebarItem::Folder(_) | SidebarItem::SmartFeedGroup => {
+                    SidebarItem::Folder(_)
+                    | SidebarItem::SmartFeedGroup
+                    | SidebarItem::CustomSmartFeedsGroup => {
                         // Container — only set leaves; total auto-sums.
                         for child in top.child_nodes() {
                             let Some(c_rep) = child.represented_object() else {
@@ -368,7 +404,7 @@ impl SidebarView {
                             }
                         }
                     }
-                    SidebarItem::SmartFeed(_) => {}
+                    SidebarItem::SmartFeed(_) | SidebarItem::CustomSmartFeed(_) => {}
                 }
             }
         });
@@ -387,6 +423,9 @@ impl SidebarView {
         if let Some(p) = imp.folder_popover.get() {
             p.unparent();
         }
+        if let Some(p) = imp.smart_feed_popover.get() {
+            p.unparent();
+        }
     }
 
     // -------------------- Internal helpers --------------------
@@ -402,6 +441,15 @@ impl SidebarView {
 
     fn show_folder_popover(&self, x: f64, y: f64) {
         let Some(popover) = self.imp().folder_popover.get() else {
+            return;
+        };
+        let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+        popover.set_pointing_to(Some(&rect));
+        popover.popup();
+    }
+
+    fn show_smart_feed_popover(&self, x: f64, y: f64) {
+        let Some(popover) = self.imp().smart_feed_popover.get() else {
             return;
         };
         let rect = gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1);

@@ -3,6 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 // Network layer for fetching feeds and images
+pub mod activity;
 pub mod background;
 pub mod cache;
 pub mod cache_sweep;

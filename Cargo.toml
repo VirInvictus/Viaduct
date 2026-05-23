@@ -4,7 +4,7 @@ default-members = ["viaduct"]
 resolver = "2"
 
 [workspace.package]
-version = "2.6.22"
+version = "2.7.0"
 edition = "2024"
 license = "MIT"
 authors = ["Brandon LaRocque"]
@@ -23,7 +23,7 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 md-5 = "0.10"
 lru = "0.17.0"
 readability = "0.3.0"

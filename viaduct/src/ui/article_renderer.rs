@@ -803,7 +803,7 @@ fn lookup_bundled_font(uri: &str) -> Option<&'static [u8]> {
 
 /// Percent-encode every byte that isn't an unreserved RFC 3986 character.
 /// Used for stuffing arbitrary URLs into our scheme's path component.
-fn percent_encode(input: &str) -> String {
+pub(crate) fn percent_encode(input: &str) -> String {
     let mut out = String::with_capacity(input.len() * 3);
     for &b in input.as_bytes() {
         let safe = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~');

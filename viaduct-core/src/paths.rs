@@ -21,6 +21,13 @@ pub fn opml_path() -> Result<PathBuf> {
     Ok(data_dir()?.join("local.opml"))
 }
 
+/// v2.7.0 — JSON store for user-defined Smart Feeds. Sits beside the
+/// OPML in the same data dir; the schema version is part of the file
+/// payload, not the path.
+pub fn smart_feeds_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join("smart-feeds.json"))
+}
+
 pub fn articles_db_path() -> Result<PathBuf> {
     Ok(data_dir()?.join("articles.sqlite"))
 }

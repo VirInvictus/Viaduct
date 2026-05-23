@@ -230,6 +230,68 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// v2.7.0 — run a Smart Feed's rules against the article store.
+    pub async fn fetch_smart_feed_articles(
+        &self,
+        rules: crate::smart_feeds::SmartFeedRules,
+        sort: crate::database::articles::SortOrder,
+    ) -> Result<Vec<Article>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::FetchSmartFeed(
+                rules, sort, tx,
+            )))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// v2.7.0 — list all user-defined Smart Feeds. Reads
+    /// `$XDG_DATA_HOME/viaduct/smart-feeds.json` on the tokio
+    /// blocking pool. Missing file → empty list.
+    pub async fn list_smart_feeds(&self) -> Result<Vec<crate::smart_feeds::SmartFeed>> {
+        let path = crate::paths::smart_feeds_path()?;
+        tokio::task::spawn_blocking(move || crate::smart_feeds::load(&path).map(|f| f.feeds))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?
+    }
+
+    /// v2.7.0 — append a Smart Feed and persist. ID-collision is the
+    /// caller's problem (UI uses `uuid v4`). Returns the persisted feed.
+    pub async fn add_smart_feed(
+        &self,
+        feed: crate::smart_feeds::SmartFeed,
+    ) -> Result<crate::smart_feeds::SmartFeed> {
+        let path = crate::paths::smart_feeds_path()?;
+        tokio::task::spawn_blocking(move || -> Result<crate::smart_feeds::SmartFeed> {
+            let mut file = crate::smart_feeds::load(&path)?;
+            file.feeds.push(feed.clone());
+            crate::smart_feeds::save(&path, &file)?;
+            Ok(feed)
+        })
+        .await
+        .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?
+    }
+
+    /// v2.7.0 — drop a Smart Feed by id. No-op if id isn't present.
+    /// Returns `true` if a feed was actually removed.
+    pub async fn delete_smart_feed(&self, id: String) -> Result<bool> {
+        let path = crate::paths::smart_feeds_path()?;
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let mut file = crate::smart_feeds::load(&path)?;
+            let len_before = file.feeds.len();
+            file.feeds.retain(|f| f.id != id);
+            let removed = file.feeds.len() != len_before;
+            if removed {
+                crate::smart_feeds::save(&path, &file)?;
+            }
+            Ok(removed)
+        })
+        .await
+        .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?
+    }
+
     pub async fn search_articles(&self, query: String) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
         self.db_tx

@@ -94,6 +94,14 @@ pub enum ArticlesDbOp {
     /// timeline-fetch queries; Starred narrows to starred-and-unread (NNW
     /// `BuiltinSmartFeed.unreadCount`).
     SmartFeedCounts(oneshot::Sender<Result<SmartFeedCounts>>),
+    /// v2.7.0 — fetch articles matching a user-defined Smart Feed's
+    /// rule list. The rules are AND-combined; the SQL builder lives
+    /// in `crate::smart_feeds::build_where`.
+    FetchSmartFeed(
+        crate::smart_feeds::SmartFeedRules,
+        SortOrder,
+        oneshot::Sender<Result<Vec<Article>>>,
+    ),
     UpdateFeed {
         feed_id: String,
         items: Vec<ParsedItem>,
@@ -335,6 +343,10 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
         }
         ArticlesDbOp::FetchToday(sort, tx) => {
             let res = fetch_today(conn, sort);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::FetchSmartFeed(rules, sort, tx) => {
+            let res = fetch_smart_feed(conn, &rules, sort);
             let _ = tx.send(res);
         }
         ArticlesDbOp::Search(query, tx) => {
@@ -750,6 +762,34 @@ fn fetch_today(conn: &mut Connection, sort: SortOrder) -> Result<Vec<Article>> {
         result_count = articles.len(),
         "fetch_today"
     );
+    Ok(articles)
+}
+
+/// v2.7.0 — execute a Smart Feed's rules against the articles store.
+/// Compiles `rules` into a WHERE clause via `smart_feeds::build_where`,
+/// LEFT-JOINs `statuses` so missing-status rows behave as unread/unstarred
+/// (matches `UnreadCountsByFeed` semantics), and orders by the supplied
+/// `SortOrder`.
+fn fetch_smart_feed(
+    conn: &mut Connection,
+    rules: &crate::smart_feeds::SmartFeedRules,
+    sort: SortOrder,
+) -> Result<Vec<Article>> {
+    let (where_clause, params) = crate::smart_feeds::build_where(rules);
+    let sql = format!(
+        "SELECT a.* FROM articles a \
+         LEFT JOIN statuses s ON a.article_id = s.article_id \
+         WHERE {where_clause} {}",
+        sort.order_by_clause_aliased()
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let bind_params: Vec<&dyn rusqlite::ToSql> =
+        params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+    let rows = stmt.query_map(rusqlite::params_from_iter(bind_params), row_to_article)?;
+    let mut articles = Vec::new();
+    for row in rows {
+        articles.push(row?);
+    }
     Ok(articles)
 }
 

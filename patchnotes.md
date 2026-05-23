@@ -1,5 +1,112 @@
 # viaduct — Patch Notes
 
+## v2.7.0 — Custom Smart Feeds
+
+User-named persistent saved searches in the sidebar. The first viaduct-original feature in this release line — NetNewsWire's SmartFeed concept is hardcoded (Today / All Unread / Starred); user-defined rule-driven feeds aren't a port from there. NewsFlash has the same idea under "Search" tags.
+
+### What's there
+
+A new sidebar group "My Smart Feeds" appears below the built-in "Smart Feeds" header when at least one custom Smart Feed exists. Each row points at a name and a rule list. Clicking a Smart Feed re-runs the rules against the article store and populates the timeline.
+
+The rule engine is intentionally lean for v1:
+
+- **Conditions:** `Title contains` / `Body contains` / `Author contains` / `Feed is` / `Read` (true/false) / `Starred` (true/false) / `Newer than (days)` / `Older than (days)`.
+- **Combinators:** AND-only across all conditions. No OR, no NOT, no nested groups.
+- **Persistence:** JSON at `$XDG_DATA_HOME/viaduct/smart-feeds.json`. Atomic temp-file + rename writes (same shape as the OPML writer). Disk I/O on the tokio blocking pool, never on the GTK thread.
+
+### Pieces
+
+- New `viaduct-core` module `smart_feeds.rs` with `SmartFeed { id, name, rules, created_at }`, `SmartFeedRules { conditions: Vec<Condition> }`, and a `Condition` enum tagged with serde `#[serde(tag = "type")]`. `condition_sql(&Condition)` returns a `(String, Vec<rusqlite::Value>)` SQL fragment. `build_where(&SmartFeedRules)` ANDs them, renumbering placeholders as it goes. 8 unit tests covering ring serialization, SQL building, and LIKE-pattern escape.
+- New `paths::smart_feeds_path()` returns `$XDG_DATA_HOME/viaduct/smart-feeds.json`.
+- New `ArticlesDbOp::FetchSmartFeed(rules, sort, reply)` op + `fetch_smart_feed(conn, &rules, sort)` worker function (LEFT-JOINs `statuses` so missing-status rows behave as unread/unstarred — same semantics as the existing per-feed unread query).
+- New `Account` async methods: `list_smart_feeds()`, `add_smart_feed(feed)`, `delete_smart_feed(id)`, `fetch_smart_feed_articles(rules, sort)`. JSON CRUD goes through `tokio::task::spawn_blocking` so disk I/O stays off the worker thread.
+- New `SidebarItem` variants: `CustomSmartFeedsGroup` (header) and `CustomSmartFeed(SmartFeed)` (row). The delegate's `child_nodes_for_root` only emits the header when `custom_smart_feeds.borrow()` is non-empty so first-launch doesn't show an empty section. New `set_custom_smart_feeds(Vec<SmartFeed>)` setter on the delegate; new `apply_custom_smart_feeds` on `SidebarView` that updates the delegate and rebuilds the tree.
+- New `viaduct/src/ui/smart_feed_dialog.rs` — `AdwDialog` with a name `AdwEntryRow`, an `AdwPreferencesGroup` of dynamic rule rows, and an "Add Condition" button. Each rule row is a `RuleRow` struct (`Rc<Self>`) containing a field `GtkDropDown`, a `GtkStack` swapping between text entry / feed dropdown / read state combo / star state combo / days `GtkSpinButton` based on the chosen field. `RuleRow::to_condition()` produces an `Option<Condition>` (None when the rule is empty / non-applicable). Save calls `account.add_smart_feed(...)` via the standard tokio↔GTK oneshot bridge.
+- New `win.new-smart-feed` action + "New Smart Feed…" entry in the primary menu. New `win.delete-smart-feed` action wired to a right-click popover on `CustomSmartFeed` rows in the sidebar (mirrors the existing feed/folder right-click pattern). New `right_clicked_smart_feed` cell on `ViaductWindow`.
+- Sidebar selection handler: when the user selects a `CustomSmartFeed`, `account.fetch_smart_feed_articles(sf.rules, sort)` runs and populates the timeline.
+- Startup hook: `wire_models()` calls `reload_custom_smart_feeds()` after `apply_opml`, so user feeds load on every launch.
+
+### Scope cuts (deferred to v2.7.x)
+
+- Edit-existing dialog. Today's flow is delete-and-recreate, which works but loses the previous form state.
+- OR / NOT combinators and nested groups. The schema is open-ended (`Condition` is an enum), but the UI and the SQL builder both assume a flat AND list.
+- Reordering custom Smart Feeds. They appear in creation order.
+- Per-Smart-Feed unread count badges. The sidebar code skips them for `CustomSmartFeed` since computing them would require running the rules at every refresh; deferred until measured.
+
+### Test status
+
+30 viaduct + 101 viaduct-core + 1 integration = 132 tests pass. fmt + clippy clean. Release build succeeds.
+
+## v2.6.25 — Share / Send to surface
+
+Steal-from-NNW item #4. NNW gets the macOS NSSharingService menu free; on Linux there's no equivalent system-share surface, so we ship a curated set of explicit targets: clipboard copy variants, mailto: for the local mail client, and the two web-intent saves Pocket and Instapaper.
+
+### What's there
+
+A new "Send to…" menu on the article-pane header bar (icon `send-to-symbolic`, populated declaratively from `share_menu` in `article_pane_view.ui`) plus a "Send to" submenu in the timeline right-click context menu. Items:
+
+- **Copy URL** — already shipped (v1.5.2); re-anchored under Send to so all sharing lives in one place.
+- **Copy URL with Title** — `Title\nURL` to clipboard. Common pattern for chat / forum quoting.
+- **Email Link…** — `mailto:?subject=<title>&body=<url>` opens the user's default mail client via `gio::AppInfo::launch_default_for_uri`.
+- **Save to Pocket** — opens `https://getpocket.com/edit?url=<encoded>`. Login + add happens in the browser.
+- **Save to Instapaper** — opens `https://www.instapaper.com/edit?url=<encoded>`. Same login flow.
+
+### Wiring
+
+Five new `gio::SimpleAction`s on the window (`copy-title-and-url` / `share-email` / `share-pocket` / `share-instapaper`; `copy-url` was pre-existing). Two file-scope helpers in `window.rs`: `percent_encode_uri_component` reuses the article-renderer's RFC 3986 unreserved-set encoder; `mailto_encode` is a thin alias since RFC 6068 §2 takes the same encoding. `share_to(prefix, no_url_msg, fail_msg)` factors out the Pocket / Instapaper duplicate. All actions toast on no-URL or launch failure. The article-pane share menu is purely declarative (`menu-model="share_menu"` on a `GtkMenuButton`); the right-click submenu is appended programmatically in `wire_context_menus`.
+
+### Mastodon
+
+Mastodon's share is instance-dependent (`https://<your-instance>/share?text=<…>`); without a `mastodon-instance` GSetting the link can't resolve. Deferred to a later release that adds the picker.
+
+### Test status
+
+30 viaduct + 93 viaduct-core + 1 integration = 124 tests pass. fmt + clippy clean.
+
+## v2.6.24 — Activity Log dialog
+
+Steal-from-NNW item #3. Pre-v2.6.24 the only way to find out why a feed wasn't updating was `RUST_LOG=debug,viaduct_core=trace ./viaduct` and reading log lines. Now there's a dialog.
+
+### Pieces
+
+- New `viaduct-core` module `network/activity.rs` — `ActivityLog` (Arc<RwLock<VecDeque<ActivityEvent>>>, ring-buffer-bounded at 500 entries), `ActivityEvent { at, feed_id, feed_url, feed_name, kind }`, `ActivityKind` enum with 7 terminal-state variants (Success / NotModified / HttpError / NetworkError / ParseError / DbError / Skipped(reason)). 3 unit tests.
+- `AccountRefresher::with_activity_log(log)` builder method. `refresh_one_feed` takes the log and pushes one event per terminal site (success, 304, non-200, network-fetch error, parse error, DB-update error). The pre-pipeline skip path also pushes — `feed_should_be_skipped` was rewritten as `skip_reason -> Option<SkipReason>` so we record _why_ we skipped (DisallowedHost / CacheControl / Throttled).
+- New `viaduct/src/ui/activity_dialog.rs` — `AdwDialog` 640 × 560, snapshot rendered into `AdwActionRow`s under a `boxed-list`, newest-first, with a relative-time stamp suffix (`Just now` / `5 min ago` / `3h ago` / absolute date for older). Empty state shows an `AdwStatusPage`. Header bar has a Clear button. 7 unit tests covering subtitle formatting, relative-time, and detail trimming.
+- `ViaductWindow` owns one `Arc<ActivityLog>` for the process lifetime; `act_activity_log` opens the dialog. New "Activity Log…" entry in the primary menu.
+
+### Why a ring buffer
+
+Per-feed status (last attempt / last success / last error) is derivable by walking the ring backwards. Keeping it as raw events plus an upper bound is simpler than maintaining a HashMap-of-summaries and keeps the API closed-form. 500 events × ~256 B ≈ 125 KB, well inside the v2.6.16 per-cycle delta budget.
+
+### Test status
+
+30 viaduct + 93 viaduct-core + 1 integration = 124 tests pass. fmt + clippy clean. Release build succeeds.
+
+## v2.6.23 — First-launch welcome dialog
+
+Steal-from-NewsFlash item #2 from the post-shipped feature audit. Pre-v2.6.23 a fresh viaduct install opened to an empty sidebar with no clear next action. NewsFlash has a `welcome_screen` with a service picker; we don't have remote-services in the same sense (local account is default, Inoreader is the only optional path), so the dialog is leaner.
+
+### What it shows
+
+`AdwDialog`, presented modally over the main window when **both** conditions hold at startup:
+
+- The OPML at startup is empty (no standalone feeds, no folder feeds).
+- The new `welcome-shown` GSetting is `false`.
+
+Contents:
+- One paragraph of intro copy
+- Two pill action buttons: "Add a feed…" and "Import OPML…" (route to the existing actions)
+- A boxed-list of 5 curated suggested feeds (Daring Fireball, NPR News, xkcd, Hacker News, Ars Technica) — each row has a `+` button that calls `Account::add_feed` and triggers a one-shot refresh
+- Footer caption noting the dialog only shows once
+
+### When it stops
+
+Marked-shown on any of: clicking "Add a feed…", clicking "Import OPML…", clicking a suggested-feed `+`, or just closing the dialog (escape key, modal-blocker click). Once `welcome-shown = true` it never shows again — even if the user later removes every feed. dconf-editor flip back to false is the supported "show me again" path.
+
+### Test status
+
+23 viaduct + 90 viaduct-core + 1 integration = 114 tests pass. fmt + clippy clean.
+
 ## v2.6.22 — Article sort options
 
 Steal-from-NNW item #1 from the post-shipped feature audit. NNW's timeline supports newest-first / oldest-first sorting; viaduct hard-coded newest-first everywhere. Now flippable from the timeline header.
