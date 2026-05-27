@@ -10,4 +10,4 @@ pub mod settings;
 pub mod sync;
 pub mod worker;
 
-pub use worker::{DbOp, spawn_db_worker, spawn_sync_worker};
+pub use worker::{DbOp, read_channel, spawn_db_worker, spawn_read_workers, spawn_sync_worker};

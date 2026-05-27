@@ -45,6 +45,20 @@ const POOL_MAX_IDLE_PER_HOST: usize = 4;
 /// the next cycle.
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// v2.8.0: total per-request budget (connect + headers + body). reqwest
+/// defaults to *no* timeout, so a host that accepts the connection but
+/// stalls the body hangs the task until the OS TCP timeout (minutes).
+/// The refresher fans feeds out under an 8-permit semaphore, so a handful
+/// of dead hosts could otherwise wedge a whole refresh cycle and leave the
+/// sync spinner stuck forever. 30 s clears any healthy feed / image / page
+/// response with room to spare. Reader View layers its own tighter 15 s on
+/// top via `client_builder` (last `.timeout` wins).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// v2.8.0: connect-phase budget. Fail fast on dead / unroutable hosts
+/// rather than holding a semaphore slot for the full request timeout.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Composed at build time so the User-Agent always tracks the package
 /// version. Format mirrors NNW's `NetNewsWire/7.0.5 (Mac; +URL)` and
 /// NewsFlash's equivalent.
@@ -75,6 +89,8 @@ pub fn build_default_client() -> Result<Client, reqwest::Error> {
         .brotli(true)
         .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
         .build()
 }
 
@@ -89,4 +105,6 @@ pub fn client_builder() -> reqwest::ClientBuilder {
         .brotli(true)
         .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(CONNECT_TIMEOUT)
 }

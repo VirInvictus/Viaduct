@@ -14,8 +14,12 @@ pub enum SettingsDbOp {
     Upsert(Box<FeedSettings>, oneshot::Sender<Result<()>>),
     DeleteSettingsForFeedsNotIn(Vec<String>, oneshot::Sender<Result<usize>>),
     /// Run `VACUUM`. NNW vacuums the FeedSettingsDatabase on every init
-    /// (`FeedSettingsDatabase.swift:67`); we do the same once per startup.
+    /// (`FeedSettingsDatabase.swift:67`); we now gate it on prune activity
+    /// (see `cleanup_at_startup`).
     Vacuum(oneshot::Sender<Result<()>>),
+    /// `PRAGMA wal_checkpoint(TRUNCATE)` only. Cheap WAL bound run every
+    /// startup; the full `Vacuum` is gated on prune activity.
+    Checkpoint(oneshot::Sender<Result<()>>),
     /// v2.6.5 favicon disk-cache sweep helper. Returns every non-null
     /// `favicon_url` + `icon_url` value from `feed_settings` so the
     /// caller can hash to the md5 set the targeted-sweep expects.
@@ -84,6 +88,10 @@ pub(crate) fn handle_op(conn: &mut Connection, op: SettingsDbOp) {
             let res = vacuum(conn);
             let _ = tx.send(res);
         }
+        SettingsDbOp::Checkpoint(tx) => {
+            let res = checkpoint(conn);
+            let _ = tx.send(res);
+        }
         SettingsDbOp::CollectFaviconUrls(tx) => {
             let res = collect_favicon_urls(conn);
             let _ = tx.send(res);
@@ -110,6 +118,13 @@ fn collect_favicon_urls(conn: &mut Connection) -> Result<Vec<String>> {
 fn vacuum(conn: &mut Connection) -> Result<()> {
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     conn.execute_batch("VACUUM")?;
+    Ok(())
+}
+
+/// `PRAGMA wal_checkpoint(TRUNCATE)` only — the cheap WAL bound run every
+/// startup. See `articles::checkpoint`.
+fn checkpoint(conn: &mut Connection) -> Result<()> {
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
 }
 

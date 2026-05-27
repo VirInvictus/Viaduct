@@ -20,17 +20,27 @@ use crate::paths::opml_path;
 
 use crate::database::delegate::{AccountDelegate, LocalAccountDelegate};
 use crate::database::sync::SyncDbOp;
+use crossbeam_channel as cbc;
 use std::sync::Arc;
 
 pub struct Account {
     db_tx: mpsc::Sender<DbOp>,
+    /// v2.8.0: read-only connection pool channel. When `Some`, articles READ
+    /// ops route here so they run concurrently with the writer instead of
+    /// queuing behind writes. `None` (tests, headless harness) falls back to
+    /// the single writer, preserving the pre-pool behavior.
+    read_tx: Option<cbc::Sender<ArticlesDbOp>>,
     sync_tx: mpsc::Sender<SyncDbOp>,
     opml_writer: OpmlWriter,
     delegate: Arc<dyn AccountDelegate>,
 }
 
 impl Account {
-    pub async fn new(db_tx: mpsc::Sender<DbOp>, sync_tx: mpsc::Sender<SyncDbOp>) -> Result<Self> {
+    pub async fn new(
+        db_tx: mpsc::Sender<DbOp>,
+        read_tx: Option<cbc::Sender<ArticlesDbOp>>,
+        sync_tx: mpsc::Sender<SyncDbOp>,
+    ) -> Result<Self> {
         let opml_file_path = opml_path()?;
         let opml_writer = OpmlWriter::spawn(opml_file_path.clone());
 
@@ -46,6 +56,7 @@ impl Account {
 
         let account = Self {
             db_tx,
+            read_tx,
             sync_tx,
             opml_writer,
             delegate,
@@ -102,16 +113,32 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// v2.8.0: route an articles READ op. When the read pool is wired
+    /// (production), the op goes to a read-only connection so it runs
+    /// concurrently with the writer; otherwise it falls back to the single
+    /// writer, preserving the pre-pool behavior for tests / headless use.
+    /// Caller awaits the op's own oneshot for the result.
+    async fn dispatch_read(&self, op: ArticlesDbOp) -> Result<()> {
+        if let Some(read_tx) = &self.read_tx {
+            read_tx
+                .send(op)
+                .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))
+        } else {
+            self.db_tx
+                .send(DbOp::Articles(op))
+                .await
+                .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))
+        }
+    }
+
     pub async fn fetch_articles_by_feed(
         &self,
         feed_id: String,
         sort: crate::database::articles::SortOrder,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchByFeed(feed_id, sort, tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchByFeed(feed_id, sort, tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -127,12 +154,8 @@ impl Account {
         sort: crate::database::articles::SortOrder,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchByFeeds(
-                feed_ids, sort, tx,
-            )))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchByFeeds(feed_ids, sort, tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -142,10 +165,8 @@ impl Account {
         sort: crate::database::articles::SortOrder,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchUnread(sort, tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchUnread(sort, tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -155,30 +176,24 @@ impl Account {
         sort: crate::database::articles::SortOrder,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchStarred(sort, tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchStarred(sort, tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
     pub async fn fetch_unread_article_ids(&self) -> Result<HashSet<String>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchUnreadArticleIds(tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchUnreadArticleIds(tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
     pub async fn fetch_starred_article_ids(&self) -> Result<HashSet<String>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchStarredArticleIds(tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchStarredArticleIds(tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -209,10 +224,8 @@ impl Account {
 
     pub async fn fetch_missing_article_ids(&self) -> Result<Vec<String>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchMissingArticleIds(tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchMissingArticleIds(tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -222,10 +235,8 @@ impl Account {
         sort: crate::database::articles::SortOrder,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchToday(sort, tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchToday(sort, tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -237,12 +248,8 @@ impl Account {
         sort: crate::database::articles::SortOrder,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchSmartFeed(
-                rules, sort, tx,
-            )))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchSmartFeed(rules, sort, tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -294,10 +301,7 @@ impl Account {
 
     pub async fn search_articles(&self, query: String) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::Search(query, tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::Search(query, tx)).await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -307,10 +311,8 @@ impl Account {
         ids: Vec<String>,
     ) -> Result<HashMap<String, (bool, bool)>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::FetchStatusesByIds(ids, tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::FetchStatusesByIds(ids, tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -319,10 +321,8 @@ impl Account {
     /// articles are absent from the result map.
     pub async fn unread_counts_by_feed(&self) -> Result<HashMap<String, i64>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::UnreadCountsByFeed(tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::UnreadCountsByFeed(tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -330,10 +330,8 @@ impl Account {
     /// Counts for the three Smart Feed sidebar rows.
     pub async fn smart_feed_counts(&self) -> Result<SmartFeedCounts> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::SmartFeedCounts(tx)))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::SmartFeedCounts(tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -347,14 +345,8 @@ impl Account {
         feed_filter: Option<String>,
     ) -> Result<Vec<(Article, String)>> {
         let (tx, rx) = oneshot::channel();
-        self.db_tx
-            .send(DbOp::Articles(ArticlesDbOp::SearchWithSnippets(
-                query,
-                feed_filter,
-                tx,
-            )))
-            .await
-            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        self.dispatch_read(ArticlesDbOp::SearchWithSnippets(query, feed_filter, tx))
+            .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
@@ -757,17 +749,36 @@ impl Account {
         // credentials), every row in `syncStatus` is leftover ghost
         // from a previous remote session. Wipe wholesale. When
         // Inoreader is active, the rows are live state — leave alone.
+        let mut sync_wiped = 0;
         if self.is_local_account() {
             match self.wipe_sync_statuses().await {
-                Ok(n) if n > 0 => {
-                    tracing::info!("Cleaned up {} orphan syncStatus rows", n)
+                Ok(n) => {
+                    if n > 0 {
+                        tracing::info!("Cleaned up {} orphan syncStatus rows", n);
+                    }
+                    sync_wiped = n;
                 }
-                Ok(_) => {}
                 Err(e) => tracing::warn!(?e, "wipe_sync_statuses failed"),
             }
         }
 
-        if let Err(e) = self.vacuum_databases().await {
+        // Always truncate the WAL (cheap, bounds it even when nothing was
+        // pruned, and reclaims any oversized WAL a pre-v2.6.11 build left).
+        if let Err(e) = self.checkpoint_databases().await {
+            tracing::warn!(?e, "checkpoint_databases failed");
+        }
+
+        // v2.8.0: only run the expensive full VACUUM when this startup
+        // actually removed rows from the databases. VACUUM rewrites the whole
+        // file, and it runs synchronously during `Account::new` before the
+        // window opens, so paying it on every launch made cold start scale
+        // with library size for no benefit on a steady-state DB. Disk-cache
+        // file removals don't create DB free pages, so they don't count here.
+        let db_rows_pruned =
+            removed_settings + removed_articles + removed_statuses + removed_authors + sync_wiped;
+        if db_rows_pruned > 0
+            && let Err(e) = self.vacuum_databases().await
+        {
             tracing::warn!(?e, "vacuum_databases failed");
         }
 
@@ -901,6 +912,27 @@ impl Account {
         let (tx, rx) = oneshot::channel();
         self.db_tx
             .send(DbOp::Settings(Box::new(SettingsDbOp::Vacuum(tx))))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// `PRAGMA wal_checkpoint(TRUNCATE)` on both SQLite files. Cheap relative
+    /// to `vacuum_databases` (no file rewrite); run every startup so the WAL
+    /// stays bounded even when nothing was pruned.
+    pub async fn checkpoint_databases(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::Checkpoint(tx)))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))?;
+
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Settings(Box::new(SettingsDbOp::Checkpoint(tx))))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

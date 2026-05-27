@@ -133,6 +133,11 @@ pub enum ArticlesDbOp {
     /// Run `VACUUM` on the connection. Worker-thread-only; never call from
     /// inside another transaction.
     Vacuum(oneshot::Sender<Result<()>>),
+    /// `PRAGMA wal_checkpoint(TRUNCATE)` only — flush the WAL into the main
+    /// DB and truncate the WAL file. Cheap relative to `Vacuum` (no file
+    /// rewrite); run every startup to bound the WAL even when nothing was
+    /// pruned. See `cleanup_at_startup`.
+    Checkpoint(oneshot::Sender<Result<()>>),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -396,6 +401,10 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
         }
         ArticlesDbOp::Vacuum(tx) => {
             let res = vacuum(conn);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::Checkpoint(tx) => {
+            let res = checkpoint(conn);
             let _ = tx.send(res);
         }
     }
@@ -1166,6 +1175,15 @@ fn vacuum(conn: &mut Connection) -> Result<()> {
     // worker holds the only connection.
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     conn.execute_batch("VACUUM")?;
+    Ok(())
+}
+
+/// `PRAGMA wal_checkpoint(TRUNCATE)` without the `VACUUM`. Flushes the WAL
+/// into the main database and truncates the WAL file. Run every startup so
+/// the WAL stays bounded even on launches that prune nothing (the full
+/// `VACUUM` is gated on prune activity in `cleanup_at_startup`).
+fn checkpoint(conn: &mut Connection) -> Result<()> {
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
 }
 

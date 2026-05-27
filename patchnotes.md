@@ -1,5 +1,27 @@
 # viaduct — Patch Notes
 
+## v2.8.0 — Parser correctness and Linux-first audit hardening
+
+A maintenance release with no user-facing feature changes. It pairs a feed-parsing correctness fix ported from NetNewsWire with a batch of robustness, performance, and memory fixes from a full Linux-first codebase audit. Everything here reinforces guarantees the project already makes: faithful parsing, no stuck refreshes, the "supreme" memory budget, and a responsive UI.
+
+### Parsing
+
+- **Namespaced-section fix (NetNewsWire #4422, upstream `8c02fb3ba`).** When an `<item>` or `<entry>` contained a namespaced child section, the XML parser could read a nested unprefixed element inside that section as one of the item's own fields. The canonical case is a Shopify feed whose item carries `<s:variant><title>Default Title</title></s:variant>`: the inner `<title>` could clobber (or, depending on element order, pre-empt) the item's real title, and nested `<author>` / `<content>` elements could be picked up wholesale. Both `parse_rss` and `parse_atom` now track a namespace depth and skip a prefixed child and its whole subtree while inside an item. RSS keeps the namespaces it legitimately consumes live (Dublin Core, `content:encoded`, and MRSS `media:*`); Atom skips every prefixed child, since Atom's own elements are all unprefixed. This is the one place the exclusion set is deliberately wider than NetNewsWire's, which never consumed MRSS. A side benefit on the Atom path: a stray `<media:title>` inside a `<media:group>` can no longer leak into the entry title. Five new parser tests cover the fix, including a regression guard that MRSS still parses next to a skipped `<s:variant>`.
+
+### Network
+
+- **HTTP request timeouts.** The shared reqwest clients (feed fetcher, favicon / image cache, feed and favicon discovery) had no timeout at all. reqwest defaults to none, so a host that accepted the connection but stalled the body could hang a refresh task until the OS TCP timeout (minutes). Since the refresher fans feeds out under an 8-permit semaphore, a few dead hosts could wedge a whole cycle and leave the sync spinner stuck. Both shared client builders now set a 30 second total timeout and a 10 second connect timeout. Reader View keeps its tighter 15 second budget.
+- **Image download size cap.** Article `<img>` loads route through the image cache via the `viaduct-img://` scheme handler, and a single pathological image (or a server that just keeps streaming) could blow the budget on its own. Downloads are now streamed with a running size guard and a Content-Length pre-check: favicons cap at 1 MB, inline images at 20 MB, video thumbnails at 4 MB.
+
+### Memory
+
+- **Byte-bounded image cache.** The in-memory cache previously bounded entry count (250 per kind) but not total bytes, so a run of large images could pile up well past the cache's share of the budget. Each kind is now a byte-bounded LRU that evicts least-recently-used entries until back under a hard ceiling (16 MB favicons, 64 MB images, 16 MB thumbnails; about 96 MB combined worst case).
+
+### Database
+
+- **Read pool.** All database access used to funnel through the single writer thread, so a read (clicking a feed, a search, an unread-count refresh) could queue behind a long write. Articles reads now go to a small pool of read-only WAL connections that run concurrently with the writer, so the timeline never stalls behind a refresh. Writes and feed-settings access still serialize through the single writer.
+- **Startup VACUUM gating.** `VACUUM` ran on every launch, inside account init before the window opened, so cold start cost scaled with library size for no benefit on a steady-state database. It now runs only when the startup prune actually removed rows; a cheap `wal_checkpoint(TRUNCATE)` still runs every launch to keep the WAL bounded.
+
 ## v2.7.0 — Custom Smart Feeds
 
 User-named persistent saved searches in the sidebar. The first viaduct-original feature in this release line — NetNewsWire's SmartFeed concept is hardcoded (Today / All Unread / Starred); user-defined rule-driven feeds aren't a port from there. NewsFlash has the same idea under "Search" tags.

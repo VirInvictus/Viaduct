@@ -95,10 +95,21 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::FAILURE;
     }
 
+    // v2.8.0: read-only connection pool. The Sender goes to Account so READ
+    // ops bypass the single writer and run concurrently with it. The reader
+    // threads start *after* Account::new below, so they open onto an
+    // already-initialized, WAL-configured articles DB.
+    let (read_tx, read_rx) = database::read_channel();
+
     let account = Arc::new(
-        viaduct::block_on_runtime(Account::new(db_tx, sync_tx))
+        viaduct::block_on_runtime(Account::new(db_tx, Some(read_tx), sync_tx))
             .expect("Failed to initialize Account"),
     );
+
+    if let Err(e) = database::spawn_read_workers(read_rx) {
+        error!(?e, "Failed to spawn read workers; aborting");
+        return glib::ExitCode::FAILURE;
+    }
 
     let app = adw::Application::builder()
         .application_id("org.virinvictus.Viaduct")

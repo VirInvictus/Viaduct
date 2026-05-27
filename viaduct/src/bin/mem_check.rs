@@ -85,7 +85,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let (sync_tx, sync_rx) = mpsc::channel(256);
     database::spawn_sync_worker(sync_rx)?;
 
-    let account = Arc::new(Account::new(db_tx, sync_tx).await?);
+    // No read pool here: the harness is write-heavy and reads fall back to
+    // the writer (the pre-pool path), which is all this benchmark needs.
+    let account = Arc::new(Account::new(db_tx, None, sync_tx).await?);
 
     let baseline = read_vm_hwm_mb().unwrap_or(0);
     println!(

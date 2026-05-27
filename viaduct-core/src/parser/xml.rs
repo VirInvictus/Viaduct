@@ -333,6 +333,19 @@ fn rss_handle_text_or_cdata(
     }
 }
 
+/// Prefixes whose elements the RSS parser legitimately consumes inside an
+/// `<item>`: Dublin Core (`dc:creator` / `dc:date`), `content:encoded`, and
+/// MRSS (`media:content` / `media:thumbnail` / `media:group`). Any other
+/// prefixed element inside an item is a namespaced extension section
+/// (Shopify's `<s:variant>`, Google Merchant's `<g:*>`, etc.) whose subtree
+/// we skip so a nested unprefixed element (e.g. `<title>Default Title</title>`)
+/// can't be mistaken for the item's own field. Port of NNW #4422; our set is
+/// wider than NNW's dc/content/source because NNW's RSS parser never consumes
+/// MRSS, but ours does.
+fn rss_prefix_is_consumed(prefix: &[u8]) -> bool {
+    matches!(prefix, b"dc" | b"content" | b"media")
+}
+
 fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
     let mut reader = Reader::from_reader(data);
     reader.config_mut().trim_text(true);
@@ -360,13 +373,37 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
     // Tracks `<guid isPermaLink="false">` — mirrors NNW's handleGuid attribute check.
     let mut current_guid_is_permalink = true;
 
+    // NNW #4422: depth inside a skipped namespaced section within an item.
+    // >0 means we're swallowing a subtree (e.g. `<s:variant>...</s:variant>`).
+    let mut namespace_element_depth: u32 = 0;
+
     let mut current_tag = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
+                if namespace_element_depth > 0 {
+                    namespace_element_depth += 1;
+                    current_tag.clear();
+                    buf.clear();
+                    continue;
+                }
                 let name = e.local_name();
                 let name_ref = name.as_ref();
+
+                // NNW #4422: a namespaced child inside an item (and its whole
+                // subtree) is skipped so nested unprefixed elements can't be
+                // read as the item's own fields. dc/content/media stay live.
+                if in_item
+                    && let Some(prefix) = e.name().prefix()
+                    && !rss_prefix_is_consumed(prefix.as_ref())
+                {
+                    namespace_element_depth = 1;
+                    current_tag.clear();
+                    buf.clear();
+                    continue;
+                }
+
                 current_tag = name_ref.to_vec();
 
                 if name_ref == b"item" {
@@ -424,6 +461,17 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 }
             }
             Ok(Event::Empty(ref e)) => {
+                if namespace_element_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
+                if in_item
+                    && let Some(prefix) = e.name().prefix()
+                    && !rss_prefix_is_consumed(prefix.as_ref())
+                {
+                    buf.clear();
+                    continue;
+                }
                 let name = e.local_name();
                 let name_ref = name.as_ref();
                 if in_item && name_ref == b"enclosure" {
@@ -441,6 +489,10 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 }
             }
             Ok(Event::Text(ref e)) => {
+                if namespace_element_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
                 let Ok(text) = e.unescape() else { continue };
                 let text_str = text.to_string();
                 rss_handle_text_or_cdata(
@@ -463,6 +515,10 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 );
             }
             Ok(Event::CData(ref e)) => {
+                if namespace_element_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
                 // CDATA carries raw bytes — no entity decoding needed.
                 // Sacha Chua's blog and most WordPress sites wrap their
                 // <description> and <content:encoded> bodies in CDATA;
@@ -490,6 +546,12 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 );
             }
             Ok(Event::End(ref e)) => {
+                if namespace_element_depth > 0 {
+                    namespace_element_depth -= 1;
+                    current_tag.clear();
+                    buf.clear();
+                    continue;
+                }
                 let name = e.local_name();
                 let name_ref = name.as_ref();
                 current_tag.clear();
@@ -847,13 +909,35 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
     let mut current_item_attachments: Vec<Attachment> = Vec::new();
     let mut current_author: Option<MutableAuthor> = None;
 
+    // NNW #4422: depth inside a skipped namespaced section within an entry.
+    // Atom's own elements are all unprefixed, so any prefixed child of an
+    // entry is an extension we swallow whole — no exceptions, unlike RSS.
+    let mut namespace_element_depth: u32 = 0;
+
     let mut current_tag: Vec<u8> = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
+                if namespace_element_depth > 0 {
+                    namespace_element_depth += 1;
+                    current_tag.clear();
+                    buf.clear();
+                    continue;
+                }
                 let name = e.local_name();
                 let name_ref = name.as_ref();
+
+                // NNW #4422: skip any namespaced child (and its subtree) inside
+                // an entry so a nested unprefixed element can't masquerade as
+                // one of the entry's own fields.
+                if in_item && e.name().prefix().is_some() {
+                    namespace_element_depth = 1;
+                    current_tag.clear();
+                    buf.clear();
+                    continue;
+                }
+
                 current_tag = name_ref.to_vec();
 
                 if name_ref == b"feed" && language.is_none() {
@@ -921,6 +1005,14 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 }
             }
             Ok(Event::Empty(ref e)) => {
+                if namespace_element_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
+                if in_item && e.name().prefix().is_some() {
+                    buf.clear();
+                    continue;
+                }
                 let name = e.local_name();
                 if name.as_ref() == b"link" {
                     let mut ctx = AtomLinkCtx {
@@ -937,6 +1029,10 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 }
             }
             Ok(Event::Text(ref e)) => {
+                if namespace_element_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
                 let Ok(text) = e.unescape() else { continue };
                 let text_str = text.to_string();
                 atom_handle_text_or_cdata(
@@ -958,6 +1054,10 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 );
             }
             Ok(Event::CData(ref e)) => {
+                if namespace_element_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
                 // Same CDATA fix as parse_rss: Atom feeds with
                 // `<title><![CDATA[…]]></title>` or
                 // `<content type="html"><![CDATA[…]]></content>` were
@@ -984,6 +1084,12 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 );
             }
             Ok(Event::End(ref e)) => {
+                if namespace_element_depth > 0 {
+                    namespace_element_depth -= 1;
+                    current_tag.clear();
+                    buf.clear();
+                    continue;
+                }
                 let name = e.local_name();
                 let name_ref = name.as_ref();
                 current_tag.clear();
@@ -1514,5 +1620,150 @@ mod tests {
             feed.items[0].url.as_deref(),
             Some("https://example.com/posts/1")
         );
+    }
+
+    #[test]
+    fn rss_namespaced_section_does_not_overwrite_item_fields() {
+        // NNW #4422: an unprefixed <title>Default Title</title> nested inside a
+        // namespaced <s:variant> must not overwrite the item's real title,
+        // while the dc:/content: elements we DO consume keep parsing.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:s="http://jadedpixel.com/-/spec/shopify">
+  <channel>
+    <title>Test Shop</title>
+    <link>https://example.com</link>
+    <description>Test feed for #4422.</description>
+    <item>
+      <title>Real Product Title</title>
+      <link>https://example.com/products/1</link>
+      <guid>https://example.com/products/1</guid>
+      <dc:creator>Jane Maker</dc:creator>
+      <content:encoded><![CDATA[<p>Body HTML</p>]]></content:encoded>
+      <s:type>Periodical</s:type>
+      <s:variant>
+        <id>https://example.com/products/1</id>
+        <title>Default Title</title>
+        <s:price currency="USD">9.99</s:price>
+        <s:sku/>
+      </s:variant>
+    </item>
+  </channel>
+</rss>"#;
+        let feed = parse_rss(xml, "https://example.com/feed", false).unwrap();
+        assert_eq!(feed.items.len(), 1);
+        let item = &feed.items[0];
+        assert_eq!(item.title.as_deref(), Some("Real Product Title"));
+        assert_eq!(item.content_html.as_deref(), Some("<p>Body HTML</p>"));
+        assert_eq!(item.authors.len(), 1);
+        assert_eq!(item.authors[0].name.as_deref(), Some("Jane Maker"));
+    }
+
+    #[test]
+    fn rss_namespaced_section_before_real_fields_is_ignored() {
+        // The harder case the is_none guards can't catch on their own: the
+        // namespaced section precedes the real elements and carries a nested
+        // <author>. Without the subtree skip the bogus title would latch and
+        // the spam author would be added.
+        let xml = br#"<?xml version="1.0"?>
+<rss version="2.0" xmlns:s="http://example.com/s">
+  <channel>
+    <title>Shop</title>
+    <item>
+      <s:variant>
+        <title>Default Title</title>
+        <author>bot@spam.example</author>
+        <link>https://example.com/wrong</link>
+      </s:variant>
+      <title>Real Title</title>
+      <link>https://example.com/right</link>
+      <guid>g1</guid>
+    </item>
+  </channel>
+</rss>"#;
+        let feed = parse_rss(xml, "https://example.com/feed", false).unwrap();
+        let item = &feed.items[0];
+        assert_eq!(item.title.as_deref(), Some("Real Title"));
+        assert!(item.authors.is_empty());
+        assert_eq!(
+            item.external_url.as_deref(),
+            Some("https://example.com/right")
+        );
+    }
+
+    #[test]
+    fn rss_media_content_survives_namespace_skip() {
+        // Our divergence from NNW: we consume MRSS, so media:* must NOT be
+        // swallowed by the namespace skip even when a sibling <s:variant> is.
+        let xml = br#"<?xml version="1.0"?>
+<rss version="2.0"
+     xmlns:media="http://search.yahoo.com/mrss/"
+     xmlns:s="http://example.com/s">
+  <channel>
+    <title>Shop</title>
+    <item>
+      <title>Real Title</title>
+      <guid>g1</guid>
+      <media:content url="https://example.com/video.mp4" type="video/mp4"/>
+      <media:group>
+        <media:thumbnail url="https://example.com/thumb.jpg"/>
+      </media:group>
+      <s:variant><title>Default Title</title></s:variant>
+    </item>
+  </channel>
+</rss>"#;
+        let feed = parse_rss(xml, "https://example.com/feed", false).unwrap();
+        let item = &feed.items[0];
+        assert_eq!(item.title.as_deref(), Some("Real Title"));
+        assert_eq!(item.attachments.len(), 2);
+        let urls: Vec<&str> = item.attachments.iter().map(|a| a.url.as_str()).collect();
+        assert!(urls.contains(&"https://example.com/video.mp4"));
+        assert!(urls.contains(&"https://example.com/thumb.jpg"));
+    }
+
+    #[test]
+    fn atom_namespaced_section_does_not_overwrite_entry_fields() {
+        // NNW #4422, Atom side: a nested unprefixed <title> inside a namespaced
+        // <s:variant> placed before the real title must not win.
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:s="http://example.com/s">
+  <title>Site</title>
+  <entry>
+    <s:variant><title>Default Title</title></s:variant>
+    <id>entry-1</id>
+    <title>Real Entry Title</title>
+    <summary>Real summary.</summary>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        assert_eq!(feed.items.len(), 1);
+        let item = &feed.items[0];
+        assert_eq!(item.title.as_deref(), Some("Real Entry Title"));
+        assert_eq!(item.summary.as_deref(), Some("Real summary."));
+        assert!(
+            !feed
+                .items
+                .iter()
+                .any(|i| i.title.as_deref() == Some("Default Title"))
+        );
+    }
+
+    #[test]
+    fn atom_media_in_entry_does_not_corrupt_title() {
+        // Atom consumes no prefixed elements, so a <media:title> inside a
+        // <media:group> must not leak into the entry title (it did before).
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+  <title>Site</title>
+  <entry>
+    <media:group><media:title>Bogus Media Title</media:title></media:group>
+    <id>entry-1</id>
+    <title>Real Entry Title</title>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        assert_eq!(feed.items[0].title.as_deref(), Some("Real Entry Title"));
     }
 }

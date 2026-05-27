@@ -176,7 +176,8 @@ Image and favicon caches live under `$XDG_CACHE_HOME/viaduct/`.
 
 ### 6.1 SQLite Configuration
 * **WAL Mode:** Write-Ahead Logging is enforced on both databases. The background fetcher can write thousands of new articles while the user actively scrolls without throwing database locks or stuttering the UI.
-* **Single writer:** A dedicated `tokio` task owns both connections and serializes all writes; the GTK thread holds only a `Sender`.
+* **Single writer:** A dedicated thread owns the write connection to each database and serializes all writes; the GTK thread holds only a `Sender` and never blocks on SQLite. The writer (and the sync worker) run their receive loop under a panic supervisor that restarts on a panic, so one bad op can't take the DB layer down for the session.
+* **Read pool:** Articles reads (timeline fetches, search, unread counts) go to a small pool of read-only connections rather than queuing behind the writer. WAL lets these readers run concurrently with the single writer, so a long write never stalls the timeline.
 * **FTS5:** Full-Text Search is enabled on the `articles` table for instantaneous local querying. (NetNewsWire uses FTS4; we modernize.)
 
 ### 6.2 The Pruning Engine
@@ -184,7 +185,7 @@ To enforce the memory and disk footprint, the database is regularly vacuumed.
 * Articles older than 30 days are automatically deleted.
 * Starred/Saved articles are excluded from pruning.
 * Unread status does not save an article from pruning; if it hasn't been read in a month, it is dropped.
-* `VACUUM` is run periodically on application startup to reclaim blocks.
+* `VACUUM` runs at startup only on launches where the prune step actually removed rows, so a steady-state launch pays no full-file rewrite. A cheap `wal_checkpoint(TRUNCATE)` runs every startup regardless to keep the WAL bounded.
 
 ---
 
