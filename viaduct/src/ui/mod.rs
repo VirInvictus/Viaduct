@@ -14,6 +14,7 @@ pub mod coalescing_queue;
 pub mod fetch_queue;
 pub mod preferences_dialog;
 pub mod reader_view;
+pub mod refresh;
 pub mod sidebar;
 pub mod sidebar_view;
 pub mod smart_feed_dialog;
