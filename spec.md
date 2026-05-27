@@ -1,4 +1,4 @@
-# viaduct — Application Specification
+# viaduct: Application Specification
 
 **Version:** 1.9.1  
 **Target:** GNOME 50+, GTK4 ≥ 4.16, libadwaita ≥ 1.7, WebKitGTK 6.0  
@@ -10,9 +10,9 @@
 
 ## 1. Mission Statement
 
-viaduct is a fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire's **local and Inoreader accounts**. It is a direct translation of the NetNewsWire architectural philosophy—strict background threading, aggressive SQLite caching, and native text rendering—into the Linux ecosystem via Rust and GTK4.
+viaduct is a fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire's **local and Inoreader accounts**. It is a direct translation of the NetNewsWire architectural philosophy (strict background threading, aggressive SQLite caching, and native text rendering) into the Linux ecosystem via Rust and GTK4.
 
-Design philosophy: **Speed and Data Sovereignty.** viaduct handles massive subscription lists without locking the UI thread. It targets idle RAM of **100–300 MB** and a hard peak ceiling of **500 MB**, trading ultra-minimalist asceticism for rock-solid performance and offline image caching. Other remote sync engines are out of scope for v1.0 — the app supports local accounts and Inoreader sync.
+Design philosophy: **Speed and Data Sovereignty.** viaduct handles massive subscription lists without locking the UI thread. It targets idle RAM of **100–300 MB** and a hard peak ceiling of **500 MB**, trading ultra-minimalist asceticism for rock-solid performance and offline image caching. Other remote sync engines are out of scope; the app supports local accounts and Inoreader sync.
 
 ---
 
@@ -45,7 +45,7 @@ viaduct completely isolates the network and data layers from the UI thread using
     └───────────────────────────┘
 ```
 
-**Thread Safety:** A dedicated writer task owns both SQLite connections. The GTK thread only ever reads from local models or sends commands down the channel — it never waits on a network socket or a database write.
+**Thread Safety:** A dedicated writer task owns both SQLite connections. The GTK thread only ever reads from local models or sends commands down the channel; it never waits on a network socket or a database write.
 
 ### 2.2 Neutered WebKit Render Pipeline
 
@@ -58,15 +58,15 @@ Unconstrained web engines are memory black holes. viaduct ships **exactly one** 
     * **JavaScript: off** (runtime + HTML5 inline `<script>` markup).
     * **WebGL / WebRTC / plugins / DevTools: off.**
     * **HTML5 LocalStorage / IndexedDB / app cache: off.**
-    * **`media_playback_requires_user_gesture(true)`** — no autoplay.
-    * **`javascript_can_open_windows_automatically(false)`** — belt-and-braces.
+    * **`media_playback_requires_user_gesture(true)`**: no autoplay.
+    * **`javascript_can_open_windows_automatically(false)`**: belt-and-braces.
     * **Back-forward gestures, fullscreen: off.**
 5. **CSP enforcement** in the page wrapper:
     `default-src 'none'; img-src viaduct-img: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
 6. **`viaduct-img://` URI scheme handler** routes every image lookup through our `ImageCache` (memory LRU → disk → network). WebKit can render images, but every byte travels through the cache, and no other origin can load anything.
 7. **Link interception:** `decide-policy` cancels every `LinkClicked` / `FormSubmitted` / `NewWindowAction` and shells the URL out to `xdg-open` (system browser). `Other` / `Reload` / `BackForward` allowed through so `load_html`'s synthetic about:blank works.
 8. **Hover URL overlay:** `mouse-target-changed` updates a `gtk::Label` overlay (osd + caption) in the bottom-left so the user can preview link destinations.
-9. **Memory:** see §11 for the full budget + measured numbers + the architectural floor analysis. The locked-down WebProcess + the GTK4 / libadwaita / WebKitGTK shared libraries together pin a ~150 MB anon floor inside the main process that no Rust-side allocator tuning can reach (`#[global_allocator] = mimalloc` only redirects Rust allocations; the C side keeps its own glibc heap). The single-WebView constraint is the biggest knob we *do* control here — every additional `WebKitWebView` would add ~100–150 MB.
+9. **Memory:** see §11 for the full budget + measured numbers + the architectural floor analysis. The locked-down WebProcess + the GTK4 / libadwaita / WebKitGTK shared libraries together pin a ~150 MB anon floor inside the main process that no Rust-side allocator tuning can reach (`#[global_allocator] = mimalloc` only redirects Rust allocations; the C side keeps its own glibc heap). The single-WebView constraint is the biggest knob we *do* control here; every additional `WebKitWebView` would add ~100–150 MB.
 
 ### 2.3 Widget Tree
 
@@ -168,9 +168,9 @@ Standard desktop accelerators, prioritizing spatial navigation without forcing a
 
 All state lives under `$XDG_DATA_HOME/viaduct/`:
 
-* `local.opml` — feed + folder hierarchy (coalesced save, ~500 ms debounce, atomic temp-file + rename).
-* `articles.sqlite` — `articles`, `statuses`, `authors`, `authorsLookup`, FTS5 `search`.
-* `feed-settings.sqlite` — per-feed cache: ETag, Last-Modified, Cache-Control, favicon URLs, edited names, authors JSON, folder-relationship JSON, last-check date, per-feed Reader View preference.
+* `local.opml`: feed + folder hierarchy (coalesced save, ~500 ms debounce, atomic temp-file + rename).
+* `articles.sqlite`: `articles`, `statuses`, `authors`, `authorsLookup`, FTS5 `search`.
+* `feed-settings.sqlite`: the per-feed cache (ETag, Last-Modified, Cache-Control, favicon URLs, edited names, authors JSON, folder-relationship JSON, last-check date, per-feed Reader View preference).
 
 Image and favicon caches live under `$XDG_CACHE_HOME/viaduct/`.
 
@@ -204,7 +204,7 @@ To enforce the memory and disk footprint, the database is regularly vacuumed.
 ### C/GTK Libraries (Frontend)
 * `gtk4` (via `gtk4-rs`): Minimum 4.16.
 * `libadwaita` (via `libadwaita-rs`): Minimum 1.7.
-* `webkitgtk-6.0` (via `webkit6` 0.4): Minimum 2.42; the article reading pane runs a single neutered instance — see §2.2.
+* `webkitgtk-6.0` (via `webkit6` 0.4): Minimum 2.42; the article reading pane runs a single neutered instance (see §2.2).
 
 ---
 
@@ -243,7 +243,7 @@ viaduct v1.0 is done when:
 
 ---
 
-## 11. Memory Budget — Post-Mortem (v2.6.x)
+## 11. Memory Budget: Post-Mortem (v2.6.x)
 
 The original criterion #3 promised "idle 100–300 MB, peak < 500 MB." The v2.6.3 → v2.6.18 diagnostic chain found that target unreachable under the chosen toolkit. This section documents what was learned, what's recoverable, and what isn't.
 
@@ -262,7 +262,7 @@ The original criterion #3 promised "idle 100–300 MB, peak < 500 MB." The v2.6.
 | Class | Size | Source |
 |---|---|---|
 | **anon** (mimalloc) | ~160 MB peak commit | Rust allocations: parse trees, ArticleNode, channels, glib closures |
-| **anon** (non-mimalloc) | ~150 MB | C-side allocations from GTK / GLib / WebKit / libxml2 — `#[global_allocator]` only redirects Rust |
+| **anon** (non-mimalloc) | ~150 MB | C-side allocations from GTK / GLib / WebKit / libxml2; `#[global_allocator]` only redirects Rust |
 | **file** | ~100 MB | SQLite mmap (capped 64 MB), binaries, fonts, installed `.so`s |
 | **shmem** | ~0–5 MB | WebKit IPC buffers (the WebProcess proper is a separate process and not counted in our RSS) |
 | **stacks + misc** | ~80–120 MB | 12 tokio + 3 fixed threads × ~8 MB virtual stack + kernel-side overhead |
@@ -284,7 +284,7 @@ The non-mimalloc anon block is the architectural floor. GTK / WebKit / GLib pull
 
 ### What was NOT achievable, and why
 
-Hitting "idle 100–300 MB" requires removing the GTK4 + WebKit + GLib + libxml2 baseline, which is non-negotiable for the typography fidelity goal (NetNewsWire-byte-perfect themes via `WebKitWebView`). NewsFlash's html2gtk approach hits ~250–400 MB by rendering articles as native GTK widgets — possible but throws away the theme system + every shipped NNW theme bundle.
+Hitting "idle 100–300 MB" requires removing the GTK4 + WebKit + GLib + libxml2 baseline, which is non-negotiable for the typography fidelity goal (NetNewsWire-byte-perfect themes via `WebKitWebView`). NewsFlash's html2gtk approach hits ~250–400 MB by rendering articles as native GTK widgets; possible, but it throws away the theme system and every shipped NNW theme bundle.
 
 ### Hard rules going forward
 
@@ -297,4 +297,4 @@ Hitting "idle 100–300 MB" requires removing the GTK4 + WebKit + GLib + libxml2
 
 ### When to revisit
 
-If a future v2.x adds something that pushes peak past 600 MB on the realistic 30-min-cadence test, treat it as a regression. The v2.6.16 `/proc/self/smaps_rollup` breakdown on `diag: refresh cycle pre/post` lines is permanent — every refresh logs anon/file/shmem deltas, so the next leak surfaces fast.
+If a future v2.x adds something that pushes peak past 600 MB on the realistic 30-min-cadence test, treat it as a regression. The v2.6.16 `/proc/self/smaps_rollup` breakdown on `diag: refresh cycle pre/post` lines is permanent; every refresh logs anon/file/shmem deltas, so the next leak surfaces fast.
