@@ -23,8 +23,17 @@ pub const DEFAULT_RETENTION_DAYS: i64 = 30;
 /// v2.6.22: timeline sort direction. Drives the `ORDER BY` clause on
 /// every timeline-feeding query (`FetchByFeed`, `FetchByFeeds`,
 /// `FetchUnread`, `FetchStarred`, `FetchToday`). Search results
-/// continue to sort by FTS5 `rank` regardless — relevance order is
+/// continue to sort by FTS5 `rank` regardless; relevance order is
 /// always more useful than chronological for a search hit list.
+///
+/// v2.8.1: sorts on a **logical date** `COALESCE(date_published,
+/// date_modified)` rather than `date_published` alone, porting the key
+/// idea of NNW's `ArticleSorter` rewrite (NNW uses `datePublished ??
+/// dateModified ?? dateArrived`). Atom entries that carry only
+/// `<updated>` (no `<published>`) now sort by their modified date
+/// instead of clustering at the NULL end of the list. We keep `rowid`
+/// as the tiebreaker (arrival order) rather than NNW's `articleID`
+/// hash order, which is more meaningful for a local-only store.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SortOrder {
     #[default]
@@ -34,12 +43,16 @@ pub enum SortOrder {
 
 impl SortOrder {
     /// Render to the SQL `ORDER BY` tail. Includes the `rowid`
-    /// secondary key so two articles published the same second still
+    /// secondary key so two articles with the same logical date still
     /// have a deterministic order.
     pub fn order_by_clause(&self) -> &'static str {
         match self {
-            SortOrder::NewestFirst => "ORDER BY date_published DESC, rowid DESC",
-            SortOrder::OldestFirst => "ORDER BY date_published ASC, rowid ASC",
+            SortOrder::NewestFirst => {
+                "ORDER BY COALESCE(date_published, date_modified) DESC, rowid DESC"
+            }
+            SortOrder::OldestFirst => {
+                "ORDER BY COALESCE(date_published, date_modified) ASC, rowid ASC"
+            }
         }
     }
 
@@ -47,8 +60,12 @@ impl SortOrder {
     /// the smart-feed JOIN queries.
     pub fn order_by_clause_aliased(&self) -> &'static str {
         match self {
-            SortOrder::NewestFirst => "ORDER BY a.date_published DESC, a.rowid DESC",
-            SortOrder::OldestFirst => "ORDER BY a.date_published ASC, a.rowid ASC",
+            SortOrder::NewestFirst => {
+                "ORDER BY COALESCE(a.date_published, a.date_modified) DESC, a.rowid DESC"
+            }
+            SortOrder::OldestFirst => {
+                "ORDER BY COALESCE(a.date_published, a.date_modified) ASC, a.rowid ASC"
+            }
         }
     }
 }
@@ -589,10 +606,13 @@ fn fetch_by_feeds(
     // Per-chunk results are each individually sorted; chunks need a
     // final merge-sort pass so the aggregate view honours the global
     // sort order. Comparator branches on `sort` since `Reverse` only
-    // flips for newest-first.
+    // flips for newest-first. Keyed on the same logical date as the SQL
+    // ORDER BY (v2.8.1): `date_published`, falling back to `date_modified`.
     match sort {
-        SortOrder::NewestFirst => articles.sort_by_key(|a| std::cmp::Reverse(a.date_published)),
-        SortOrder::OldestFirst => articles.sort_by_key(|a| a.date_published),
+        SortOrder::NewestFirst => {
+            articles.sort_by_key(|a| std::cmp::Reverse(a.date_published.or(a.date_modified)))
+        }
+        SortOrder::OldestFirst => articles.sort_by_key(|a| a.date_published.or(a.date_modified)),
     }
     Ok(articles)
 }
@@ -1682,5 +1702,56 @@ mod tests {
             .unwrap();
         assert_eq!(lookup_count, 0);
         assert_eq!(author_count, 0);
+    }
+
+    /// v2.8.1: the timeline sort keys on a logical date
+    /// `COALESCE(date_published, date_modified)`. An article with only a
+    /// modified date (no published date) must sort by that modified date,
+    /// not get dumped at the NULL end of the list.
+    #[test]
+    fn timeline_sort_uses_logical_date_when_published_is_missing() {
+        use chrono::Duration;
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        let now = Utc::now();
+
+        let mk = |guid: &str,
+                  published: Option<chrono::DateTime<Utc>>,
+                  modified: Option<chrono::DateTime<Utc>>| ParsedItem {
+            id: guid.to_string(),
+            title: Some(guid.to_string()),
+            content_html: Some("body".to_string()),
+            content_text: None,
+            url: None,
+            external_url: None,
+            summary: None,
+            image_url: None,
+            date_published: published,
+            date_modified: modified,
+            authors: Vec::new(),
+            attachments: Vec::new(),
+        };
+
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![
+                mk("recent", Some(now - Duration::hours(1)), None),
+                mk("modified-only", None, Some(now - Duration::hours(3))),
+                mk("oldest", Some(now - Duration::hours(5)), None),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .expect("update_feed");
+
+        let titles: Vec<String> = fetch_by_feed(&mut conn, feed_id, SortOrder::NewestFirst)
+            .expect("fetch")
+            .into_iter()
+            .filter_map(|a| a.title)
+            .collect();
+        // Logical-date order: 1h, 3h (via date_modified), 5h. Before the
+        // coalesce, "modified-only" had a NULL key and sorted last.
+        assert_eq!(titles, vec!["recent", "modified-only", "oldest"]);
     }
 }

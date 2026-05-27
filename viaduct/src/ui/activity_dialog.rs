@@ -150,7 +150,7 @@ fn display_subtitle(ev: &ActivityEvent) -> String {
         ActivityKind::Skipped(reason) => match reason {
             SkipReason::DisallowedHost => "Skipped · disallowed host".to_string(),
             SkipReason::CacheControl => "Skipped · still fresh per Cache-Control".to_string(),
-            SkipReason::Throttled => "Skipped · refreshed within the last 29 minutes".to_string(),
+            SkipReason::Throttled => "Skipped · refreshed within the last 9 minutes".to_string(),
         },
     }
 }
@@ -223,7 +223,10 @@ mod tests {
             display_subtitle(&ev(ActivityKind::Skipped(SkipReason::DisallowedHost)))
                 .contains("disallowed")
         );
-        assert!(display_subtitle(&ev(ActivityKind::Skipped(SkipReason::Throttled))).contains("29"));
+        assert!(
+            display_subtitle(&ev(ActivityKind::Skipped(SkipReason::Throttled)))
+                .contains("9 minutes")
+        );
         assert!(
             display_subtitle(&ev(ActivityKind::Skipped(SkipReason::CacheControl)))
                 .contains("Cache-Control")

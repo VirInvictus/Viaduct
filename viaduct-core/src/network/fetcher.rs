@@ -298,7 +298,7 @@ impl AccountRefresher {
 
     /// v2.6.24: install an activity log so per-feed terminal states are
     /// recorded for the Activity dialog. Pre-pipeline skips (disallowed
-    /// host, cache-control freshness, 29-min throttle) push too.
+    /// host, cache-control freshness, minimum-time throttle) push too.
     pub fn with_activity_log(mut self, log: Arc<crate::network::activity::ActivityLog>) -> Self {
         self.activity_log = Some(log);
         self
@@ -308,7 +308,7 @@ impl AccountRefresher {
         self.refresh_feeds_inner(feeds, false).await
     }
 
-    /// Force a refresh that bypasses the 29-minute timing throttle and the
+    /// Force a refresh that bypasses the minimum-time timing throttle and the
     /// 5-hour Cache-Control freshness check. `etag` / `last_modified` are
     /// still sent (so a 304 response remains a fast no-op), but every feed
     /// gets a network round-trip. Use for explicit user clicks. Auto-refresh
@@ -441,6 +441,16 @@ impl AccountRefresher {
             }
         }
 
+        // NNW fd547da76: a feed that sends a Cache-Control header is governed
+        // solely by Cache-Control. Freshness was checked just above, and the
+        // 5-hour cap was applied when `max_age` was stored; once past the
+        // freshness window the feed is exempt from the minimum-time clamp.
+        // Placed before the special-case / no-minimum / min-time block to
+        // match NNW's ordering.
+        if settings.max_age.is_some() {
+            return None;
+        }
+
         if let Some(last_check) = settings.last_check_date {
             if is_no_minimum_time_domain(&feed.url) {
                 return None;
@@ -451,7 +461,7 @@ impl AccountRefresher {
                 }
             } else {
                 let minutes_elapsed = (Utc::now() - last_check).num_minutes();
-                if minutes_elapsed < 29 {
+                if minutes_elapsed < MINIMUM_TIME_BETWEEN_CHECKS_MINUTES {
                     return Some(SkipReason::Throttled);
                 }
             }
@@ -461,14 +471,20 @@ impl AccountRefresher {
     }
 }
 
-/// Hosts that get the 25-hour `specialCaseCutoffDate` instead of the 29-minute
-/// minimum, plus exemption from the 8-day conditional-GET expiry. These two
-/// well-behaved hosts publish high-frequency feeds and their conditional-GET
-/// is reliable. NNW's `SpecialCase.rachelByTheBayHostName` /
+/// Minimum minutes between checks for a feed without Cache-Control (NNW
+/// `LocalAccountRefresher.minimumTimeBetweenChecks`). Lowered 29 → 9 in NNW
+/// `ad7f98d89`; ported in v2.8.1. Feeds that send Cache-Control are exempt
+/// (see `skip_reason`).
+const MINIMUM_TIME_BETWEEN_CHECKS_MINUTES: i64 = 9;
+
+/// Hosts that get the 25-hour `specialCaseCutoffDate` instead of the
+/// minimum-time clamp, plus exemption from the 8-day conditional-GET expiry.
+/// These two well-behaved hosts publish high-frequency feeds and their
+/// conditional-GET is reliable. NNW's `SpecialCase.rachelByTheBayHostName` /
 /// `SpecialCase.openRSSOrgHostName`.
 const SPECIAL_CASE_DOMAINS: &[&str] = &["rachelbythebay.com", "openrss.org"];
 
-/// Hosts that skip the 29-minute minimum entirely (every refresh attempt
+/// Hosts that skip the minimum-time clamp entirely (every refresh attempt
 /// hits them, modulo Cache-Control / 304). These are personal sites that
 /// don't publish often but can update at unpredictable times. Synced from
 /// NNW `LocalAccountRefresher.domainsWithNoMinimumTime` as of `4d594181f`.

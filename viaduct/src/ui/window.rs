@@ -1948,7 +1948,7 @@ impl ViaductWindow {
     }
 
     /// User-initiated refresh (sync button, Ctrl+R, OPML import). Always
-    /// `force = true`: bypasses the 29-min skip throttle and the
+    /// `force = true`: bypasses the minimum-time skip throttle and the
     /// content-hash short-circuit so an explicit click always hits the
     /// network and re-parses. Driven from the `win.refresh` action.
     pub(crate) fn act_refresh(&self) {
@@ -1957,7 +1957,7 @@ impl ViaductWindow {
 
     /// Timer-initiated refresh (the `refresh-on-startup` and
     /// `refresh-interval-minutes` paths). Always `force = false`:
-    /// conditional-GET headers stay in the request, the 29-min skip
+    /// conditional-GET headers stay in the request, the minimum-time skip
     /// applies, and content-hash matches short-circuit before parse.
     /// Most periodic cycles produce no DB writes — they 304 and exit.
     pub(crate) fn act_refresh_periodic(&self) {

@@ -1,5 +1,13 @@
 # viaduct: Patch Notes
 
+## v2.8.1: Refresh timing and sort parity
+
+Three small refinements drawn from the NetNewsWire upstream sync review. No user-facing feature changes.
+
+- **Faster refresh floor (29 → 9 minutes).** The minimum time between checks for a feed that does not send `Cache-Control` is now 9 minutes, matching NetNewsWire's lowered floor (upstream `ad7f98d89`). Feeds update sooner without hammering servers. The Activity log's "Skipped" reason text was updated to match.
+- **Cache-Control feeds are governed solely by Cache-Control** (upstream `fd547da76`). A feed that sends a `Cache-Control` header is refreshed strictly on that schedule (with the existing 5-hour `max-age` cap), exempt from the minimum-time clamp. Previously such a feed was skipped while fresh but then re-clamped to the minimum floor afterward.
+- **Timeline sort uses a logical date.** Sorting now keys on `COALESCE(date_published, date_modified)` instead of `date_published` alone, porting the core idea of NetNewsWire's `ArticleSorter` rewrite. Atom entries that carry only `<updated>` (no `<published>`) now sort by their modified date instead of being dumped at the bottom of the list. The arrival-order (`rowid`) tiebreaker is unchanged.
+
 ## v2.8.0: Parser correctness and Linux-first audit hardening
 
 A maintenance release with no user-facing feature changes. It pairs a feed-parsing correctness fix ported from NetNewsWire with a batch of robustness, performance, and memory fixes from a full Linux-first codebase audit. Everything here reinforces guarantees the project already makes: faithful parsing, no stuck refreshes, the "supreme" memory budget, and a responsive UI.
