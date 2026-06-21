@@ -509,14 +509,17 @@ const NO_MINIMUM_TIME_DOMAINS: &[&str] = &[
     "flyingmeat.com",
 ];
 
-/// Returns true if the URL's host matches one of the supplied domains
-/// exactly, ignoring case and an optional leading `www.`. Port of NNW
+/// Returns true if the URL's host belongs to one of the supplied domains,
+/// ignoring case and an optional leading `www.`. Port of NNW
 /// `SpecialCase.urlStringMatchesDomain`. Domains in `domains` must already
 /// be lowercase and stripped of `www.`.
 ///
-/// Substring matching (the previous behavior) false-positives on hosts
-/// like `evilrachelbythebay.com` or `example.com.evil.com`, which is a
-/// real attack surface for the conditional-GET / no-minimum-time bypass.
+/// A host matches a domain on an exact match or as a subdomain, so
+/// `gruber.micro.blog` matches `micro.blog` (NNW `4c85c907f`). Plain
+/// substring matching (the original behavior) is wrong: it false-positives
+/// on hosts like `evilrachelbythebay.com` or `rachelbythebay.com.evil.com`,
+/// a real attack surface for the conditional-GET / no-minimum-time bypass.
+/// Suffix matching against `"." + domain` avoids both.
 fn url_host_matches_domain(url: &str, domains: &[&str]) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
@@ -526,7 +529,9 @@ fn url_host_matches_domain(url: &str, domains: &[&str]) -> bool {
     };
     let lower = host.to_ascii_lowercase();
     let normalized = lower.strip_prefix("www.").unwrap_or(&lower);
-    domains.contains(&normalized)
+    domains
+        .iter()
+        .any(|d| !d.is_empty() && (normalized == *d || normalized.ends_with(&format!(".{d}"))))
 }
 
 fn is_special_case_host(url: &str) -> bool {
@@ -601,6 +606,7 @@ async fn refresh_one_feed(
         .await
     {
         Ok(result) => {
+            new_settings.last_response_code = Some(result.status as i64);
             if result.status == 304 {
                 debug!("Feed not modified (304): {}", feed.url);
                 log_event(crate::network::activity::ActivityKind::NotModified);
@@ -790,15 +796,18 @@ mod tests {
     }
 
     #[test]
-    fn url_host_matches_domain_does_not_match_subdomains() {
-        // NNW checks exact match (after www. strip), not suffix. A
-        // sub-subdomain like `blog.example.com` does NOT match `example.com`.
-        // Domains that need both forms must be listed explicitly (see
-        // `micro.inessential.com` alongside `inessential.com`).
+    fn url_host_matches_domain_matches_subdomains() {
+        // NNW `4c85c907f`: a host matches a domain as a subdomain too, so
+        // `blog.inessential.com` matches `inessential.com` (suffix on
+        // `.inessential.com`). A single list entry now covers all subdomains.
         let list = &["inessential.com"];
-        assert!(!url_host_matches_domain(
+        assert!(url_host_matches_domain(
             "https://blog.inessential.com/x",
             list
+        ));
+        assert!(url_host_matches_domain(
+            "https://gruber.micro.blog/feed",
+            &["micro.blog"]
         ));
     }
 

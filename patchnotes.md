@@ -1,5 +1,13 @@
 # viaduct: Patch Notes
 
+## v2.8.2: NetNewsWire upstream sync (June 2026)
+
+Three small ports drawn from fast-forwarding the NetNewsWire reference clone to `4c85c907f` (the 7.1 beta line). The bulk of upstream's 267 new commits is a Swift-concurrency rewrite that does not apply to our already-async Rust; the feed parser was unchanged. No new user-facing features.
+
+- **Subdomain matching for special-case hosts** (upstream `4c85c907f`). The per-host refresh rules (the no-minimum-time list and the conditional-GET special cases) now match subdomains, so a feed served from `gruber.micro.blog` is covered by a `micro.blog` entry. A host still matches only on an exact name or a true subdomain, so the existing protection against look-alike domains (`evilrachelbythebay.com`, `rachelbythebay.com.evil.com`) is unaffected.
+- **Last response code is recorded per feed.** Each feed now stores the HTTP status code of its most recent download attempt (upstream's `lastResponseCode`). It is captured for every response (success, not-modified, and errors alike) and lays the groundwork for a future "this feed is failing" indicator. Existing databases gain the column automatically on first launch.
+- **VACUUM is throttled to at most once every 13 days.** Startup database compaction already only ran when a cleanup actually removed rows; it now additionally waits at least 13 days between full compactions, porting the intent of NetNewsWire's `vacuumIfNeeded` without giving up our stricter "only when something was pruned" rule. The result is fewer full-file rewrites on launch for people who prune a little every session. A small per-database metadata table tracks the last compaction date.
+
 ## v2.8.1: Refresh timing and sort parity
 
 Three small refinements drawn from the NetNewsWire upstream sync review. No user-facing feature changes.

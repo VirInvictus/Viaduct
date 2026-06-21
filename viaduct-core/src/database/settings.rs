@@ -55,7 +55,8 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
             folder_relationship_json TEXT,
             last_check_date INTEGER,
             reader_view_always_enabled INTEGER NOT NULL DEFAULT 0,
-            new_article_notifications_enabled INTEGER NOT NULL DEFAULT 0
+            new_article_notifications_enabled INTEGER NOT NULL DEFAULT 0,
+            last_response_code INTEGER
         );
         ",
     )?;
@@ -67,6 +68,8 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
         "ALTER TABLE feed_settings
            ADD COLUMN new_article_notifications_enabled INTEGER NOT NULL DEFAULT 0;",
     );
+    // Idempotent ALTER for `last_response_code` (NNW `4c85c907f`).
+    let _ = conn.execute_batch("ALTER TABLE feed_settings ADD COLUMN last_response_code INTEGER;");
     Ok(())
 }
 
@@ -155,6 +158,7 @@ fn fetch(conn: &mut Connection, feed_id: &str) -> Result<Option<FeedSettings>> {
                 new_article_notifications_enabled: row
                     .get::<_, i64>("new_article_notifications_enabled")?
                     != 0,
+                last_response_code: row.get("last_response_code")?,
             })
         })
         .optional()?;
@@ -168,8 +172,8 @@ fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {
             edited_name, content_hash, last_modified, etag,
             date_created, max_age, authors_json, folder_relationship_json,
             last_check_date, reader_view_always_enabled,
-            new_article_notifications_enabled
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            new_article_notifications_enabled, last_response_code
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(feed_id) DO UPDATE SET
             feed_url=excluded.feed_url,
             home_page_url=excluded.home_page_url,
@@ -185,7 +189,8 @@ fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {
             folder_relationship_json=excluded.folder_relationship_json,
             last_check_date=excluded.last_check_date,
             reader_view_always_enabled=excluded.reader_view_always_enabled,
-            new_article_notifications_enabled=excluded.new_article_notifications_enabled",
+            new_article_notifications_enabled=excluded.new_article_notifications_enabled,
+            last_response_code=excluded.last_response_code",
         params![
             s.feed_id,
             s.feed_url,
@@ -203,6 +208,7 @@ fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {
             s.last_check_date.map(|d| d.timestamp()),
             s.reader_view_always_enabled as i64,
             s.new_article_notifications_enabled as i64,
+            s.last_response_code,
         ],
     )?;
     Ok(())
@@ -256,6 +262,40 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM feed_settings", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn last_response_code_round_trips() {
+        let mut conn = in_memory();
+        let s = FeedSettings {
+            feed_id: "fid".into(),
+            feed_url: "https://example.com/feed".into(),
+            home_page_url: None,
+            icon_url: None,
+            favicon_url: None,
+            edited_name: None,
+            content_hash: None,
+            last_modified: None,
+            etag: None,
+            date_created: None,
+            max_age: None,
+            authors_json: None,
+            folder_relationship_json: None,
+            last_check_date: None,
+            reader_view_always_enabled: false,
+            new_article_notifications_enabled: false,
+            last_response_code: Some(503),
+        };
+        upsert(&mut conn, s).unwrap();
+        let back = fetch(&mut conn, "fid").unwrap().unwrap();
+        assert_eq!(back.last_response_code, Some(503));
+    }
+
+    #[test]
+    fn setup_schema_is_idempotent_on_reopen() {
+        // The idempotent ALTERs must no-op when the column already exists.
+        let conn = in_memory();
+        setup_schema(&conn).expect("re-run schema");
     }
 
     #[test]

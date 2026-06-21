@@ -472,6 +472,7 @@ async fn pair_feeds_with_settings(
                 last_check_date: None,
                 reader_view_always_enabled: false,
                 new_article_notifications_enabled: false,
+                last_response_code: None,
             });
         paired.push((feed, settings));
     }

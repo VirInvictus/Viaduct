@@ -168,6 +168,7 @@ fn articles_op_label(op: &crate::database::articles::ArticlesDbOp) -> &'static s
         DeleteOrphanedAuthors(..) => "DeleteOrphanedAuthors",
         Vacuum(..) => "Vacuum",
         Checkpoint(..) => "Checkpoint",
+        LastVacuumDate(..) => "LastVacuumDate",
     }
 }
 

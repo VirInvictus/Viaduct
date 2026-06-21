@@ -155,6 +155,9 @@ pub enum ArticlesDbOp {
     /// rewrite); run every startup to bound the WAL even when nothing was
     /// pruned. See `cleanup_at_startup`.
     Checkpoint(oneshot::Sender<Result<()>>),
+    /// Read `db_info.last_vacuum_date` (unix seconds), `None` if never
+    /// stamped. Lets `cleanup_at_startup` throttle the full VACUUM.
+    LastVacuumDate(oneshot::Sender<Result<Option<i64>>>),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -298,6 +301,15 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
         CREATE TRIGGER IF NOT EXISTS articles_ad_lookup AFTER DELETE ON articles BEGIN
             DELETE FROM authorsLookup WHERE article_id = old.article_id;
         END;
+
+        -- Per-database key/value metadata. Port of NNW `RSDatabaseInfoTable`
+        -- (4c85c907f). Currently holds `last_vacuum_date` (unix seconds) so
+        -- `cleanup_at_startup` can throttle the full VACUUM (see
+        -- `last_vacuum_date` / `stamp_vacuum_date`).
+        CREATE TABLE IF NOT EXISTS db_info (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
         ",
     )?;
 
@@ -422,6 +434,10 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
         }
         ArticlesDbOp::Checkpoint(tx) => {
             let res = checkpoint(conn);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::LastVacuumDate(tx) => {
+            let res = last_vacuum_date(conn);
             let _ = tx.send(res);
         }
     }
@@ -1195,7 +1211,34 @@ fn vacuum(conn: &mut Connection) -> Result<()> {
     // worker holds the only connection.
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     conn.execute_batch("VACUUM")?;
+    stamp_vacuum_date(conn)?;
     Ok(())
+}
+
+/// Record now (unix seconds) as `db_info.last_vacuum_date`. Read back by
+/// `last_vacuum_date` to gate the 13-day VACUUM throttle in
+/// `cleanup_at_startup`.
+fn stamp_vacuum_date(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT INTO db_info (key, value) VALUES ('last_vacuum_date', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![Utc::now().timestamp().to_string()],
+    )?;
+    Ok(())
+}
+
+/// Read `db_info.last_vacuum_date` as unix seconds. `None` when the row is
+/// absent (DB created before this table existed, or never vacuumed) or the
+/// stored value isn't a valid integer.
+fn last_vacuum_date(conn: &Connection) -> Result<Option<i64>> {
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM db_info WHERE key = 'last_vacuum_date'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(value.and_then(|v| v.parse::<i64>().ok()))
 }
 
 /// `PRAGMA wal_checkpoint(TRUNCATE)` without the `VACUUM`. Flushes the WAL
@@ -1660,6 +1703,16 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM articles", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn vacuum_stamps_last_vacuum_date() {
+        let mut conn = in_memory();
+        assert_eq!(last_vacuum_date(&conn).unwrap(), None);
+        vacuum(&mut conn).unwrap();
+        let stamped = last_vacuum_date(&conn).unwrap();
+        assert!(stamped.is_some(), "vacuum should stamp last_vacuum_date");
+        assert!(stamped.unwrap() > 0);
     }
 
     #[test]

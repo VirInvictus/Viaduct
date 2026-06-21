@@ -348,3 +348,22 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
 
+## Upstream Sync Candidates (June 20, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `4c85c907f` (+267 commits over `8c02fb3ba`, the `mac-7.1bN` beta line) and `.liferea` to `fe797c3`; `.newsflash` main was unchanged (dev moved to a `stable` branch + `v.5.1.0` tag). See `CLAUDE.md` §2 for the full sync note. The vast majority of the 267 commits is a Swift-concurrency (async/await + actors) migration that does not port; `RSParser` was unchanged; the themes only relocated. Three ports shipped; the rest are recorded below.
+
+### Ported from NetNewsWire
+
+- [x] **Refresher: subdomain matching in `urlStringMatchesDomain`** (NNW `4c85c907f`) *(shipped v2.8.2)*. `url_host_matches_domain` now matches a host on exact equality OR a `.`-prefixed suffix (so `gruber.micro.blog` matches `micro.blog`), with an empty-domain skip. The old `..._does_not_match_subdomains` test was inverted to `..._matches_subdomains`; the substring-attack guard still holds.
+- [x] **Feed settings: `last_response_code` column** (NNW `4c85c907f` `lastResponseCode`) *(shipped v2.8.2)*. New `Option<i64>` field on `FeedSettings` (schema column + idempotent ALTER), populated in `refresh_one_feed` from `result.status` for every HTTP response (304 / non-200 / success). Pairs with the activity log; a future "feed has errors" sidebar indicator can consume it.
+- [x] **VACUUM throttle, non-regressing hybrid** (from NNW `4c85c907f` `vacuumIfNeeded`) *(shipped v2.8.2)*. Added a `db_info` key/value table (NNW `RSDatabaseInfoTable` port) stamping `last_vacuum_date`; `cleanup_at_startup` now vacuums only when rows were pruned (our v2.8.0 gate) AND `>= VACUUM_INTERVAL_DAYS` (13) have passed. A literal port would have vacuumed every 13 days regardless of pruning. NNW also switched to `journal_mode = DELETE`; declined, we keep WAL for the read pool.
+
+### Deferred candidates (not yet ported)
+
+- [ ] **Persistent favicon failure caching + SVG filtering.** NNW's new `Modules/Images/SingleFaviconDownloader` distinguishes transient (retry) vs permanent (cache as dead, back off) favicon failures and filters out SVG favicons (unsuitable for a 24 px avatar). Our `favicon_discovery.rs` re-probes on every miss. Cold-start perf win on dead-favicon hosts.
+- [ ] **HTMLMetadata SQLite cache.** NNW replaced its in-memory `HTMLMetadataCache` (21 h TTL) with a persistent `HTMLMetadataDatabase` (transient 5 h / permanent 11 days / success 149 h). Would cut repeat home-page GETs during favicon/feed discovery on slow or metered networks.
+- [ ] **Single-query aggregate counts + per-feed last-update dates.** NNW added `ArticleCounts` (total/unread/starred/statuses in one query) and `fetchLastUpdateDates()` (`MAX(coalesce(datePublished, dateModified, dateArrived))` per feed). UI-feature-driven; useful if we add a "last updated" sidebar affordance.
+- [ ] **Activity-log instrumentation parity.** NNW now logs `didReceiveResponse`, redirect chains, and detailed 429/4xx skip reasons, plus a `FindStrategy` in `FeedFinder`. Our `activity.rs` records terminal states only. Observability polish, not correctness.
+- [ ] **System suspend/resume timer pause.** NNW's `AccountRefreshTimer` suspends on sleep and skips refresh while `isSystemSleeping`. The Linux analog is a logind D-Bus `PrepareForSleep` hook around the periodic-refresh timer in `refresh.rs`. Minor on desktop; matters for mobile GTK form factors.
+- [ ] **Idle-backoff status-sync timer.** NNW's `ArticleStatusSyncTimer` runs at 2 min normally and backs off to 30 min when idle, exiting backoff on user-queued status changes. Relevant only once Inoreader sync (Phase 15) lands a background status-sync loop; we have none today.
+

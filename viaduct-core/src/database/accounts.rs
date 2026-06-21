@@ -20,8 +20,16 @@ use crate::paths::opml_path;
 
 use crate::database::delegate::{AccountDelegate, LocalAccountDelegate};
 use crate::database::sync::SyncDbOp;
+use chrono::Utc;
 use crossbeam_channel as cbc;
 use std::sync::Arc;
+
+/// Minimum days between full `VACUUM`s. Port of NNW `4c85c907f`'s
+/// `vacuumIfNeeded(daysBetweenVacuums:)`. We keep our v2.8.0 prune gate too,
+/// so a VACUUM runs only when rows were actually removed AND this many days
+/// have passed since the last one — strictly less often than either rule
+/// alone, never more.
+const VACUUM_INTERVAL_DAYS: i64 = 13;
 
 pub struct Account {
     db_tx: mpsc::Sender<DbOp>,
@@ -774,12 +782,25 @@ impl Account {
         // window opens, so paying it on every launch made cold start scale
         // with library size for no benefit on a steady-state DB. Disk-cache
         // file removals don't create DB free pages, so they don't count here.
+        //
+        // v2.8.x (NNW 4c85c907f port): additionally throttle to at most one
+        // VACUUM per `VACUUM_INTERVAL_DAYS`, so a user who prunes a few rows
+        // every launch doesn't rewrite the whole file each time. Free pages
+        // from skipped vacuums are reused by SQLite in the meantime.
         let db_rows_pruned =
             removed_settings + removed_articles + removed_statuses + removed_authors + sync_wiped;
-        if db_rows_pruned > 0
-            && let Err(e) = self.vacuum_databases().await
-        {
-            tracing::warn!(?e, "vacuum_databases failed");
+        if db_rows_pruned > 0 {
+            let due = match self.last_vacuum_date().await {
+                Ok(Some(last)) => Utc::now().timestamp() - last >= VACUUM_INTERVAL_DAYS * 86_400,
+                Ok(None) => true, // never vacuumed (or pre-db_info DB)
+                Err(e) => {
+                    tracing::warn!(?e, "last_vacuum_date failed; vacuuming");
+                    true
+                }
+            };
+            if due && let Err(e) = self.vacuum_databases().await {
+                tracing::warn!(?e, "vacuum_databases failed");
+            }
         }
 
         Ok(())
@@ -912,6 +933,19 @@ impl Account {
         let (tx, rx) = oneshot::channel();
         self.db_tx
             .send(DbOp::Settings(Box::new(SettingsDbOp::Vacuum(tx))))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// Read the articles DB's `last_vacuum_date` (unix seconds), `None` if
+    /// never vacuumed. The articles DB is the costly one to VACUUM and both
+    /// files are vacuumed together, so its stamp gates the whole pair.
+    pub async fn last_vacuum_date(&self) -> Result<Option<i64>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::LastVacuumDate(tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

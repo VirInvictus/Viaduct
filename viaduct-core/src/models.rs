@@ -30,6 +30,11 @@ pub struct FeedSettings {
     /// schema upgrade is silent — users explicitly opt in via the feed
     /// inspector dialog.
     pub new_article_notifications_enabled: bool,
+    /// HTTP status code from the most recent feed download attempt
+    /// (NNW `4c85c907f` `FeedSettings.lastResponseCode`). `None` until
+    /// the feed has been fetched at least once over HTTP; a network
+    /// error that never reached the server leaves the prior value.
+    pub last_response_code: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
