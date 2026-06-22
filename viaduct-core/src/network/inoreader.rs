@@ -259,12 +259,28 @@ impl ReaderAPICaller {
             .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
+        // Check status before caching: an error page (401 expired auth, 5xx)
+        // must not be stored as the edit token, or every later write reuses
+        // the garbage token until the process restarts. Mirrors the guard in
+        // validate_credentials.
+        if !resp.status().is_success() {
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            }));
+        }
+
         let token = resp
             .text()
             .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?
             .trim()
             .to_string();
+
+        if token.is_empty() {
+            return Err(ViaductError::Network(NetworkError::RateLimited {
+                retry_after_secs: 0,
+            }));
+        }
 
         let mut write_token = self.access_token.write().await;
         *write_token = Some(token.clone());

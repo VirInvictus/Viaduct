@@ -60,12 +60,19 @@ pub fn handle_op(conn: &mut Connection, op: SyncDbOp) {
         SyncDbOp::SelectForProcessing(limit, reply) => {
             let res = (|| -> rusqlite::Result<Vec<SyncStatus>> {
                 let tx = conn.transaction()?;
+                // Port of NNW SyncStatusTable.selectForProcessing: mark EVERY
+                // row selected, then read them back. Marking all rows (not just
+                // the ones returned, and not per-(articleID,key)) keeps the
+                // selection grain aligned with DeleteSelectedForProcessing,
+                // which deletes by articleID — so an article's read + starred
+                // rows are always processed and cleared together, never split.
+                tx.execute("UPDATE syncStatus SET selected = 1", [])?;
                 let mut results = Vec::new();
                 {
                     let query = if limit.is_some() {
-                        "SELECT articleID, key, flag, selected FROM syncStatus WHERE selected = 0 LIMIT ?"
+                        "SELECT articleID, key, flag, selected FROM syncStatus WHERE selected = 1 LIMIT ?"
                     } else {
-                        "SELECT articleID, key, flag, selected FROM syncStatus WHERE selected = 0"
+                        "SELECT articleID, key, flag, selected FROM syncStatus WHERE selected = 1"
                     };
                     let mut stmt = tx.prepare(query)?;
                     let mut rows = if let Some(l) = limit {
@@ -81,13 +88,6 @@ pub fn handle_op(conn: &mut Connection, op: SyncDbOp) {
                             flag: row.get(2)?,
                             selected: row.get(3)?,
                         });
-                    }
-                }
-
-                if !results.is_empty() {
-                    let mut stmt = tx.prepare("UPDATE syncStatus SET selected = 1 WHERE articleID = ? AND key = ?")?;
-                    for s in &results {
-                        stmt.execute(rusqlite::params![s.article_id, s.key])?;
                     }
                 }
                 tx.commit()?;
