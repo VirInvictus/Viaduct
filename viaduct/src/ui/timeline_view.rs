@@ -171,6 +171,10 @@ impl TimelineView {
                 let Some(view) = weak_inner.upgrade() else {
                     return;
                 };
+                // The _once source auto-removes after firing; drop our stored
+                // handle so the next keystroke doesn't .remove() a dead id
+                // (a GLib CRITICAL, fatal under G_DEBUG=fatal-criticals).
+                *view.imp().search_timeout.borrow_mut() = None;
                 if query.trim().is_empty() {
                     // Clearing the search reverts the timeline to
                     // whatever the sidebar selection currently shows;
@@ -252,6 +256,7 @@ impl TimelineView {
         let store = self.store();
         let n_existing = store.n_items();
         let nodes: Vec<ArticleNode> = articles.into_iter().map(ArticleNode::new).collect();
+        self.set_empty_state(false);
         store.splice(0, n_existing, &nodes);
     }
 
@@ -260,6 +265,9 @@ impl TimelineView {
     pub fn populate_with_snippets(&self, results: Vec<(crate::models::Article, String)>) {
         let store = self.store();
         let n_existing = store.n_items();
+        // A search that matched nothing should explain itself, not fall back
+        // to the generic "select a feed" empty state.
+        self.set_empty_state(results.is_empty());
         let nodes: Vec<ArticleNode> = results
             .into_iter()
             .map(|(article, snippet)| ArticleNode::with_snippet(article, snippet))
@@ -268,10 +276,28 @@ impl TimelineView {
     }
 
     pub fn clear(&self) {
+        self.set_empty_state(false);
         let store = self.store();
         let n = store.n_items();
         if n > 0 {
             store.splice(0, n, &[] as &[ArticleNode]);
+        }
+    }
+
+    /// Swap the empty-state status page between the default "no feed selected"
+    /// copy and the "search returned nothing" copy.
+    fn set_empty_state(&self, no_search_results: bool) {
+        let status = self.imp().timeline_empty_status.get();
+        if no_search_results {
+            status.set_icon_name(Some("system-search-symbolic"));
+            status.set_title("No results");
+            status.set_description(Some("No articles match your search."));
+        } else {
+            status.set_icon_name(Some("document-open-recent-symbolic"));
+            status.set_title("No articles");
+            status.set_description(Some(
+                "Select a feed in the sidebar to view its articles, or hit Refresh to fetch new ones.",
+            ));
         }
     }
 

@@ -367,6 +367,15 @@ pub fn setup_sidebar_list_view(
         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         label.set_valign(gtk::Align::Center);
 
+        // Feed-health indicator: shown only when a feed's last refresh
+        // returned an HTTP error status (see apply_feed_warning). Hidden by
+        // default and for every non-feed row.
+        let warning_icon = gtk::Image::new();
+        warning_icon.set_icon_name(Some("dialog-warning-symbolic"));
+        warning_icon.set_pixel_size(16);
+        warning_icon.set_valign(gtk::Align::Center);
+        warning_icon.set_visible(false);
+
         let badge = gtk::Label::new(None);
         badge.add_css_class("numeric");
         // Custom class flagged via apply_sidebar_styling — pill-shaped
@@ -377,6 +386,7 @@ pub fn setup_sidebar_list_view(
 
         box_widget.append(&icon_stack);
         box_widget.append(&label);
+        box_widget.append(&warning_icon);
         box_widget.append(&badge);
 
         expander.set_child(Some(&box_widget));
@@ -416,10 +426,15 @@ pub fn setup_sidebar_list_view(
             .next_sibling()
             .and_downcast::<gtk::Label>()
             .unwrap();
-        let badge = label.next_sibling().and_downcast::<gtk::Label>().unwrap();
+        let warning_icon = label.next_sibling().and_downcast::<gtk::Image>().unwrap();
+        let badge = warning_icon
+            .next_sibling()
+            .and_downcast::<gtk::Label>()
+            .unwrap();
 
-        // Reset avatar state so reused rows don't bleed favicons across feeds.
+        // Reset transient row state so reused rows don't bleed across feeds.
         avatar.set_custom_image(None::<&gtk::gdk::Paintable>);
+        warning_icon.set_visible(false);
 
         // Extract domain data to bind
         let rep_obj = node.represented_object();
@@ -483,13 +498,16 @@ pub fn setup_sidebar_list_view(
                         // ColorHash(feed.url) for our purposes.
                         avatar.set_text(Some(name));
                         avatar.set_show_initials(true);
+                        // Stamp the unique feed id for the favicon stale-row
+                        // guard; the display name collides for same-named feeds.
+                        avatar.set_widget_name(&feed.id);
                         icon_stack.set_visible_child_name("avatar");
                         spawn_favicon_fetch(
                             account.clone(),
                             image_cache.clone(),
                             feed.id.clone(),
-                            name.to_string(),
                             avatar.clone(),
+                            warning_icon.clone(),
                         );
                     }
                 }
@@ -552,23 +570,41 @@ fn apply_unread_badge(badge: &gtk::Label, count: u32) {
     }
 }
 
+/// Show the feed-health warning when the last refresh returned an HTTP error
+/// status (>= 400). A 304/200, a None (never refreshed), or a network error
+/// that left the prior 2xx untouched all read as healthy. Network failures
+/// aren't flagged here because we don't persist a distinct error state for
+/// them yet.
+fn apply_feed_warning(icon: &gtk::Image, last_response_code: Option<i64>) {
+    match last_response_code {
+        Some(code) if code >= 400 => {
+            icon.set_tooltip_text(Some(&format!("Last refresh failed: HTTP {code}")));
+            icon.set_visible(true);
+        }
+        _ => {
+            icon.set_tooltip_text(None);
+            icon.set_visible(false);
+        }
+    }
+}
+
 /// Async-fetch the favicon for a feed and apply it to the row's avatar.
 ///
 /// The flow is settings DB → favicon URL → ImageCache (in-memory → disk → net) →
 /// `gdk::Texture::from_bytes` → `adw::Avatar::set_custom_image`. Stale-row guard:
 /// the row factory recycles widgets as the user scrolls, so by the time the bytes
 /// arrive the row may have been re-bound to a different feed. We compare the
-/// avatar's currently-displayed text to the name we kicked off with and bail if
-/// it changed.
+/// avatar's stamped feed id (`widget_name`) to the id we kicked off with and
+/// bail if it changed.
 fn spawn_favicon_fetch(
     account: Arc<Account>,
     image_cache: Arc<ImageCache>,
     feed_id: String,
-    expected_name: String,
     avatar: adw::Avatar,
+    warning_icon: gtk::Image,
 ) {
     glib::spawn_future_local(async move {
-        let settings = match account.fetch_feed_settings(feed_id).await {
+        let settings = match account.fetch_feed_settings(feed_id.clone()).await {
             Ok(Some(s)) => s,
             Ok(None) => return,
             Err(e) => {
@@ -576,6 +612,11 @@ fn spawn_favicon_fetch(
                 return;
             }
         };
+        // Feed-health indicator rides the same settings fetch the favicon
+        // needs. Stale-row guard: the avatar carries the feed id (see bind).
+        if avatar.widget_name().as_str() == feed_id.as_str() {
+            apply_feed_warning(&warning_icon, settings.last_response_code);
+        }
         let Some(favicon_url) = settings.favicon_url.or(settings.icon_url) else {
             return;
         };
@@ -583,7 +624,7 @@ fn spawn_favicon_fetch(
             return;
         };
         // Stale-row guard.
-        if avatar.text().as_deref() != Some(expected_name.as_str()) {
+        if avatar.widget_name().as_str() != feed_id.as_str() {
             return;
         }
         let glib_bytes = glib::Bytes::from(&bytes);

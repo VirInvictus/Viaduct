@@ -16,13 +16,13 @@ Licensed under the MIT License. See LICENSE in the project root for details.
             <property name="title" translatable="yes">Navigation</property>
             <child>
               <object class="GtkShortcutsShortcut">
-                <property name="title" translatable="yes">Scroll or Go to Next Unread</property>
+                <property name="title" translatable="yes">Scroll Article Down</property>
                 <property name="accelerator">space</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
-                <property name="title" translatable="yes">Scroll Up</property>
+                <property name="title" translatable="yes">Scroll Article Up</property>
                 <property name="accelerator">&lt;Shift&gt;space</property>
               </object>
             </child>
@@ -114,11 +114,23 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                 <property name="accelerator">Escape</property>
               </object>
             </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title" translatable="yes">Print Article</property>
+                <property name="accelerator">&lt;Ctrl&gt;p</property>
+              </object>
+            </child>
           </object>
         </child>
         <child>
           <object class="GtkShortcutsGroup">
             <property name="title" translatable="yes">Application</property>
+            <child>
+              <object class="GtkShortcutsShortcut">
+                <property name="title" translatable="yes">Add Feed</property>
+                <property name="accelerator">&lt;Ctrl&gt;n</property>
+              </object>
+            </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="title" translatable="yes">Refresh Feeds</property>

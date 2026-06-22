@@ -27,6 +27,9 @@
                 <property name="icon-name">view-sort-descending-symbolic</property>
                 <property name="tooltip-text">Sort articles</property>
                 <property name="menu-model">sort_menu</property>
+                <accessibility>
+                  <property name="label">Sort articles</property>
+                </accessibility>
               </object>
             </child>
           </object>

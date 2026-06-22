@@ -362,13 +362,26 @@ pub fn setup_timeline_list_view(
             }
         }
 
-        // Re-style the title whenever the node's read flag flips. Stored on
-        // the list_item so connect_unbind can disconnect cleanly when the
-        // row recycles to a different node.
+        // Re-style the row whenever the node's read flag flips (e.g. auto-mark
+        // on selection, with no rebind). Both the title and the rest of the row
+        // (feed name / preview / date dimming) must update, mirroring bind.
+        // Stored on the list_item so connect_unbind can disconnect cleanly when
+        // the row recycles to a different node.
         let title_for_notify = title_label.downgrade();
+        let feed_name_for_notify = feed_name_label.downgrade();
+        let preview_for_notify = preview_label.downgrade();
+        let date_for_notify = date_label.downgrade();
         let id = node.connect_notify_local(Some("read"), move |node, _| {
+            let read = node.read();
             if let Some(label) = title_for_notify.upgrade() {
-                apply_read_styling(&label, node.read());
+                apply_read_styling(&label, read);
+            }
+            if let (Some(feed_name), Some(preview), Some(date)) = (
+                feed_name_for_notify.upgrade(),
+                preview_for_notify.upgrade(),
+                date_for_notify.upgrade(),
+            ) {
+                apply_row_read_styling(&feed_name, &preview, &date, read);
             }
         });
         unsafe {

@@ -282,6 +282,7 @@ fn parse_rss_in_json(root: &Value, feed_url: &str) -> Result<ParsedFeed> {
         let mut unique_id = item
             .get("guid")
             .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
         if unique_id.is_none() {
             let mut s = String::new();

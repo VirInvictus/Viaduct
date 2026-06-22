@@ -192,6 +192,8 @@ mod imp {
         #[template_child]
         pub article_stack: TemplateChild<gtk::Stack>,
         #[template_child]
+        pub article_title: TemplateChild<adw::WindowTitle>,
+        #[template_child]
         pub reader_btn: TemplateChild<gtk::ToggleButton>,
         #[template_child]
         pub play_video_btn: TemplateChild<gtk::Button>,
@@ -341,6 +343,19 @@ impl ArticlePaneView {
             state.feed_link_title = ctx.feed_link_title;
             state.date_published = ctx.date_published;
         }
+        // Keep the header bar oriented: article title up top, feed name as
+        // subtitle. Fall back to the feed name as the title for the rare
+        // titleless item so the bar is never blank.
+        {
+            let state = imp.display.borrow();
+            if state.title.is_empty() {
+                imp.article_title.set_title(&state.feed_link_title);
+                imp.article_title.set_subtitle("");
+            } else {
+                imp.article_title.set_title(&state.title);
+                imp.article_title.set_subtitle(&state.feed_link_title);
+            }
+        }
         // Untoggle reader without re-firing its handler — the async
         // auto_reader resolution below will set it true if appropriate.
         imp.reader_btn.set_active(false);
@@ -395,6 +410,8 @@ impl ArticlePaneView {
         imp.display.replace(ArticleDisplayState::default());
         *imp.current_video.borrow_mut() = None;
         imp.play_video_btn.set_visible(false);
+        imp.article_title.set_title("");
+        imp.article_title.set_subtitle("");
     }
 
     /// Drop the article body and idle the WebProcess. Called from

@@ -33,10 +33,18 @@
       <object class="AdwToolbarView">
         <child type="top">
           <object class="AdwHeaderBar">
+            <property name="title-widget">
+              <object class="AdwWindowTitle" id="article_title">
+                <property name="title"></property>
+              </object>
+            </property>
             <child type="end">
               <object class="GtkMenuButton" id="appearance_btn">
                 <property name="icon-name">font-x-generic-symbolic</property>
                 <property name="tooltip-text">Article appearance</property>
+                <accessibility>
+                  <property name="label">Article appearance</property>
+                </accessibility>
               </object>
             </child>
             <child type="end">
@@ -44,12 +52,18 @@
                 <property name="icon-name">send-to-symbolic</property>
                 <property name="tooltip-text">Send to…</property>
                 <property name="menu-model">share_menu</property>
+                <accessibility>
+                  <property name="label">Send to</property>
+                </accessibility>
               </object>
             </child>
             <child type="end">
               <object class="GtkToggleButton" id="reader_btn">
                 <property name="icon-name">format-justify-fill-symbolic</property>
                 <property name="tooltip-text">Reader View</property>
+                <accessibility>
+                  <property name="label">Reader View</property>
+                </accessibility>
               </object>
             </child>
             <child type="end">
@@ -57,6 +71,9 @@
                 <property name="icon-name">media-playback-start-symbolic</property>
                 <property name="tooltip-text">Play video</property>
                 <property name="visible">False</property>
+                <accessibility>
+                  <property name="label">Play video</property>
+                </accessibility>
                 <style>
                   <class name="suggested-action"/>
                 </style>

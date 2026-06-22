@@ -57,12 +57,18 @@
               <object class="GtkButton" id="mark_all_read_btn">
                 <property name="icon-name">checkbox-checked-symbolic</property>
                 <property name="tooltip-text">Mark all as read</property>
+                <accessibility>
+                  <property name="label">Mark all as read</property>
+                </accessibility>
               </object>
             </child>
             <child type="start">
               <object class="GtkButton" id="sync_btn">
                 <property name="tooltip-text">Sync Now</property>
                 <property name="action-name">win.refresh</property>
+                <accessibility>
+                  <property name="label">Sync now</property>
+                </accessibility>
                 <property name="child">
                   <object class="GtkStack" id="sync_btn_stack">
                     <property name="transition-type">crossfade</property>
@@ -97,12 +103,18 @@
               <object class="GtkToggleButton" id="search_btn">
                 <property name="icon-name">system-search-symbolic</property>
                 <property name="tooltip-text">Search articles</property>
+                <accessibility>
+                  <property name="label">Search articles</property>
+                </accessibility>
               </object>
             </child>
             <child type="end">
               <object class="GtkMenuButton" id="menu_btn">
                 <property name="icon-name">open-menu-symbolic</property>
                 <property name="menu-model">primary_menu</property>
+                <accessibility>
+                  <property name="label">Main menu</property>
+                </accessibility>
               </object>
             </child>
           </object>
