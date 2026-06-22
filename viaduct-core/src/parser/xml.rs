@@ -10,72 +10,34 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use std::str;
 
-/// Build an `Attachment` from an RSS `<enclosure>` element's attributes.
-/// NNW's `RSSDelegate.handleEnclosure`: requires non-empty `url`, parses
-/// optional `length` and `type`. Returns `None` when there's no usable URL.
-fn enclosure_from_attrs(e: &quick_xml::events::BytesStart) -> Option<Attachment> {
-    let mut url: Option<String> = None;
-    let mut mime_type: Option<String> = None;
-    let mut size: Option<i64> = None;
-    for attr in e.attributes().filter_map(|a| a.ok()) {
-        match attr.key.as_ref() {
-            b"url" => {
-                url = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
-            }
-            b"type" => {
-                mime_type = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
-            }
-            b"length" => {
-                size = str::from_utf8(attr.value.as_ref())
-                    .ok()
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .filter(|n| *n > 0);
-            }
-            _ => {}
-        }
-    }
-    let url = url?;
-    if url.is_empty() {
-        return None;
-    }
-    Some(Attachment {
-        url,
-        mime_type,
-        title: None,
-        size_in_bytes: size,
-        duration_in_seconds: None,
-    })
-}
-
-/// MRSS `<media:content>` / `<media:thumbnail>`. Reads `url`, optional
-/// `type`, `fileSize`, `duration`. quick-xml strips the `media:` prefix on
-/// `local_name`, so callers must already have confirmed the element name.
-fn media_attachment_from_attrs(e: &quick_xml::events::BytesStart) -> Option<Attachment> {
+/// Build an `Attachment` from an element's attributes. Requires a non-empty
+/// `url`; reads optional `type`, an integer size under `size_key` (`length`
+/// for RSS `<enclosure>` per NNW `RSSDelegate.handleEnclosure`, `fileSize` for
+/// MRSS `<media:content>` / `<media:thumbnail>`), and the optional MRSS
+/// `duration` (absent on enclosures, so harmless there). quick-xml strips
+/// namespace prefixes on `local_name`, so callers must already have confirmed
+/// the element name.
+fn attachment_from_attrs(e: &quick_xml::events::BytesStart, size_key: &[u8]) -> Option<Attachment> {
     let mut url: Option<String> = None;
     let mut mime_type: Option<String> = None;
     let mut size: Option<i64> = None;
     let mut duration: Option<i64> = None;
     for attr in e.attributes().filter_map(|a| a.ok()) {
-        match attr.key.as_ref() {
-            b"url" => {
-                url = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
-            }
-            b"type" => {
-                mime_type = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
-            }
-            b"fileSize" => {
-                size = str::from_utf8(attr.value.as_ref())
-                    .ok()
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .filter(|n| *n > 0);
-            }
-            b"duration" => {
-                duration = str::from_utf8(attr.value.as_ref())
-                    .ok()
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .filter(|n| *n > 0);
-            }
-            _ => {}
+        let key = attr.key.as_ref();
+        if key == b"url" {
+            url = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
+        } else if key == b"type" {
+            mime_type = str::from_utf8(attr.value.as_ref()).ok().map(String::from);
+        } else if key == size_key {
+            size = str::from_utf8(attr.value.as_ref())
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+                .filter(|n| *n > 0);
+        } else if key == b"duration" {
+            duration = str::from_utf8(attr.value.as_ref())
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+                .filter(|n| *n > 0);
         }
     }
     let url = url?;
@@ -432,7 +394,7 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 } else if !in_item && name_ref == b"image" {
                     in_channel_image = true;
                 } else if in_item && name_ref == b"enclosure" {
-                    if let Some(att) = enclosure_from_attrs(e) {
+                    if let Some(att) = attachment_from_attrs(e, b"length") {
                         current_item_attachments.push(att);
                     }
                 } else if in_item && (name_ref == b"content" || name_ref == b"thumbnail") {
@@ -443,7 +405,7 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                     if e.attributes()
                         .filter_map(|a| a.ok())
                         .any(|a| a.key.as_ref() == b"url")
-                        && let Some(att) = media_attachment_from_attrs(e)
+                        && let Some(att) = attachment_from_attrs(e, b"fileSize")
                     {
                         current_item_attachments.push(att);
                     }
@@ -475,7 +437,7 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 let name = e.local_name();
                 let name_ref = name.as_ref();
                 if in_item && name_ref == b"enclosure" {
-                    if let Some(att) = enclosure_from_attrs(e) {
+                    if let Some(att) = attachment_from_attrs(e, b"length") {
                         current_item_attachments.push(att);
                     }
                 } else if in_item
@@ -483,7 +445,7 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                     && e.attributes()
                         .filter_map(|a| a.ok())
                         .any(|a| a.key.as_ref() == b"url")
-                    && let Some(att) = media_attachment_from_attrs(e)
+                    && let Some(att) = attachment_from_attrs(e, b"fileSize")
                 {
                     current_item_attachments.push(att);
                 }

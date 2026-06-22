@@ -356,19 +356,19 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchUnreadArticleIds(tx) => {
-            let res = fetch_unread_article_ids(conn);
+            let res = fetch_status_ids(conn, "read = 0");
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchStarredArticleIds(tx) => {
-            let res = fetch_starred_article_ids(conn);
+            let res = fetch_status_ids(conn, "starred = 1");
             let _ = tx.send(res);
         }
         ArticlesDbOp::UpdateStatusesRead(ids, read, tx) => {
-            let res = update_statuses_read(conn, &ids, read);
+            let res = update_statuses_column(conn, &ids, "read", read);
             let _ = tx.send(res);
         }
         ArticlesDbOp::UpdateStatusesStarred(ids, starred, tx) => {
-            let res = update_statuses_starred(conn, &ids, starred);
+            let res = update_statuses_column(conn, &ids, "starred", starred);
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchMissingArticleIds(tx) => {
@@ -671,8 +671,12 @@ fn fetch_starred(conn: &mut Connection, sort: SortOrder) -> Result<Vec<Article>>
     Ok(articles)
 }
 
-fn fetch_unread_article_ids(conn: &mut Connection) -> Result<HashSet<String>> {
-    let mut stmt = conn.prepare("SELECT article_id FROM statuses WHERE read = 0")?;
+/// Collect every `article_id` whose status row matches `where_clause`.
+/// `where_clause` is a fixed internal literal (`"read = 0"` / `"starred = 1"`),
+/// never caller/feed input, so there is no injection surface.
+fn fetch_status_ids(conn: &mut Connection, where_clause: &str) -> Result<HashSet<String>> {
+    let sql = format!("SELECT article_id FROM statuses WHERE {}", where_clause);
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| row.get(0))?;
     let mut ids = HashSet::new();
     for row in rows {
@@ -681,17 +685,15 @@ fn fetch_unread_article_ids(conn: &mut Connection) -> Result<HashSet<String>> {
     Ok(ids)
 }
 
-fn fetch_starred_article_ids(conn: &mut Connection) -> Result<HashSet<String>> {
-    let mut stmt = conn.prepare("SELECT article_id FROM statuses WHERE starred = 1")?;
-    let rows = stmt.query_map([], |row| row.get(0))?;
-    let mut ids = HashSet::new();
-    for row in rows {
-        ids.insert(row?);
-    }
-    Ok(ids)
-}
-
-fn update_statuses_read(conn: &mut Connection, ids: &[String], read: bool) -> Result<()> {
+/// Set a boolean status `column` (`"read"` / `"starred"` — fixed internal
+/// literals, no injection surface) on every id, chunked under SQLite's
+/// parameter limit.
+fn update_statuses_column(
+    conn: &mut Connection,
+    ids: &[String],
+    column: &str,
+    value: bool,
+) -> Result<()> {
     if ids.is_empty() {
         return Ok(());
     }
@@ -699,32 +701,10 @@ fn update_statuses_read(conn: &mut Connection, ids: &[String], read: bool) -> Re
     for chunk in ids.chunks(CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(", ");
         let sql = format!(
-            "UPDATE statuses SET read = ? WHERE article_id IN ({})",
-            placeholders
+            "UPDATE statuses SET {} = ? WHERE article_id IN ({})",
+            column, placeholders
         );
-        let mut params = vec![rusqlite::types::Value::from(if read { 1i64 } else { 0i64 })];
-        params.extend(
-            chunk
-                .iter()
-                .map(|s| rusqlite::types::Value::from(s.clone())),
-        );
-        conn.execute(&sql, rusqlite::params_from_iter(params))?;
-    }
-    Ok(())
-}
-
-fn update_statuses_starred(conn: &mut Connection, ids: &[String], starred: bool) -> Result<()> {
-    if ids.is_empty() {
-        return Ok(());
-    }
-    const CHUNK: usize = 500;
-    for chunk in ids.chunks(CHUNK) {
-        let placeholders = vec!["?"; chunk.len()].join(", ");
-        let sql = format!(
-            "UPDATE statuses SET starred = ? WHERE article_id IN ({})",
-            placeholders
-        );
-        let mut params = vec![rusqlite::types::Value::from(if starred {
+        let mut params = vec![rusqlite::types::Value::from(if value {
             1i64
         } else {
             0i64

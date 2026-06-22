@@ -642,17 +642,11 @@ impl ViaductWindow {
         // Timeline selection → article render.
         let window_weak_for_article = self.downgrade();
         let account_for_article = self.account();
-        timeline_selection.connect_selection_changed(move |sel, _pos, _n| {
+        timeline_selection.connect_selection_changed(move |_sel, _pos, _n| {
             let Some(window) = window_weak_for_article.upgrade() else {
                 return;
             };
-            let Some(item) = sel.selected_item() else {
-                return;
-            };
-            let Some(node) = item.downcast_ref::<ArticleNode>() else {
-                return;
-            };
-            let Some(article) = node.article() else {
+            let Some((node, article)) = window.selected_article() else {
                 return;
             };
             let external = article.external_url.clone().or(article.url.clone());
@@ -745,17 +739,7 @@ impl ViaductWindow {
                     starred: node.is_starred(),
                     date_arrived: chrono::Utc::now(),
                 };
-                let account = account_for_article.clone();
-                let window_for_count = window.downgrade();
-                glib::spawn_future_local(async move {
-                    if let Err(e) = account.upsert_statuses(vec![status]).await {
-                        tracing::warn!(?e, "auto-mark-read upsert failed");
-                        return;
-                    }
-                    if let Some(window) = window_for_count.upgrade() {
-                        window.refresh_unread_counts();
-                    }
-                });
+                window.upsert_and_refresh(vec![status], "auto-mark-read upsert failed");
             }
 
             // Async-resolve the feed's readerViewAlwaysEnabled preference
@@ -1025,23 +1009,25 @@ impl ViaductWindow {
         self.mark_read_in_range(cur + 1, None);
     }
 
+    /// The currently-selected timeline article, decoded from the selection.
+    /// `None` when nothing is selected or the selected row isn't an article.
+    fn selected_article(&self) -> Option<(ArticleNode, crate::models::Article)> {
+        let item = self.imp().timeline_view.get().selection().selected_item()?;
+        let node = item.downcast_ref::<ArticleNode>()?;
+        let article = node.article()?;
+        Some((node.clone(), article))
+    }
+
     /// Applies a per-status change to the currently-selected article, both
     /// locally (on the ArticleNode for immediate UI response) and in the DB.
     fn apply_status_to_current<F>(&self, change: F)
     where
         F: FnOnce(&ArticleNode) -> (bool, bool),
     {
-        let selection = self.imp().timeline_view.get().selection();
-        let Some(item) = selection.selected_item() else {
+        let Some((node, article)) = self.selected_article() else {
             return;
         };
-        let Some(node) = item.downcast_ref::<ArticleNode>() else {
-            return;
-        };
-        let Some(article) = node.article() else {
-            return;
-        };
-        let (read, starred) = change(node);
+        let (read, starred) = change(&node);
         node.set_status(read, starred);
         let status = crate::models::ArticleStatus {
             article_id: article.article_id,
@@ -1049,11 +1035,21 @@ impl ViaductWindow {
             starred,
             date_arrived: chrono::Utc::now(),
         };
+        self.upsert_and_refresh(vec![status], "status upsert failed");
+    }
+
+    /// Persist `statuses` through the single-writer DB, then refresh the
+    /// sidebar's unread counts on success. `context` labels the failure log.
+    fn upsert_and_refresh(
+        &self,
+        statuses: Vec<crate::models::ArticleStatus>,
+        context: &'static str,
+    ) {
         let account = self.account();
         let window_weak = self.downgrade();
         glib::spawn_future_local(async move {
-            if let Err(e) = account.upsert_statuses(vec![status]).await {
-                tracing::warn!(?e, "status upsert failed");
+            if let Err(e) = account.upsert_statuses(statuses).await {
+                tracing::warn!(?e, "{context}");
                 return;
             }
             if let Some(window) = window_weak.upgrade() {
@@ -1093,27 +1089,10 @@ impl ViaductWindow {
         if statuses.is_empty() {
             return;
         }
-        let account = self.account();
-        let window_weak = self.downgrade();
-        glib::spawn_future_local(async move {
-            if let Err(e) = account.upsert_statuses(statuses).await {
-                tracing::warn!(?e, "bulk read upsert failed");
-                return;
-            }
-            if let Some(window) = window_weak.upgrade() {
-                window.refresh_unread_counts();
-            }
-        });
+        self.upsert_and_refresh(statuses, "bulk read upsert failed");
     }
     pub(crate) fn act_open_in_browser(&self) {
-        let selection = self.imp().timeline_view.get().selection();
-        let Some(item) = selection.selected_item() else {
-            return;
-        };
-        let Some(node) = item.downcast_ref::<ArticleNode>() else {
-            return;
-        };
-        let Some(article) = node.article() else {
+        let Some((_, article)) = self.selected_article() else {
             return;
         };
         // NNW's preferredLink prefers externalURL (original author's URL)
@@ -1130,14 +1109,7 @@ impl ViaductWindow {
     /// confirmation so the user knows it worked. Same NNW preferredLink
     /// fallback (`external_url` → `url`) as `act_open_in_browser`.
     pub(crate) fn act_copy_url(&self) {
-        let selection = self.imp().timeline_view.get().selection();
-        let Some(item) = selection.selected_item() else {
-            return;
-        };
-        let Some(node) = item.downcast_ref::<ArticleNode>() else {
-            return;
-        };
-        let Some(article) = node.article() else {
+        let Some((_, article)) = self.selected_article() else {
             return;
         };
         let Some(url) = article.external_url.or(article.url) else {
@@ -1236,10 +1208,7 @@ impl ViaductWindow {
     }
 
     fn current_article_title_and_url(&self) -> Option<(String, String)> {
-        let selection = self.imp().timeline_view.get().selection();
-        let item = selection.selected_item()?;
-        let node = item.downcast_ref::<ArticleNode>()?;
-        let article = node.article()?;
+        let (_, article) = self.selected_article()?;
         let url = article.external_url.clone().or(article.url.clone())?;
         let title = article.title.clone().unwrap_or_default();
         Some((title, url))
@@ -1857,14 +1826,7 @@ impl ViaductWindow {
     }
 
     pub(crate) fn act_open_enclosure(&self) {
-        let selection = self.imp().timeline_view.get().selection();
-        let Some(item) = selection.selected_item() else {
-            return;
-        };
-        let Some(node) = item.downcast_ref::<ArticleNode>() else {
-            return;
-        };
-        let Some(article) = node.article() else {
+        let Some((_, article)) = self.selected_article() else {
             return;
         };
         // First-attachment-only by design (see Phase 11 plan). Multi-
