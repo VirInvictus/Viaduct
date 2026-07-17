@@ -62,6 +62,7 @@ mod imp {
                 .css_classes(["title-2"])
                 .justify(gtk::Justification::Center)
                 .wrap(true)
+                .max_width_chars(30)
                 .build();
             outer.append(&title);
 
