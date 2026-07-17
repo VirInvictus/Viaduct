@@ -264,11 +264,12 @@ fn build_ui(app: &gtk::Application, account: Arc<Account>) {
         return;
     }
 
-    // Phase 20b: resolve dark/light from the settings portal ourselves.
-    // First, because everything below reads `theme::is_dark()`. libadwaita
-    // still styles the widgets until the toolkit cut; both read the same
-    // portal and fold the same preference, so they agree in the meantime.
+    // Phase 20b: resolve dark/light from the settings portal ourselves,
+    // first, because everything below reads `theme::is_dark()`.
     viaduct::theme::init(viaduct::preferences::settings());
+    // Phase 20d: install the owned Kanagawa stylesheet at USER+1 (beating any
+    // system gtk.css), and keep it following dark/light flips.
+    viaduct::theme::install_stylesheet();
 
     if let Some(settings) = viaduct::preferences::settings() {
         viaduct::preferences::apply_color_scheme(&settings);
@@ -277,58 +278,11 @@ fn build_ui(app: &gtk::Application, account: Arc<Account>) {
         // accent so the whole window visually echoes the reading pane.
         viaduct::preferences::apply_article_theme_accent(&settings);
     }
-    apply_sidebar_styling();
+    // Phase 20d: the sidebar/timeline refinement classes (viaduct-sidebar-
+    // heading, viaduct-unread-badge, viaduct-row-read, viaduct-timeline-thumb)
+    // moved into the owned Kanagawa stylesheet (theme.rs). The old
+    // `apply_sidebar_styling` provider referenced `@accent_fg_color`, a dead
+    // libadwaita colour, and sat below the owned sheet's priority anyway.
     let window = ui::window::ViaductWindow::new(app, account);
     window.present();
-}
-
-/// One-time CSS provider for sidebar + timeline refinements (v1.2.0
-/// pre3 + pre4). Pill-shaped unread badges, bolder section headers for
-/// the SmartFeedGroup row, dimmed-row treatment for read articles in
-/// the timeline. Lives at APPLICATION priority so the accent provider
-/// (USER+100) still wins for accent-coloured surfaces.
-fn apply_sidebar_styling() {
-    let Some(display) = gtk::gdk::Display::default() else {
-        return;
-    };
-    let css = "\
-.viaduct-sidebar-heading {\n\
-    font-weight: 700;\n\
-    font-size: 0.78em;\n\
-    letter-spacing: 0.07em;\n\
-    text-transform: uppercase;\n\
-    opacity: 0.65;\n\
-}\n\
-.viaduct-unread-badge {\n\
-    font-size: 0.82em;\n\
-    font-weight: 600;\n\
-    padding: 1px 8px;\n\
-    border-radius: 9999px;\n\
-    background-color: alpha(currentColor, 0.10);\n\
-    min-width: 18px;\n\
-}\n\
-listview > row:selected .viaduct-unread-badge {\n\
-    background-color: alpha(@accent_fg_color, 0.20);\n\
-}\n\
-/* Timeline rows: support labels dim slightly more on read items so\n\
- * the eye reads the row state at a glance, beyond the title alone. */\n\
-.viaduct-row-read {\n\
-    opacity: 0.55;\n\
-}\n\
-/* Video thumbnails get rounded corners and a subtle border so they\n\
- * read as inline media without dominating the row. */\n\
-.viaduct-timeline-thumb {\n\
-    border-radius: 6px;\n\
-    background-color: alpha(currentColor, 0.05);\n\
-}\n\
-";
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(css);
-    gtk::style_context_add_provider_for_display(
-        &display,
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-    // Leak — process-wide static CSS, no swap needed.
-    Box::leak(Box::new(provider));
 }

@@ -310,7 +310,7 @@ If a future v2.x adds something that pushes peak past 600 MB on the realistic 30
 
 ## 12. Design System: post-libadwaita (Phase 20 target)
 
-**Status: implemented in v3.0.0 (libadwaita dropped).** §2.3s widget tree and §7s dependency list below still describe the pre-3.0 adwaita app and are stale pending a rewrite; this section is the current contract. The owned stylesheet (§12.4) is the remaining piece. Colophon's Phase 6 is the pilot and its patterns are the default; every divergence below is deliberate and reasoned.
+**Status: implemented in v3.0.0 (libadwaita dropped); owned stylesheet first cut landed.** §2.3's widget tree and §7's dependency list below still describe the pre-3.0 adwaita app and are stale pending a rewrite; this section is the current contract. Colophon's Phase 6 is the pilot and its patterns are the default; every divergence below is deliberate and reasoned.
 
 ### 12.1 Toolkit stance
 
