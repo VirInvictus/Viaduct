@@ -1025,10 +1025,11 @@ pub fn render_themed(
     // applies them via `font-size: calc(1em * var(--article-font-scale))`
     // and `line-height: var(--article-line-height)` so theme rules
     // expressed in `em` / `rem` scale proportionally.
-    let effective_accent = theme
-        .accent_hex
-        .map(|s| s.to_string())
-        .or_else(system_accent_hex);
+    // Phase 20c: no libadwaita system accent to fall back on. A theme with
+    // `accent_hex: None` (Adwaita) now contributes no accent override; the
+    // theme's own stylesheet colours apply. The Adwaita-theme accent is a
+    // 20d decision (spec.md §12.3).
+    let effective_accent = theme.accent_hex.map(|s| s.to_string());
     let (font_scale, line_height, reading_font, mono_font) = match crate::preferences::settings() {
         Some(s) => (
             crate::preferences::article_font_scale(&s),
@@ -1114,24 +1115,6 @@ pub fn render_themed(
 #[allow(dead_code)]
 pub fn render(view: &webkit6::WebView, html: &str, base_uri: Option<&str>) {
     view.load_html(html, base_uri);
-}
-
-/// v2.0.0-pre6: read the libadwaita system accent and format it as a
-/// `#RRGGBB` hex string suitable for a CSS custom property. Returns
-/// `None` when the running libadwaita doesn't expose accent colors
-/// (pre-1.6 builds — `to_standalone_rgba` was added in 1.6 and the
-/// system-accent integration in GNOME 47+). Used by `render_themed`
-/// to fall back to the system accent when the active theme has
-/// `accent_hex: None` (Adwaita).
-fn system_accent_hex() -> Option<String> {
-    let manager = adw::StyleManager::default();
-    let accent = manager.accent_color();
-    let is_dark = manager.is_dark();
-    let rgba = accent.to_standalone_rgba(is_dark);
-    let r = (rgba.red() * 255.0).clamp(0.0, 255.0) as u8;
-    let g = (rgba.green() * 255.0).clamp(0.0, 255.0) as u8;
-    let b = (rgba.blue() * 255.0).clamp(0.0, 255.0) as u8;
-    Some(format!("#{:02X}{:02X}{:02X}", r, g, b))
 }
 
 #[cfg(test)]

@@ -11,8 +11,8 @@
 //! unchanged; the value types and the `run_refresh_with_tally` engine are free
 //! items, unit-tested at the bottom.
 
-use adw::prelude::*;
-use adw::subclass::prelude::*;
+use gtk::prelude::*;
+use gtk::subclass::prelude::*;
 use gtk::{gio, glib};
 use std::sync::Arc;
 

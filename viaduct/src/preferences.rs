@@ -10,9 +10,9 @@
 //! is dconf (gsettings backend) — sandbox-friendly under Flatpak via
 //! `org.freedesktop.portal.Settings`.
 
-use adw::prelude::*;
 use gtk::gio;
 use gtk::glib;
+use gtk::prelude::*;
 
 pub const SCHEMA_ID: &str = "org.virinvictus.Viaduct";
 
@@ -61,21 +61,29 @@ pub fn settings() -> Option<gio::Settings> {
     })
 }
 
-/// Apply the color-scheme preference to the global `AdwStyleManager` and
-/// keep it in sync when the user flips the dropdown later. The `settings`
-/// argument is the process-singleton `gio::Settings` from `settings()`,
-/// so signal handlers registered here outlive this call.
-pub fn apply_color_scheme(settings: &gio::Settings) {
-    let manager = adw::StyleManager::default();
-    update_style_manager(settings, &manager);
-    settings.connect_changed(
-        Some(keys::COLOR_SCHEME),
-        glib::clone!(
-            #[weak]
-            manager,
-            move |s, _| update_style_manager(s, &manager)
-        ),
-    );
+/// Drive the GTK chrome's dark/light from the resolved scheme. Phase 20c:
+/// with libadwaita gone there is no `AdwStyleManager`; `theme::is_dark()`
+/// (portal preference folded with the `color-scheme` GSetting, from 20b) is
+/// the source, and `gtk::Settings::gtk-application-prefer-dark-theme` is how
+/// plain GTK is told to render dark. `theme::init` already subscribes to
+/// both the portal and the GSetting, so this only re-applies on a resolved
+/// flip. Idempotent + safe with no display (headless dev).
+pub fn apply_color_scheme(_settings: &gio::Settings) {
+    apply_prefer_dark();
+    crate::theme::connect_dark_changed(&global_theme_owner(), |_| apply_prefer_dark());
+}
+
+fn apply_prefer_dark() {
+    if let Some(gtk_settings) = gtk::Settings::default() {
+        gtk_settings.set_gtk_application_prefer_dark_theme(crate::theme::is_dark());
+    }
+}
+
+/// A process-lifetime owner for the `theme::connect_dark_changed` listener,
+/// so it lives as long as the app rather than being pruned early. The GTK
+/// `Settings` singleton fits: it outlives every window.
+fn global_theme_owner() -> gtk::Settings {
+    gtk::Settings::default().expect("GtkSettings requires a display")
 }
 
 /// Apply typography overrides to the GTK application chrome via a
@@ -155,16 +163,6 @@ fn update_fonts(settings: &gio::Settings, provider: &gtk::CssProvider) {
 /// reading-pane font override.
 pub(crate) fn css_escape(name: &str) -> String {
     name.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn update_style_manager(settings: &gio::Settings, manager: &adw::StyleManager) {
-    let nick = settings.string(keys::COLOR_SCHEME);
-    let scheme = match nick.as_str() {
-        "force-light" => adw::ColorScheme::ForceLight,
-        "force-dark" => adw::ColorScheme::ForceDark,
-        _ => adw::ColorScheme::Default,
-    };
-    manager.set_color_scheme(scheme);
 }
 
 /// Whether desktop notifications fire after a refresh cycle delivering new

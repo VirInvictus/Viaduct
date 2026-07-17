@@ -21,8 +21,8 @@
 //! NetNewsWire counterpart: the `ArticleRenderer` class in `Mac/Article`
 //! plus the `WebViewController` it composes.
 
-use adw::subclass::prelude::*;
 use gtk::glib;
+use gtk::subclass::prelude::*;
 use std::cell::OnceCell;
 use std::sync::Arc;
 use webkit6::prelude::WebViewExt;

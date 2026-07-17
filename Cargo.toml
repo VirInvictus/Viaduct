@@ -4,7 +4,7 @@ default-members = ["viaduct"]
 resolver = "2"
 
 [workspace.package]
-version = "2.9.0"
+version = "3.0.0"
 edition = "2024"
 license = "MIT"
 authors = ["Brandon LaRocque"]
@@ -35,5 +35,4 @@ readability = "0.3.0"
 oo7 = "0.6.0"
 ashpd = "0.10"
 gtk = { version = "0.9", package = "gtk4", features = ["v4_16"] }
-adw = { version = "0.7", package = "libadwaita", features = ["v1_7"] }
 webkit6 = "0.4"

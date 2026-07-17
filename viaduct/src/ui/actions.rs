@@ -7,7 +7,7 @@
 //! Port of NNW's `Shared/Resources/GlobalKeyboardShortcuts.plist` bindings
 //! plus the Mac `MainWindowController` IBActions they drive. Every action is
 //! a `gio::SimpleAction` on the window's `"win"` group; the application
-//! installs accelerators via `adw::Application::set_accels_for_action`.
+//! installs accelerators via `gtk::Application::set_accels_for_action`.
 //!
 //! The action bodies themselves live as methods on `ViaductWindow` (see
 //! `window.rs`). This module is purely wiring.
@@ -22,7 +22,7 @@ use crate::ui::window::ViaductWindow;
 ///
 /// Must be called after `ViaductWindow::new` has constructed the widget
 /// (we store weak refs on the window inside each closure).
-pub fn install(window: &ViaductWindow, app: &adw::Application) {
+pub fn install(window: &ViaductWindow, app: &gtk::Application) {
     // Navigation
     register(window, "smart-read", |w| w.act_smart_read());
     register(window, "scroll-up", |w| w.act_scroll_up());

@@ -16,8 +16,8 @@
 //!
 //! NetNewsWire counterpart: `Mac/MainWindow/Sidebar/SidebarViewController.swift`.
 
-use adw::prelude::*;
-use adw::subclass::prelude::*;
+use gtk::prelude::*;
+use gtk::subclass::prelude::*;
 use gtk::{gio, glib};
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;

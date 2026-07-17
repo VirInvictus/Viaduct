@@ -50,11 +50,13 @@ pub mod rows;
 pub mod sidebar;
 pub mod sidebar_view;
 pub mod smart_feed_dialog;
+pub mod status_page;
 pub mod timeline;
 pub mod timeline_view;
 pub mod tree;
 pub mod welcome_dialog;
 pub mod window;
+pub mod window_title;
 
 pub fn init_ui() {
     // Phase 5: Setup AdwNavigationSplitView

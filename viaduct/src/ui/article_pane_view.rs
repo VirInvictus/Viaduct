@@ -16,8 +16,8 @@
 //! plus the `ArticleRenderer` it uses. We bundle both for now; the further
 //! `ArticleRenderer` GObject promotion is its own Phase 18 sub-step.
 
-use adw::prelude::*;
-use adw::subclass::prelude::*;
+use gtk::prelude::*;
+use gtk::subclass::prelude::*;
 use gtk::{gio, glib};
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -196,13 +196,15 @@ mod imp {
         #[template_child]
         pub article_stack: TemplateChild<gtk::Stack>,
         #[template_child]
-        pub article_title: TemplateChild<adw::WindowTitle>,
+        pub article_title: TemplateChild<crate::ui::window_title::WindowTitle>,
         #[template_child]
         pub reader_btn: TemplateChild<gtk::ToggleButton>,
         #[template_child]
         pub play_video_btn: TemplateChild<gtk::Button>,
         #[template_child]
         pub appearance_btn: TemplateChild<gtk::MenuButton>,
+        #[template_child]
+        pub article_empty_status: TemplateChild<crate::ui::status_page::StatusPage>,
 
         pub display: RefCell<ArticleDisplayState>,
         pub current_video: RefCell<Option<VideoSource>>,
@@ -222,6 +224,8 @@ mod imp {
             // its GType must be registered before the GTK builder
             // resolves our template.
             crate::ui::article_renderer_widget::ArticleRenderer::ensure_type();
+            crate::ui::window_title::WindowTitle::ensure_type();
+            crate::ui::status_page::StatusPage::ensure_type();
             klass.bind_template();
         }
 
@@ -259,6 +263,13 @@ impl ArticlePaneView {
     /// then wire up the reader-view + play-video buttons.
     pub fn bootstrap(&self, image_cache: Arc<ImageCache>) {
         let imp = self.imp();
+
+        // The `ViaductStatusPage` starts blank where the old `AdwStatusPage`
+        // carried its copy in the .ui.
+        let empty = imp.article_empty_status.get();
+        empty.set_icon_name(Some("view-paged-symbolic"));
+        empty.set_title("No article selected");
+        empty.set_description(Some("Pick an article from the timeline to start reading."));
 
         imp.article_renderer.get().bootstrap(image_cache);
 
@@ -613,14 +624,10 @@ impl ArticlePaneView {
     fn present_video_dialog(&self, source: &VideoSource) {
         use webkit6::prelude::*;
 
-        let dialog = adw::Dialog::new();
-        dialog.set_title("Video");
-        dialog.set_content_width(960);
-        dialog.set_content_height(560);
-
-        let toolbar = adw::ToolbarView::new();
-        let header = adw::HeaderBar::new();
-        toolbar.add_top_bar(&header);
+        // Phase 20c: plain modal window (was `adw::Dialog`). A JS-enabled
+        // WebView on the *default* WebContext, distinct from the article
+        // renderer's locked-down per-renderer one.
+        let header = gtk::HeaderBar::new();
 
         let view = webkit6::WebView::new();
         view.set_vexpand(true);
@@ -659,22 +666,37 @@ impl ArticlePaneView {
             embed_url_attr,
         );
         view.load_html(&html, Some("https://viaduct.local/"));
+        view.set_vexpand(true);
 
-        toolbar.set_content(Some(&view));
-        dialog.set_child(Some(&toolbar));
-
-        // Tear down the WebProcess on dialog close so audio actually stops.
-        let view_for_close = view.clone();
-        dialog.connect_closed(move |_| {
-            view_for_close.load_uri("about:blank");
-            view_for_close.try_close();
-        });
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&header);
+        content.append(&view);
 
         // Find the nearest window for parenting via the widget hierarchy.
         let parent_window = self
             .ancestor(gtk::Window::static_type())
             .and_downcast::<gtk::Window>();
-        dialog.present(parent_window.as_ref());
+        let dialog = gtk::Window::builder()
+            .title("Video")
+            .modal(true)
+            .default_width(960)
+            .default_height(560)
+            .child(&content)
+            .build();
+        if let Some(parent) = parent_window.as_ref() {
+            dialog.set_transient_for(Some(parent));
+        }
+        crate::ui::close_on_escape(&dialog);
+
+        // Tear down the WebProcess on close so audio actually stops.
+        let view_for_close = view.clone();
+        dialog.connect_close_request(move |_| {
+            view_for_close.load_uri("about:blank");
+            view_for_close.try_close();
+            glib::Propagation::Proceed
+        });
+
+        dialog.present();
     }
 }
 

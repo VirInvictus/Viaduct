@@ -1,7 +1,7 @@
 # viaduct: Application Specification
 
 **Version:** 1.9.1  
-**Target:** GNOME 50+, GTK4 ≥ 4.16, libadwaita ≥ 1.7, WebKitGTK 6.0 *(libadwaita is on its way out; §12 holds the locked post-libadwaita design, which Phase 20 implements)*  
+**Target:** GTK4 ≥ 4.16, WebKitGTK 6.0, Wayland (Hyprland or GNOME). *(libadwaita dropped in v3.0.0; §12 is the post-libadwaita design contract.)*  
 **Language:** Rust (2024 Edition)  
 **Build System:** Cargo workspace (`viaduct-core` + `viaduct`) / Meson wrapper for Flatpak packaging  
 **License:** MIT
@@ -69,6 +69,12 @@ Unconstrained web engines are memory black holes. viaduct ships **exactly one** 
 9. **Memory:** see §11 for the full budget + measured numbers + the architectural floor analysis. The locked-down WebProcess + the GTK4 / libadwaita / WebKitGTK shared libraries together pin a ~150 MB anon floor inside the main process that no Rust-side allocator tuning can reach (`#[global_allocator] = mimalloc` only redirects Rust allocations; the C side keeps its own glibc heap). The single-WebView constraint is the biggest knob we *do* control here; every additional `WebKitWebView` would add ~100–150 MB.
 
 ### 2.3 Widget Tree
+
+> **Stale as of v3.0.0 (libadwaita dropped, Phase 20).** The `Adw*` types
+> below are gone: the shell is `GtkApplicationWindow` + nested `GtkPaned`,
+> the bars are plain `GtkHeaderBar`, the toast is `GtkOverlay`+`GtkRevealer`,
+> and the status pages / avatars / rows are viaduct-owned widgets. See §12
+> for the current design. This tree is kept until it is rewritten.
 
 ```text
 AdwApplicationWindow
@@ -304,7 +310,7 @@ If a future v2.x adds something that pushes peak past 600 MB on the realistic 30
 
 ## 12. Design System: post-libadwaita (Phase 20 target)
 
-**Status: decisions locked, not yet implemented.** This section is the contract Phase 20b–20e build toward; §2.3's widget tree and §7's dependency list still describe the shipped v2.8.x app and are rewritten when the toolkit cut lands. Colophon's Phase 6 is the pilot and its patterns are the default; every divergence below is deliberate and reasoned.
+**Status: implemented in v3.0.0 (libadwaita dropped).** §2.3s widget tree and §7s dependency list below still describe the pre-3.0 adwaita app and are stale pending a rewrite; this section is the current contract. The owned stylesheet (§12.4) is the remaining piece. Colophon's Phase 6 is the pilot and its patterns are the default; every divergence below is deliberate and reasoned.
 
 ### 12.1 Toolkit stance
 

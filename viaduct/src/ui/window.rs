@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-use adw::prelude::*;
-use adw::subclass::prelude::*;
+use gtk::prelude::*;
+use gtk::subclass::prelude::*;
 use gtk::{gio, glib};
 use std::sync::Arc;
 
@@ -22,9 +22,9 @@ pub(crate) mod imp {
     #[template(file = "window.ui")]
     pub struct ViaductWindow {
         #[template_child]
-        pub outer_split_view: TemplateChild<adw::NavigationSplitView>,
+        pub outer_split_view: TemplateChild<gtk::Paned>,
         #[template_child]
-        pub inner_split_view: TemplateChild<adw::NavigationSplitView>,
+        pub inner_split_view: TemplateChild<gtk::Paned>,
         #[template_child]
         pub sidebar_view: TemplateChild<crate::ui::sidebar_view::SidebarView>,
         #[template_child]
@@ -107,13 +107,16 @@ pub(crate) mod imp {
         /// running, so the result is dropped instead of overwriting
         /// the timeline. NNW's `FetchRequestQueue` analog.
         pub selection_fetch_generation: std::cell::Cell<u64>,
+        /// Phase 20c: once the user presses F9, they own the sidebar's
+        /// visibility and width-driven auto-collapse stops touching it.
+        pub sidebar_manual_override: std::cell::Cell<bool>,
     }
 
     #[glib::object_subclass]
     impl ObjectSubclass for ViaductWindow {
         const NAME: &'static str = "ViaductWindow";
         type Type = super::ViaductWindow;
-        type ParentType = adw::ApplicationWindow;
+        type ParentType = gtk::ApplicationWindow;
 
         fn class_init(klass: &mut Self::Class) {
             // The window.ui template references `WebKitWebView` (used
@@ -135,20 +138,39 @@ pub(crate) mod imp {
     }
 
     impl ObjectImpl for ViaductWindow {}
-    impl WidgetImpl for ViaductWindow {}
+    impl WidgetImpl for ViaductWindow {
+        // Phase 20c: the `AdwBreakpoint` replacement. `AdwNavigationSplitView`
+        // collapsed into a navigation stack, which `GtkPaned` has no analog
+        // for, so we do the safe, non-stranding part: auto-hide the sidebar
+        // below a threshold (it has an F9 toggle to bring back), leaving the
+        // timeline + article side by side. The medium-width inner collapse is
+        // a deferred refinement (it would need a timeline toggle or a nav
+        // stack). `size_allocate` is where a plain window learns its width.
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            self.parent_size_allocate(width, height, baseline);
+            let sidebar = self.sidebar_view.get();
+            let should_show = width >= SIDEBAR_AUTOHIDE_WIDTH;
+            if !self.sidebar_manual_override.get() && sidebar.get_visible() != should_show {
+                sidebar.set_visible(should_show);
+            }
+        }
+    }
     impl WindowImpl for ViaductWindow {}
     impl ApplicationWindowImpl for ViaductWindow {}
-    impl adw::subclass::prelude::AdwApplicationWindowImpl for ViaductWindow {}
 }
+
+/// Below this window width the sidebar auto-hides (an F9 toggle brings it
+/// back). Mirrors the old outer `AdwBreakpoint` at 600sp.
+const SIDEBAR_AUTOHIDE_WIDTH: i32 = 600;
 
 glib::wrapper! {
     pub struct ViaductWindow(ObjectSubclass<imp::ViaductWindow>)
-        @extends gtk::Widget, gtk::Window, gtk::ApplicationWindow, adw::ApplicationWindow,
+        @extends gtk::Widget, gtk::Window, gtk::ApplicationWindow,
         @implements gio::ActionGroup, gio::ActionMap;
 }
 
 impl ViaductWindow {
-    pub fn new(app: &adw::Application, account: Arc<Account>) -> Self {
+    pub fn new(app: &gtk::Application, account: Arc<Account>) -> Self {
         let window: Self = glib::Object::builder().property("application", app).build();
         window.imp().account.set(account).ok();
         // Build the image cache rooted at our XDG cache subdirs. Errors here
@@ -519,23 +541,9 @@ impl ViaductWindow {
                     .timeline_view
                     .get()
                     .set_selected_feed_id(feed_id);
-                // Adaptive layout (v1.5.5): when the outer split view is
-                // collapsed (mobile-shaped window), tapping a sidebar
-                // entry must push to the timeline page or the user is
-                // stuck on the feed list with no way to read anything.
-                // The split view back-pops naturally via system Back; the
-                // forward push has to be explicit.
-                //
-                // v1.5.7 — only push when the state actually needs to
-                // change. Calling set_show_content(true) while it's
-                // already true (e.g. during an in-flight transition
-                // animation) confuses the SplitView's state machine
-                // and leaves the navigation stack stuck — symptom is
-                // "back / close button doesn't respond until Escape."
-                let outer = &window.imp().outer_split_view;
-                if outer.is_collapsed() && !outer.shows_content() {
-                    outer.set_show_content(true);
-                }
+                // (Phase 20c: the `GtkPaned` shell has no navigation stack to
+                // push, so the old collapsed-mode `set_show_content` is gone;
+                // the timeline pane is always visible beside the sidebar.)
             }
             // v1.9.0: cancel-stale-fetch + tracing instrumentation.
             //
@@ -735,12 +743,8 @@ impl ViaductWindow {
             // doesn't change — the article stays hidden behind the
             // collapsed nav stack.
             //
-            // v1.5.7 — only push when state needs to change. See
-            // matching note on the sidebar handler above.
-            let inner = &window.imp().inner_split_view;
-            if inner.is_collapsed() && !inner.shows_content() {
-                inner.set_show_content(true);
-            }
+            // (Phase 20c: no navigation stack on the `GtkPaned` shell; the
+            // article pane is always visible beside the timeline.)
 
             // Auto-mark-read on selection — port of NNW
             // `tableViewSelectionDidChange` (TimelineViewController.swift:931).
@@ -1255,22 +1259,15 @@ impl ViaductWindow {
     /// the back / close buttons — that's what this is fixing.
     pub(crate) fn act_close_article(&self) {
         let imp = self.imp();
-        if imp.inner_split_view.is_collapsed() && imp.inner_split_view.shows_content() {
-            // In collapsed (mobile-shaped) mode AdwNavigationSplitView
-            // exposes a back stack — pop it. Skip when already at the
-            // sidebar page, otherwise we briefly trigger an animation
-            // that nobody asked for.
-            imp.inner_split_view.set_show_content(false);
-        }
-        // Always clear the article display so wide-layout users get the
-        // empty status page when they hit Escape too.
+        // Phase 20c: the `GtkPaned` shell has no back stack to pop; Escape
+        // just clears the article selection so the empty status page shows.
         imp.timeline_view
             .get()
             .selection()
             .set_selected(gtk::INVALID_LIST_POSITION);
         imp.article_pane.get().clear();
-        // Focus recovery — pull keyboard focus back to the timeline so
-        // any stuck WebKit / dialog focus state gets released.
+        // Focus recovery — pull keyboard focus back to the timeline so any
+        // stuck WebKit / dialog focus state gets released.
         let _ = imp.timeline_view.get().list_view().grab_focus();
     }
 
@@ -1860,14 +1857,16 @@ impl ViaductWindow {
         self.imp().article_pane.get().focus_article();
     }
 
-    /// Toggles the outer split view between uncollapsed (both panes visible)
-    /// and collapsed (only the content pane, content-mode-shown). Not a true
-    /// "hide sidebar" on wide screens because AdwNavigationSplitView doesn't
-    /// expose that — `AdwOverlaySplitView` would be the upgrade path if
-    /// full-hide is required.
+    /// Show or hide the sidebar pane (F9). Phase 20c: a plain
+    /// `GtkPaned.start-child` visibility toggle now that the shell is
+    /// `GtkPaned`, not `AdwNavigationSplitView`. Pressing this hands the
+    /// user control — width-driven auto-collapse (see `size_allocate`) stops
+    /// managing the sidebar once they've toggled it themselves.
     pub(crate) fn act_toggle_sidebar(&self) {
-        let sv = self.imp().outer_split_view.get();
-        sv.set_collapsed(!sv.is_collapsed());
+        let imp = self.imp();
+        imp.sidebar_manual_override.set(true);
+        let sidebar = imp.sidebar_view.get();
+        sidebar.set_visible(!sidebar.get_visible());
     }
     pub(crate) fn act_shortcuts(&self) {
         let builder = gtk::Builder::from_string(include_str!("shortcuts.ui"));
@@ -2102,15 +2101,20 @@ impl ViaductWindow {
     }
 
     pub(crate) fn act_about(&self) {
-        let about = adw::AboutDialog::builder()
-            .application_name("viaduct")
+        // Phase 20c: plain `gtk::AboutDialog` (was `adw::AboutDialog`). It is
+        // a toplevel window, so `transient_for` + `present()` rather than the
+        // adw sheet's `present(parent)`.
+        let about = gtk::AboutDialog::builder()
+            .program_name("viaduct")
             .version(env!("CARGO_PKG_VERSION"))
-            .developer_name("Brandon LaRocque")
-            .issue_url("https://github.com/virinvictus/viaduct/issues")
+            .authors(["Brandon LaRocque"])
             .website("https://github.com/virinvictus/viaduct")
+            .website_label("Project page")
             .license_type(gtk::License::MitX11)
+            .transient_for(self)
+            .modal(true)
             .build();
-        about.present(Some(self));
+        about.present();
     }
 
     pub(crate) fn act_debug_crash(&self) {

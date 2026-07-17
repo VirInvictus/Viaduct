@@ -1609,37 +1609,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
-name = "libadwaita"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "500135d29c16aabf67baafd3e7741d48e8b8978ca98bac39e589165c8dc78191"
-dependencies = [
- "gdk4",
- "gio",
- "glib",
- "gtk4",
- "libadwaita-sys",
- "libc",
- "pango",
-]
-
-[[package]]
-name = "libadwaita-sys"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6680988058c2558baf3f548a370e4e78da3bf7f08469daa822ac414842c912db"
-dependencies = [
- "gdk4-sys",
- "gio-sys",
- "glib-sys",
- "gobject-sys",
- "gtk4-sys",
- "libc",
- "pango-sys",
- "system-deps",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.185"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3515,7 +3484,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viaduct"
-version = "2.9.0"
+version = "3.0.0"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -3524,7 +3493,6 @@ dependencies = [
  "crossbeam-channel",
  "gtk4",
  "ksni",
- "libadwaita",
  "lru",
  "md-5",
  "mimalloc",
@@ -3544,7 +3512,7 @@ dependencies = [
 
 [[package]]
 name = "viaduct-core"
-version = "2.9.0"
+version = "3.0.0"
 dependencies = [
  "ammonia",
  "anyhow",

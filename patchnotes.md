@@ -1,5 +1,17 @@
 # viaduct: Patch Notes
 
+## v3.0.0: viaduct's own look (libadwaita is gone)
+
+viaduct no longer depends on libadwaita. The toolkit stays GTK4 and the reading pane stays WebKitGTK; what leaves is the GNOME design layer. Every widget that used to come from libadwaita, the window shell, the dialogs, the rows, the toasts, the sidebar avatars, the status pages, now belongs to viaduct, styled the way viaduct wants rather than the way GNOME does. The whole app keeps working exactly as before; this release changes what it is made of and, ahead of the owned stylesheet, begins changing how it looks.
+
+The major version marks the change in identity and in dependencies, not a change in features. Nothing you could do in 2.9 is gone.
+
+- **The window shell is plain GTK4.** The three-pane layout now rides `GtkPaned` dividers you can drag, rather than the GNOME adaptive split view. `F9` shows and hides the sidebar; narrow windows hide it automatically (press `F9` to take manual control).
+- **Every dialog, row, toast, avatar, and empty-state is viaduct's own** rather than a GNOME widget. Behaviour is unchanged; the look will settle further when the owned stylesheet lands.
+- **Dark and light follow your desktop through the standard portal**, the same mechanism every toolkit uses, so the reader tracks your system preference on GNOME, Hyprland, or anything else without a GNOME session running.
+
+This is a foundation release. The owned stylesheet that gives viaduct its final flat, Kanagawa-derived look is the next step, and it also resolves the outstanding case where forcing a light theme did not visibly change the chrome (your system GTK theme was overriding it).
+
 ## v2.9.0: Reading with the keyboard
 
 viaduct could be navigated by keyboard but not actually *read* by one. Space pages the article, as the shortcut window has always advertised, but only while the article body holds keyboard focus, and nothing ever gave it focus. Moving through the timeline with `j`, `k`, or `n` left focus on the list, so Space did nothing and reading a long piece meant reaching for the mouse to click into the pane first. That is now closed.

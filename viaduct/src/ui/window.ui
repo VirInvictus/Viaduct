@@ -5,11 +5,21 @@ Copyright (c) 2026 Brandon LaRocque
 Licensed under the MIT License. See LICENSE in the project root for details.
 -->
 <interface>
-  <template class="ViaductWindow" parent="AdwApplicationWindow">
+  <requires lib="gtk" version="4.16"/>
+  <template class="ViaductWindow" parent="GtkApplicationWindow">
     <property name="title">viaduct</property>
     <property name="default-width">1200</property>
     <property name="default-height">800</property>
-    <property name="content">
+    <!-- Phase 20c: no separate window titlebar. An invisible one suppresses
+         GTK's default titlebar; the window controls render on the sidebar
+         pane's own GtkHeaderBar (show-title-buttons stays true there), the
+         outermost bar, per the 20a decision. -->
+    <child type="titlebar">
+      <object class="GtkHeaderBar">
+        <property name="visible">False</property>
+      </object>
+    </child>
+    <property name="child">
       <object class="GtkOverlay" id="toast_overlay">
         <child type="overlay">
           <object class="GtkRevealer" id="toast_revealer">
@@ -34,44 +44,29 @@ Licensed under the MIT License. See LICENSE in the project root for details.
           <object class="GtkBox">
             <property name="orientation">vertical</property>
             <child>
-              <object class="AdwNavigationSplitView" id="outer_split_view">
+              <!-- Outer paned: sidebar | (timeline + article). Sidebar
+                   keeps its width when the window resizes; the article pane
+                   absorbs the extra space. -->
+              <object class="GtkPaned" id="outer_split_view">
                 <property name="vexpand">True</property>
-                <property name="min-sidebar-width">220</property>
-                <property name="max-sidebar-width">360</property>
-                <property name="sidebar-width-fraction">0.22</property>
-                <property name="sidebar">
-                  <object class="AdwNavigationPage" id="sidebar_page">
-                    <property name="title">Feeds</property>
-                    <property name="child">
-                      <object class="ViaductSidebarView" id="sidebar_view"/>
-                    </property>
-                  </object>
+                <property name="position">260</property>
+                <property name="resize-start-child">False</property>
+                <property name="shrink-start-child">False</property>
+                <property name="shrink-end-child">False</property>
+                <property name="start-child">
+                  <object class="ViaductSidebarView" id="sidebar_view"/>
                 </property>
-                <property name="content">
-                  <object class="AdwNavigationPage" id="content_page">
-                    <property name="title">Articles</property>
-                    <property name="child">
-                      <object class="AdwNavigationSplitView" id="inner_split_view">
-                        <property name="min-sidebar-width">320</property>
-                        <property name="max-sidebar-width">480</property>
-                        <property name="sidebar-width-fraction">0.32</property>
-                        <property name="sidebar">
-                          <object class="AdwNavigationPage" id="timeline_page">
-                            <property name="title">Timeline</property>
-                            <property name="child">
-                              <object class="ViaductTimelineView" id="timeline_view"/>
-                            </property>
-                          </object>
-                        </property>
-                        <property name="content">
-                          <object class="AdwNavigationPage" id="article_page">
-                            <property name="title">Article</property>
-                            <property name="child">
-                              <object class="ViaductArticlePaneView" id="article_pane"/>
-                            </property>
-                          </object>
-                        </property>
-                      </object>
+                <property name="end-child">
+                  <object class="GtkPaned" id="inner_split_view">
+                    <property name="position">340</property>
+                    <property name="resize-start-child">False</property>
+                    <property name="shrink-start-child">False</property>
+                    <property name="shrink-end-child">False</property>
+                    <property name="start-child">
+                      <object class="ViaductTimelineView" id="timeline_view"/>
+                    </property>
+                    <property name="end-child">
+                      <object class="ViaductArticlePaneView" id="article_pane"/>
                     </property>
                   </object>
                 </property>
@@ -116,18 +111,5 @@ Licensed under the MIT License. See LICENSE in the project root for details.
         </property>
       </object>
     </property>
-    <child>
-      <object class="AdwBreakpoint">
-        <condition>max-width: 900sp</condition>
-        <setter object="inner_split_view" property="collapsed">True</setter>
-      </object>
-    </child>
-    <child>
-      <object class="AdwBreakpoint">
-        <condition>max-width: 600sp</condition>
-        <setter object="inner_split_view" property="collapsed">True</setter>
-        <setter object="outer_split_view" property="collapsed">True</setter>
-      </object>
-    </child>
   </template>
 </interface>

@@ -13,8 +13,8 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use adw::prelude::*;
 use gtk::glib;
+use gtk::prelude::*;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -111,7 +111,7 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::FAILURE;
     }
 
-    let app = adw::Application::builder()
+    let app = gtk::Application::builder()
         .application_id("org.virinvictus.Viaduct")
         .build();
 
@@ -239,7 +239,7 @@ fn ensure_schema_dir() {
     }
 }
 
-fn build_ui(app: &adw::Application, account: Arc<Account>) {
+fn build_ui(app: &gtk::Application, account: Arc<Account>) {
     // Phase 17 D-Bus re-summon: if a window already exists for this
     // application (run-in-background mode, hidden after close, then
     // re-activated via the dock icon or `gtk-launch`), present it

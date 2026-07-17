@@ -135,7 +135,7 @@ thread_local! {
 /// service if run-in-background is currently on, and attach the
 /// receiver loop that dispatches `TrayAction`s to the GTK main thread.
 /// Call once from `main.rs build_ui` after the application is built.
-pub fn wire(app: &adw::Application) {
+pub fn wire(app: &gtk::Application) {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<TrayAction>();
 
     // Receiver loop on the GTK main thread.
@@ -167,7 +167,7 @@ pub fn wire(app: &adw::Application) {
 
 async fn receive_loop(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<TrayAction>,
-    app: adw::Application,
+    app: gtk::Application,
 ) {
     while let Some(action) = rx.recv().await {
         match action {

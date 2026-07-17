@@ -10,7 +10,6 @@ default-run = "viaduct"
 [dependencies]
 viaduct-core = { path = "../viaduct-core" }
 gtk.workspace = true
-adw.workspace = true
 webkit6.workspace = true
 tokio.workspace = true
 reqwest.workspace = true

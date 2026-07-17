@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
   <requires lib="gtk" version="4.16"/>
-  <requires lib="libadwaita" version="1.7"/>
   <menu id="primary_menu">
     <section>
       <item>
@@ -50,9 +49,12 @@
   </menu>
   <template class="ViaductSidebarView" parent="GtkWidget">
     <child>
-      <object class="AdwToolbarView">
-        <child type="top">
-          <object class="AdwHeaderBar">
+      <object class="GtkBox">
+        <property name="orientation">vertical</property>
+        <child>
+          <!-- Outermost pane header bar: hosts the window controls (Phase
+               20a decision). show-title-buttons stays default True. -->
+          <object class="GtkHeaderBar">
             <child type="start">
               <object class="GtkButton" id="mark_all_read_btn">
                 <property name="icon-name">checkbox-checked-symbolic</property>
@@ -119,14 +121,15 @@
             </child>
           </object>
         </child>
-        <property name="content">
+        <child>
           <object class="GtkScrolledWindow">
+            <property name="vexpand">True</property>
             <property name="child">
               <object class="GtkListView" id="sidebar_list_view"/>
             </property>
           </object>
-        </property>
-        <child type="bottom">
+        </child>
+        <child>
           <object class="GtkActionBar" id="bottom_action_bar">
             <property name="revealed">False</property>
           </object>

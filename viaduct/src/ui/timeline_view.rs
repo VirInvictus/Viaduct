@@ -13,8 +13,8 @@
 //!
 //! NetNewsWire counterpart: `Mac/MainWindow/Timeline/TimelineViewController.swift`.
 
-use adw::prelude::*;
-use adw::subclass::prelude::*;
+use gtk::prelude::*;
+use gtk::subclass::prelude::*;
 use gtk::{gio, glib};
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -41,7 +41,7 @@ mod imp {
         #[template_child]
         pub timeline_list_view: TemplateChild<gtk::ListView>,
         #[template_child]
-        pub timeline_empty_status: TemplateChild<adw::StatusPage>,
+        pub timeline_empty_status: TemplateChild<crate::ui::status_page::StatusPage>,
 
         pub store: std::cell::OnceCell<gio::ListStore>,
         pub selection: std::cell::OnceCell<gtk::SingleSelection>,
@@ -60,6 +60,9 @@ mod imp {
             // Phase 20c: what `adw::Bin` was for. BinLayout gives the same
             // "size to my one child" behaviour with no libadwaita.
             klass.set_layout_manager_type::<gtk::BinLayout>();
+            // The template instantiates a `ViaductStatusPage`, so its type
+            // has to be registered before the template is parsed.
+            crate::ui::status_page::StatusPage::ensure_type();
             klass.bind_template();
         }
 
@@ -106,6 +109,10 @@ impl TimelineView {
         search_btn: &gtk::ToggleButton,
     ) {
         let imp = self.imp();
+
+        // Seed the default empty-state copy; the `ViaductStatusPage` starts
+        // blank where the old `AdwStatusPage` carried its text in the .ui.
+        self.set_empty_state(false);
 
         // Build the store + factory + SingleSelection. Reuses the row
         // factory in `crate::ui::timeline` byte-for-byte.
