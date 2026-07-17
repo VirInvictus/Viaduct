@@ -1,7 +1,7 @@
 # viaduct: Application Specification
 
 **Version:** 1.9.1  
-**Target:** GNOME 50+, GTK4 ≥ 4.16, libadwaita ≥ 1.7, WebKitGTK 6.0  
+**Target:** GNOME 50+, GTK4 ≥ 4.16, libadwaita ≥ 1.7, WebKitGTK 6.0 *(libadwaita is on its way out; §12 holds the locked post-libadwaita design, which Phase 20 implements)*  
 **Language:** Rust (2024 Edition)  
 **Build System:** Cargo workspace (`viaduct-core` + `viaduct`) / Meson wrapper for Flatpak packaging  
 **License:** MIT
@@ -203,7 +203,7 @@ To enforce the memory and disk footprint, the database is regularly vacuumed.
 
 ### C/GTK Libraries (Frontend)
 * `gtk4` (via `gtk4-rs`): Minimum 4.16.
-* `libadwaita` (via `libadwaita-rs`): Minimum 1.7.
+* `libadwaita` (via `libadwaita-rs`): Minimum 1.7. *(Removed by Phase 20; see §12.)*
 * `webkitgtk-6.0` (via `webkit6` 0.4): Minimum 2.42; the article reading pane runs a single neutered instance (see §2.2).
 
 ---
@@ -238,7 +238,7 @@ viaduct v1.0 is done when:
 2. The background engine can fetch and parse 1,000 new articles while the user smoothly scrolls the list view.
 3. Idle memory after a warm refresh + image-cache warm stays in the 400–500 MB band; peak under realistic load (15–30 min cadence, mostly conditional-GET 304s) stays under 600 MB. Peak under continuous force-refresh stress (every 5 min × 130 feeds × force=true bypassing 304s) plateaus at ~540 MB. **See §11 for the post-mortem on the original 100–300 MB target.**
 4. FTS5 search returns results in under 50 ms against a 50,000-article corpus.
-5. The application fully complies with GNOME HIG and libadwaita 1.7 styling.
+5. The application fully complies with GNOME HIG and libadwaita 1.7 styling. *(Superseded by §12 once Phase 20 lands: the design language becomes viaduct's own. The app keeps running correctly under GNOME, which is a behavior promise, not a styling one.)*
 6. A Flathub-accepted Flatpak build runs in a strict sandbox (network permission only; OPML I/O through portals).
 
 ---
@@ -298,3 +298,75 @@ Hitting "idle 100–300 MB" requires removing the GTK4 + WebKit + GLib + libxml2
 ### When to revisit
 
 If a future v2.x adds something that pushes peak past 600 MB on the realistic 30-min-cadence test, treat it as a regression. The v2.6.16 `/proc/self/smaps_rollup` breakdown on `diag: refresh cycle pre/post` lines is permanent; every refresh logs anon/file/shmem deltas, so the next leak surfaces fast.
+
+---
+
+## 12. Design System: post-libadwaita (Phase 20 target)
+
+**Status: decisions locked, not yet implemented.** This section is the contract Phase 20b–20e build toward; §2.3's widget tree and §7's dependency list still describe the shipped v2.8.x app and are rewritten when the toolkit cut lands. Colophon's Phase 6 is the pilot and its patterns are the default; every divergence below is deliberate and reasoned.
+
+### 12.1 Toolkit stance
+
+GTK4 (≥ 4.16, for `:root` CSS custom properties) and WebKitGTK stay. **libadwaita goes**: the stylesheet, the adaptive widgets, and `adw::StyleManager` are replaced by plain GTK4 widgets plus an application stylesheet viaduct owns outright. GTK4 is Wayland-native and WebKitGTK is orthogonal to adwaita entirely. No new dependency is required by any item here.
+
+Two rules bind throughout, unchanged: **no regression for a GNOME user** (behavior, not look) and **no breach of the §11 memory ceilings**. A widget-and-CSS migration should be memory-neutral; any item that escalates gets its own `heaptrack`/`massif` checkpoint before landing.
+
+### 12.2 Decoration and layout
+
+- **Window buttons stay** on the outermost header bar. Colophon chose `show-title-buttons=false`; we decline, because removing a GNOME user's close button is a behavior regression rather than a restyle. Tiling users hide them with `gtk-decoration-layout=""`, which Phase 19's CSD audit already covers. No code path depends on a compositor-drawn titlebar; every pane is CSD already, which is the posture a tiling WM wants.
+- **Three per-pane `GtkHeaderBar`s stay**, replacing `AdwHeaderBar` / `AdwToolbarView`. Colophon merged its two bars into one; we decline, because its two bars were both chrome for a single content view, whereas our three carry genuinely pane-specific cargo (sidebar: mark-all-read, sync, search, menu; timeline: the search bar; article: reader toggle, appearance, share, play-video) that must follow its pane when panes collapse.
+- **The nested `AdwNavigationSplitView` pair becomes a nested `GtkPaned` pair.** Sidebar and timeline widths persist in GSettings, saved on close rather than on `notify::position` (which fires every pixel of a drag).
+- **Auto-collapse is preserved, width-driven.** The two `AdwBreakpoint`s (900sp → inner collapsed; 600sp → both collapsed) have no `GtkPaned` equivalent, so the behavior is hand-built: watch allocation width and flip pane visibility at the same thresholds, with manual toggles alongside. This is the one deliberate departure from Colophon's "the app never reshuffles its own layout on resize" rule. Two reasons: dropping it would regress existing narrow-window behavior, and viaduct is three-pane where the pilot was two, so three panes at a quarter tile (~480 px) is unusable rather than merely cramped. A `GtkPaned` collapses to the surviving child on its own and holds the position for the return trip, so the mechanism is visibility, not re-parenting.
+
+### 12.3 Dark/light resolution
+
+`adw::StyleManager` / `adw::ColorScheme` are replaced by a synchronous `ReadOne` on `org.freedesktop.portal.Settings` over gio D-Bus at startup, plus a `SettingChanged` subscription. Carried over verbatim from the pilot, each point earned: 1000 ms timeout; a `Read` fallback for portals predating `ReadOne` (its reply wraps the value in a second variant layer); the connection held so the subscription outlives startup; a default that degrades to a working theme rather than failing when no portal answers; and **only an explicit `1` means dark**, matching `AdwStyleManager`. Fixed themes force polarity via `set_gtk_application_prefer_dark_theme` so stock-widget internals (text selection, spinners) follow a palette the owned sheet cannot reach.
+
+Take the pilot's **weak-ref redraw registry** with it: the migration there exposed a real leak where per-widget `connect_dark_notify` closures accumulated on the singleton and were never disconnected.
+
+**The eight NNW article themes are byte-for-byte cargo and do not change.** Their resolution path does: `select_for_dark_mode` (`article_renderer.rs`) and the Adwaita theme's `prefers-color-scheme` handling key off `AdwStyleManager::is_dark()` today and must read the portal instead. The Adwaita article theme's `accent_hex: None` currently lets the libadwaita system accent through; once libadwaita is gone that accent has no source, so the Adwaita theme needs an explicit stance rather than inheriting one.
+
+### 12.4 The owned stylesheet
+
+A single `theme.rs`: one `const STRUCTURE: &str` plus a `format!` interpolating the palette into `:root` `--c-*` custom properties. No `.css` file, no build script, no codegen. Flat, square, hard borders, no shadows, denser spacing. Existing adwaita class *names* are kept (`heading`, `dim-label`, `card`, `boxed-list`, `suggested-action`, `flat`) with owned definitions, so `.ui` churn is zero. Coverage must include the GTK-default gaps that read as foreign once adwaita's sheet is gone: menu popovers, tooltips, scrollbars, text selection, focus outline.
+
+Two non-negotiables, both inherited as lessons rather than preferences:
+
+- **Load at `STYLE_PROVIDER_PRIORITY_USER + 1`, never `APPLICATION`.** A global `~/.config/gtk-4.0/gtk.css` loads at USER (800) and outranks APPLICATION (600), silently half-overriding the in-app sheet. This hid in the pilot for a long time because a Kanagawa Dragon system skin over a Dragon default looks correct. Brandon's desktop carries exactly such a skin, so viaduct would hit it. Remove the previous provider before adding the new one on every apply.
+- **Scope the focus ring from day one.** The pilot shipped `*:focus-visible { outline: … }`; pressing a bare modifier (a tiling workspace-switch chord) flips GTK into focus-visible mode and flashes the accent across every widget in the focus chain. It **does not reproduce in a screenshot**, which is why the pilot's own verification missed it and a sibling app found it later. Write it scoped to `button, entry, spinbutton, switch, checkbutton, check, dropdown, scale` with `outline-offset: -1px`. Lists and grids show position through the selection background and need no outline.
+
+House rule, unit-tested: **no `font-family` anywhere in the sheet.** The bundled fonts (`fonts.rs`: Inter, SourceSerif4, JetBrainsMono, Atkinson Hyperlegible) are unchanged.
+
+### 12.5 Widget replacements
+
+`viaduct-core` is adw-free (its only references are doc comments), so nothing below can reach parsing, networking, or the database. The surface is 26 `adw::` types across 17 Rust files and 6 `.ui` files, entirely within `viaduct/src/`.
+
+| adw type | Replacement |
+|---|---|
+| `Application`, `ApplicationWindow` | `gtk::` equivalents (`content` property becomes `child`) |
+| `NavigationSplitView` ×2, `NavigationPage`, `Breakpoint` ×2 | nested `GtkPaned` + width-driven collapse (§12.2) |
+| `ToolbarView`, `HeaderBar` | three `GtkHeaderBar`s (§12.2) |
+| `WindowTitle` | ellipsizing `GtkLabel` as `title-widget` |
+| `Bin` ×5 | `gtk::Widget` + `BinLayout`, **unparenting children in `dispose()`** |
+| `Toast`, `ToastOverlay` | `GtkOverlay` + auto-hiding `GtkRevealer`, newest-wins, `can-target=false` |
+| `StyleManager`, `ColorScheme` | portal `Settings` (§12.3) |
+| `PreferencesDialog`/`Page`/`Group` | `gtk::Window` (`transient_for` + `modal`) + `GtkListBox.boxed-list` |
+| `ActionRow`, `ComboRow` | owned rows module (`row`/`value_row`; ComboRow = `row` + `GtkDropDown` suffix) |
+| `Dialog` ×5 | `gtk::Window` modal + a shared `close_on_escape` helper |
+| `StatusPage` | inline title + description composite |
+| `AboutDialog` | `gtk::AboutDialog` |
+| **`Avatar`** | **net-new**: sidebar favicon with an initials + hashed-colour fallback (`ImageCache::color_for` already ports NNW `ColorHash`) |
+| **`SwitchRow`, `EntryRow`, `SpinRow`, `PreferencesRow`** | **net-new** row flavours extending the owned rows module |
+| **`AlertDialog` + `ResponseAppearance`** | **net-new**: `gtk::AlertDialog` for the delete-feed confirm and rename-feed prompt, including the destructive styling |
+
+`AdwOverlaySplitView` appears only in a `window.rs` doc comment as a hypothetical and is not in use. `Clamp` and `Banner` are unused, so the pilot's `clamp.rs` does not transfer.
+
+Two behaviours adw gave for free and must be rebuilt: **Escape handling** (plain `gtk::Window` has none; reconcile with the existing `close-article` Escape action in `actions.rs`) and **`Bin` child teardown** (each subclass unparents in `dispose()` or GTK warns at finalize).
+
+### 12.6 Packaging
+
+**The Flatpak stays on `org.gnome.Platform`. Evaluated and declined, not deferred:** GTK4 ships in the GNOME runtime and does **not** ship in `org.freedesktop.Platform`, so moving would mean building and maintaining GTK4 as manifest modules purely to drop a name from the runtime id. Our manifest never listed libadwaita as a module (the runtime carries it), so there is nothing to remove. Revisit only if a gtk4 freedesktop BaseApp or extension appears.
+
+Dropped from the manifests: the workspace `adw` dependency, `viaduct/Cargo.toml`'s `adw.workspace = true`, and `libadwaita-1-dev` from CI. `APP_ID` must keep matching the `.desktop` basename and the Flatpak app-id on both build paths so Hyprland `windowrulev2` matching stays stable.
+
+Version: the pilot took a **major bump for a release with zero feature changes**, on the grounds that the design language and the GNOME dependency story both changed. The same argument applies here.
