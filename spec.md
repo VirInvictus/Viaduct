@@ -1,6 +1,6 @@
 # viaduct: Application Specification
 
-**Version:** 1.9.1  
+**Version:** 3.0.0  
 **Target:** GTK4 ≥ 4.16, WebKitGTK 6.0, Wayland (Hyprland or GNOME). *(libadwaita dropped in v3.0.0; §12 is the post-libadwaita design contract.)*  
 **Language:** Rust (2024 Edition)  
 **Build System:** Cargo workspace (`viaduct-core` + `viaduct`) / Meson wrapper for Flatpak packaging  
@@ -162,6 +162,8 @@ Standard desktop accelerators, prioritizing spatial navigation without forcing a
 | Focus Article Pane | F6 |
 | Move down list | j, Down |
 | Move up list | k, Up |
+| Next unread | n |
+| Previous unread | − (minus) |
 | Toggle Read/Unread | m |
 | Star/Save Article | s |
 | Open in Browser | Enter |
@@ -310,7 +312,7 @@ If a future v2.x adds something that pushes peak past 600 MB on the realistic 30
 
 ## 12. Design System: post-libadwaita (Phase 20 target)
 
-**Status: implemented in v3.0.0 (libadwaita dropped); owned stylesheet first cut landed.** §2.3's widget tree is rewritten to the GtkPaned shell; §7's dependency list still lists the pre-3.0 deps and is stale. This section is the current design contract. Colophon's Phase 6 is the pilot and its patterns are the default; every divergence below is deliberate and reasoned.
+**Status: implemented in v3.0.0 (libadwaita dropped); owned stylesheet first cut landed.** §2.3's widget tree is rewritten to the GtkPaned shell and §7's dependency list drops libadwaita. This section is the current design contract. Colophon's Phase 6 is the pilot and its patterns are the default; every divergence below is deliberate and reasoned.
 
 ### 12.1 Toolkit stance
 
