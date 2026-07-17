@@ -262,8 +262,8 @@ pub fn article_theme_nick(settings: &gio::Settings) -> String {
 
 /// Resolve the current article theme: explicit selection wins; "auto"
 /// pairs Sepia (light) with Tiqoe Dark (dark) like the v1.1.0 default.
-/// `is_dark` should be `adw::StyleManager::default().is_dark()` taken
-/// fresh on the GTK thread.
+/// `is_dark` should be `crate::theme::is_dark()` taken fresh on the GTK
+/// thread.
 pub fn resolve_article_theme(
     settings: &gio::Settings,
     is_dark: bool,
@@ -286,32 +286,33 @@ pub fn resolve_article_theme(
 /// the accent re-applies when the user flips the dropdown later — no
 /// restart needed.
 pub fn apply_article_theme_accent(settings: &gio::Settings) {
-    let manager = adw::StyleManager::default();
-    refresh_accent(settings, &manager);
-    settings.connect_changed(
-        Some(keys::ARTICLE_THEME),
+    refresh_accent(settings);
+    settings.connect_changed(Some(keys::ARTICLE_THEME), |s, _| refresh_accent(s));
+    // A dark-mode flip can change the chosen theme in "auto" mode, so
+    // re-apply the accent whenever the resolved scheme flips. Phase 20b:
+    // `theme`'s signal rather than `adw::StyleManager::connect_dark_notify`.
+    // It covers both triggers the same way `notify::dark` did, a system
+    // flip and a `color-scheme` preference flip, so "auto" still tracks
+    // Force light / Force dark. `settings` is the process-wide singleton,
+    // so it outlives the listener it owns.
+    crate::theme::connect_dark_changed(
+        settings,
         glib::clone!(
             #[weak]
-            manager,
-            move |s, _| refresh_accent(s, &manager)
+            settings,
+            move |_dark| refresh_accent(&settings)
         ),
     );
-    // Dark-mode toggles can flip the chosen theme in "auto" mode, so
-    // re-apply the accent whenever the color scheme actually flips.
-    manager.connect_dark_notify(glib::clone!(
-        #[weak]
-        settings,
-        move |m| refresh_accent(&settings, m)
-    ));
 }
 
-fn refresh_accent(settings: &gio::Settings, manager: &adw::StyleManager) {
-    let theme = resolve_article_theme(settings, manager.is_dark());
+fn refresh_accent(settings: &gio::Settings) {
+    let is_dark = crate::theme::is_dark();
+    let theme = resolve_article_theme(settings, is_dark);
     tracing::debug!(
         nick = %article_theme_nick(settings),
         resolved_id = theme.id,
         accent = theme.accent_hex,
-        is_dark = manager.is_dark(),
+        is_dark,
         "preferences: refresh_accent"
     );
     crate::ui::article_renderer::apply_app_accent(theme.accent_hex);

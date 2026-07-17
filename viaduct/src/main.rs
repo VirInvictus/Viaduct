@@ -264,6 +264,12 @@ fn build_ui(app: &adw::Application, account: Arc<Account>) {
         return;
     }
 
+    // Phase 20b: resolve dark/light from the settings portal ourselves.
+    // First, because everything below reads `theme::is_dark()`. libadwaita
+    // still styles the widgets until the toolkit cut; both read the same
+    // portal and fold the same preference, so they agree in the meantime.
+    viaduct::theme::init(viaduct::preferences::settings());
+
     if let Some(settings) = viaduct::preferences::settings() {
         viaduct::preferences::apply_color_scheme(&settings);
         viaduct::preferences::apply_fonts(&settings);

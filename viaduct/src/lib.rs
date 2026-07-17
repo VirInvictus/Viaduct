@@ -19,6 +19,7 @@ pub use viaduct_core::{
 
 pub mod fonts;
 pub mod preferences;
+pub mod theme;
 pub mod tray;
 pub mod ui;
 

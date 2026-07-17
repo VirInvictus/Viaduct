@@ -496,7 +496,7 @@ impl ArticlePaneView {
         };
         imp.article_stack.set_visible_child_name("content");
 
-        let is_dark = adw::StyleManager::default().is_dark();
+        let is_dark = crate::theme::is_dark();
         let theme = match crate::preferences::settings() {
             Some(s) => crate::preferences::resolve_article_theme(&s, is_dark),
             None => article_renderer::select_for_dark_mode(is_dark),

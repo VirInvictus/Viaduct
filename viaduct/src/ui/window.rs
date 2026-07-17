@@ -370,8 +370,14 @@ impl ViaductWindow {
                 },
             );
         }
-        let pane_for_dark = imp.article_pane.get().downgrade();
-        adw::StyleManager::default().connect_dark_notify(move |_| {
+        // Phase 20b: our own portal-backed resolution rather than
+        // `adw::StyleManager::connect_dark_notify`. The listener is held
+        // weakly against the pane and pruned when it dies, which is the leak
+        // the pilot's migration exposed: closures registered on the
+        // StyleManager singleton were never disconnected.
+        let pane = imp.article_pane.get();
+        let pane_for_dark = pane.downgrade();
+        crate::theme::connect_dark_changed(&pane, move |_dark| {
             if let Some(pane) = pane_for_dark.upgrade() {
                 pane.refresh_render();
             }
