@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::network::ImageCache;
 use crate::network::video_thumbs::VideoSource;
 use crate::ui::article_renderer;
+use crate::ui::rows;
 
 /// User preference for how to play YouTube / Vimeo videos detected in
 /// articles. Mirrored from the `video-playback-mode` GSetting. Lives here
@@ -45,58 +46,61 @@ fn build_appearance_popover() -> gtk::Popover {
     let popover = gtk::Popover::builder().has_arrow(true).build();
     popover.add_css_class("menu");
 
-    let group = adw::PreferencesGroup::builder()
-        .title("Article Appearance")
-        .build();
+    // Phase 20c: plain-GTK rows. The GSettings bind targets `value` on a
+    // `gtk::SpinButton`, the same property name `adw::SpinRow` exposed, so
+    // the binding is unchanged.
+    let (group, list) = rows::group(Some("Article Appearance"), None);
 
-    let font_row = adw::SpinRow::with_range(75.0, 200.0, 5.0);
-    font_row.set_title("Text Size");
-    font_row.set_subtitle("Percentage of theme default");
-
-    let line_row = adw::SpinRow::with_range(100.0, 250.0, 5.0);
-    line_row.set_title("Line Spacing");
-    line_row.set_subtitle("100 = single, 150 = 1.5×, 200 = double");
+    let (font_row, font_spin) = rows::spin_row(
+        "Text Size",
+        Some("Percentage of theme default"),
+        75.0,
+        200.0,
+        5.0,
+    );
+    let (line_row, line_spin) = rows::spin_row(
+        "Line Spacing",
+        Some("100 = single, 150 = 1.5×, 200 = double"),
+        100.0,
+        250.0,
+        5.0,
+    );
 
     if let Some(settings) = crate::preferences::settings() {
         settings
             .bind(
                 crate::preferences::keys::ARTICLE_FONT_SCALE,
-                &font_row,
+                &font_spin,
                 "value",
             )
             .build();
         settings
             .bind(
                 crate::preferences::keys::ARTICLE_LINE_HEIGHT,
-                &line_row,
+                &line_spin,
                 "value",
             )
             .build();
     }
 
-    group.add(&font_row);
-    group.add(&line_row);
+    list.append(&font_row);
+    list.append(&line_row);
 
-    let reset_row = adw::ActionRow::builder()
-        .title("Reset to Defaults")
-        .activatable(true)
-        .build();
     let reset_btn = gtk::Button::builder()
         .icon_name("edit-undo-symbolic")
         .valign(gtk::Align::Center)
         .build();
     reset_btn.add_css_class("flat");
-    reset_row.add_suffix(&reset_btn);
-    reset_row.set_activatable_widget(Some(&reset_btn));
+    let reset_row = rows::button_row("Reset to Defaults", None, &reset_btn);
 
-    let font_for_reset = font_row.clone();
-    let line_for_reset = line_row.clone();
+    let font_for_reset = font_spin.clone();
+    let line_for_reset = line_spin.clone();
     reset_btn.connect_clicked(move |_| {
         font_for_reset.set_value(100.0);
         line_for_reset.set_value(150.0);
     });
 
-    group.add(&reset_row);
+    list.append(&reset_row);
 
     let outer = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
