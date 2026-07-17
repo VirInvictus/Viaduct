@@ -6,7 +6,7 @@ What's done, what's next, what's deferred. Sequenced for maximum performance, fu
 
 ## Architecture Strategy & Implementation Plan
 
-viaduct is a direct translation of NetNewsWire's local-account architecture to Linux/Wayland, leveraging Rust and GNOME 50+ standards (GTK4 + libadwaita 1.7). The goal is feature parity for local reading, local-first data ownership, and strict background threading that avoids the UI locks and high memory footprint common in web-based readers.
+viaduct is a direct translation of NetNewsWire's local-account architecture to Linux/Wayland, leveraging Rust and GTK4 (plain GTK4 with a viaduct-owned design layer since v3.0.0; no libadwaita). The goal is feature parity for local reading, local-first data ownership, and strict background threading that avoids the UI locks and high memory footprint common in web-based readers.
 
 Remote sync engines (Feedbin / Miniflux / FreshRSS / CloudKit) are **explicitly out of scope for v1.0**. The app ships as a pure local RSS client.
 
@@ -303,7 +303,7 @@ These don't belong inside any earlier phase; they're discoverability / polish wo
 2. Background engine fetches + parses 1,000 new articles while the user smoothly scrolls the list view.
 3. Idle memory sits between 100–300 MB; peak stays under 500 MB through every supported operation.
 4. FTS5 search across all cached articles returns results in under 50 ms on a 50k-article corpus.
-5. Full compliance with GNOME HIG and libadwaita 1.7 styling.
+5. ~~Full compliance with GNOME HIG and libadwaita 1.7 styling.~~ *(Superseded in v3.0.0: the design language is viaduct's own flat Kanagawa; the app still runs correctly under GNOME, a behavior promise, not a styling one.)*
 6. Flathub-accepted Flatpak build running in a strict sandbox.
 
 ---

@@ -1,6 +1,6 @@
 [package]
 name = "viaduct"
-description = "A fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire."
+description = "A fast, native Linux RSS reader (GTK4) achieving full feature-parity with NetNewsWire."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

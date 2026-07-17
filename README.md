@@ -14,7 +14,7 @@
 
 **A Linux port of NetNewsWire (the macOS RSS reader by Brent Simmons) in Rust and GTK4.**
 
-Viaduct translates NetNewsWire's local-account architecture, parsing pipeline, and refresh engine to GNOME 50+, faithfully enough that Brent's CSS themes drop in byte-for-byte. The name is the metaphor: a viaduct carries something across a gap. This one carries NetNewsWire across to Linux.
+Viaduct translates NetNewsWire's local-account architecture, parsing pipeline, and refresh engine to GTK4 on Wayland, faithfully enough that Brent's CSS themes drop in byte-for-byte. As of v3.0.0 it runs on plain GTK4 with its own flat design (no libadwaita), so it belongs equally on GNOME, Hyprland, or any Wayland desktop. The name is the metaphor: a viaduct carries something across a gap. This one carries NetNewsWire across to Linux.
 
 **A note on scope.** Viaduct is a solo project, built and tested for one person's real-world use. It supports local and Inoreader accounts because those are the ones I rely on, and it has been exercised against a live subscription list of around 150 feeds on Fedora 44 (ThinkPad T14 AMD Gen 6). Contributions are welcome, but I can only meaningfully test my own configuration.
 
@@ -31,9 +31,9 @@ Modern feed readers tend to be Electron / browser-engine apps with sprawling mem
 | **Smart Feeds** | Today / All Unread / Starred: virtual feeds via SQLite + FTS5 queries. |
 | **Single-writer DB worker** | Every SQLite write funnels through a dedicated tokio task. The GTK thread never blocks on I/O. |
 | **Locked-down WebKit pane** | One `WebKitWebView` for article rendering. JS / WebGL / WebRTC / DevTools / LocalStorage / IndexedDB all OFF. Strict CSP routes images through a custom `viaduct-img://` URI scheme so the WebView gets zero direct internet access. |
-| **All 8 NetNewsWire themes** | Sepia, Appanoose, Biblioteca, Hyperlegible, NewsFax, Promenade, Tiqoe Dark, Verdana Revival, all bundled byte-for-byte via `include_str!`, plus an Adwaita theme for system-native feel. |
-| **App-wide accent unification** | Selected theme's accent color propagates across the GTK chrome (sidebar selection, focus rings, switches, suggested-action buttons) via a CSS provider that beats GNOME 47+ system-accent integration. |
-| **Adaptive layout** | `AdwBreakpoint`s collapse the three-pane split at 900sp / 600sp into mobile-style navigation stacks. Same code, every form factor. |
+| **All 8 NetNewsWire themes** | Sepia, Appanoose, Biblioteca, Hyperlegible, NewsFax, Promenade, Tiqoe Dark, Verdana Revival, all bundled byte-for-byte via `include_str!`, plus an Adwaita reading-pane theme. |
+| **Owned Kanagawa design (v3.0.0)** | libadwaita dropped for a viaduct-owned stylesheet: flat, square, hard-bordered, in the Kanagawa Dragon (dark) / Lotus (light) palette, loaded above any system GTK theme. Runs identically on GNOME, Hyprland, or any Wayland desktop. |
+| **Adaptive layout** | Nested `GtkPaned` panes with drag-to-resize; the sidebar auto-hides on narrow windows (`F9` toggles it). |
 | **Reader View** | Local readability extraction (no Mercury / external service), gated behind a 5MB input cap and disk-cached. |
 | **Video thumbnails + in-pane playback** | YouTube + Vimeo detection in feed bodies. Thumbnails in the timeline; opt-in playback in a sandboxed dialog WebView (separate from the article pane's locked-down instance). |
 | **Keyboard shortcuts** | NetNewsWire's bindings, plus `Ctrl+Shift+C` copy URL, `Ctrl+Shift+R` toggle reader, `Esc` close article, `Ctrl+N` add feed, `Ctrl+?` cheat sheet. |
@@ -45,36 +45,35 @@ Modern feed readers tend to be Electron / browser-engine apps with sprawling mem
 
 ## Screenshots
 
-Captures from Fedora 43 / GNOME 50 / Wayland in dark mode, three-pane wide layout.
+Captures in dark mode, three-pane wide layout. *(Pre-v3.0.0 look; the v3.0 flat Kanagawa design is not yet re-captured.)*
 
 <p align="center">
-  <img src="docs/screenshots/main-adwaita.png" alt="Three-pane wide layout with the Adwaita article theme: system orange accent" width="800">
+  <img src="docs/screenshots/main-adwaita.png" alt="Three-pane wide layout" width="800">
 </p>
 
 <p align="center">
-  <em>Adwaita theme: system accent colour, libadwaita-native typography</em>
+  <em>Three-pane wide layout (pre-v3.0.0 capture; the v3.0 flat Kanagawa look is not yet re-shot)</em>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/main-sepia.png" alt="Three-pane wide layout with the Sepia article theme: cinnamon accent" width="800">
+  <img src="docs/screenshots/main-sepia.png" alt="Three-pane wide layout with the Sepia reading-pane theme" width="800">
 </p>
 
 <p align="center">
-  <em>Sepia theme: warm cinnamon accent propagates across the chrome (selected timeline row, sidebar selection, focus rings)</em>
+  <em>Sepia reading-pane theme (the eight NetNewsWire article themes are unchanged in v3.0.0)</em>
 </p>
 
 The AppStream metainfo (`data/org.virinvictus.Viaduct.appdata.xml`) also lists screenshots; those are the ones gnome-software / Flathub display on the install page, so keep both in sync when adding new captures.
 
 ## Installation
 
-Viaduct targets **GNOME 50+ / GTK 4.16 / libadwaita 1.7** on Wayland. The Flatpak (when shipped to Flathub) bundles every system dependency. Source builds need the development headers below.
+Viaduct targets **GTK 4.16+ / WebKitGTK 6.0** on Wayland (Hyprland, GNOME, or any Wayland compositor); libadwaita was dropped in v3.0.0. The Flatpak (when shipped to Flathub) bundles every system dependency. Source builds need the development headers below.
 
 ### Build dependencies (source)
 
 | Library | Version | Fedora package | Debian/Ubuntu package |
 |---|---|---|---|
 | GTK4 | ≥ 4.16 | `gtk4-devel` | `libgtk-4-dev` |
-| libadwaita | ≥ 1.7 | `libadwaita-devel` | `libadwaita-1-dev` |
 | WebKitGTK | 6.0 | `webkitgtk6.0-devel` | `libwebkitgtk-6.0-dev` |
 | SQLite (bundled) | — | — | — |
 | TLS | rustls (vendored) | — | — |
@@ -83,10 +82,10 @@ WebKitGTK 6.0 powers the article reading pane. It runs in a heavily-neutered con
 
 ```bash
 # Fedora 43+
-sudo dnf install gtk4-devel libadwaita-devel webkitgtk6.0-devel
+sudo dnf install gtk4-devel webkitgtk6.0-devel
 
 # Debian/Ubuntu (24.04+)
-sudo apt install libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev
+sudo apt install libgtk-4-dev libwebkitgtk-6.0-dev
 
 # Build via Cargo (workspace root):
 cargo build --release      # binary lands at target/release/viaduct
@@ -103,7 +102,7 @@ sudo meson install -C builddir
 
 ## Architecture
 
-- **Cargo workspace** with two crates: `viaduct-core` (headless: database, network, parser, models, errors, paths, runtime helpers, with no GTK deps) and `viaduct` (binary: GTK4 / libadwaita / WebKit UI). The split makes architectural boundaries a *compile error*, not a code-review rule.
+- **Cargo workspace** with two crates: `viaduct-core` (headless: database, network, parser, models, errors, paths, runtime helpers, with no GTK deps) and `viaduct` (binary: GTK4 + WebKit UI, no libadwaita). The split makes architectural boundaries a *compile error*, not a code-review rule.
 - **Network + data layers** isolated from the UI thread via `tokio` multi-thread runtime. The GTK thread reads in-memory models and posts commands down `mpsc` channels; it never blocks on SQLite or the network.
 - **Three databases.** `articles.sqlite` (with FTS5 virtual table), `feed-settings.sqlite` (per-feed cache, conditional-GET state), `sync.sqlite` (Inoreader sync state). All in WAL mode. OPML on disk is the source of truth for the feed/folder hierarchy, *not* SQL, matching NetNewsWire exactly.
 - **Single neutered WebKit instance** for the article pane, with all images routed through a custom `viaduct-img://` URI scheme so the WebView never reaches the public internet directly.

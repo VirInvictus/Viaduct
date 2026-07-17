@@ -10,7 +10,7 @@
 
 ## 1. Mission Statement
 
-viaduct is a fast, native GNOME RSS reader achieving full feature-parity with NetNewsWire's **local and Inoreader accounts**. It is a direct translation of the NetNewsWire architectural philosophy (strict background threading, aggressive SQLite caching, and native text rendering) into the Linux ecosystem via Rust and GTK4.
+viaduct is a fast, native Linux RSS reader (GTK4, no libadwaita as of v3.0.0) achieving full feature-parity with NetNewsWire's **local and Inoreader accounts**. It is a direct translation of the NetNewsWire architectural philosophy (strict background threading, aggressive SQLite caching, and native text rendering) into the Linux ecosystem via Rust and GTK4. It runs on GNOME, Hyprland, or any Wayland desktop.
 
 Design philosophy: **Speed and Data Sovereignty.** viaduct handles massive subscription lists without locking the UI thread. It targets idle RAM of **100–300 MB** and a hard peak ceiling of **500 MB**, trading ultra-minimalist asceticism for rock-solid performance and offline image caching. Other remote sync engines are out of scope; the app supports local accounts and Inoreader sync.
 
@@ -221,7 +221,7 @@ viaduct is packaged as a Flatpak-first application.
 
 * **Permissions:** Strictly locked down.
     * `network`: Required for feed fetching.
-    * `xdg-run/dconf`: Required for GNOME settings.
+    * `xdg-run/dconf`: Required for the GSettings/dconf backend (present on any Wayland session, not GNOME-specific).
     * No arbitrary home directory access. OPML import/export handled entirely via `org.freedesktop.portal.FileChooser`.
 * **Background Daemon:** App is configured to support background execution permissions via portals, allowing it to sync on a cron schedule even when the UI is closed.
 
