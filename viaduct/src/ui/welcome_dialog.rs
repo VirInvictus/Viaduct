@@ -17,9 +17,10 @@
 //! true on dismiss closes the loop. dconf-editor flip-back to false is
 //! the supported "show me the welcome dialog again" path.
 
-use adw::prelude::*;
 use gtk::glib;
+use gtk::prelude::*;
 
+use crate::ui::rows;
 use crate::ui::window::ViaductWindow;
 
 /// Curated suggested-feed list. Each entry seeds the OPML on click.
@@ -57,18 +58,23 @@ const SUGGESTED_FEEDS: &[(&str, &str, &str)] = &[
 
 /// Build and present the welcome dialog modal to `parent`.
 pub fn present(parent: &ViaductWindow) {
-    let dialog = adw::Dialog::new();
-    dialog.set_title("Welcome to viaduct");
-    dialog.set_content_width(520);
+    // Phase 20c: plain modal window. The `adw::Dialog` closed on
+    // click-outside; a modal `gtk::Window` does not, so Escape and the
+    // close button are the dismiss paths, both routed through
+    // `close-request` below.
+    let dialog = gtk::Window::builder()
+        .title("Welcome to viaduct")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(520)
+        .build();
+    crate::ui::close_on_escape(&dialog);
 
-    let toolbar = adw::ToolbarView::new();
-    let header = adw::HeaderBar::new();
-    header.set_show_end_title_buttons(true);
-    toolbar.add_top_bar(&header);
+    let header = gtk::HeaderBar::new();
 
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
-    scroller.set_propagate_natural_height(true);
+    scroller.set_vexpand(true);
 
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 18);
     outer.set_margin_top(24);
@@ -134,13 +140,11 @@ pub fn present(parent: &ViaductWindow) {
     feed_list.set_selection_mode(gtk::SelectionMode::None);
 
     for (name, subtitle, url) in SUGGESTED_FEEDS {
-        let row = adw::ActionRow::new();
-        row.set_title(name);
-        row.set_subtitle(subtitle);
         let plus = gtk::Button::from_icon_name("list-add-symbolic");
         plus.set_valign(gtk::Align::Center);
         plus.add_css_class("flat");
         plus.set_tooltip_text(Some(&format!("Subscribe to {name}")));
+        let row = rows::button_row(name, Some(subtitle), &plus);
         let parent_weak = parent.downgrade();
         let url_owned = (*url).to_string();
         let name_owned = (*name).to_string();
@@ -191,8 +195,6 @@ pub fn present(parent: &ViaductWindow) {
                 mark_welcome_shown();
             }
         ));
-        row.add_suffix(&plus);
-        row.set_activatable_widget(Some(&plus));
         feed_list.append(&row);
     }
     outer.append(&feed_list);
@@ -207,18 +209,22 @@ pub fn present(parent: &ViaductWindow) {
     outer.append(&footer);
 
     scroller.set_child(Some(&outer));
-    toolbar.set_content(Some(&scroller));
-    dialog.set_child(Some(&toolbar));
 
-    // Always mark as shown when the dialog closes by any path —
-    // dismiss button, escape key, modal-blocker click. Without this
-    // a cautious user who closes the dialog without picking would
-    // see it again on every launch.
-    dialog.connect_closed(|_| {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.append(&header);
+    content.append(&scroller);
+    dialog.set_child(Some(&content));
+
+    // Always mark as shown when the dialog closes by any path — close
+    // button or escape key (a modal `gtk::Window` doesn't close on an
+    // outside click, so that former path is simply gone). Without this a
+    // cautious user who closes without picking would see it every launch.
+    dialog.connect_close_request(|_| {
         mark_welcome_shown();
+        glib::Propagation::Proceed
     });
 
-    dialog.present(Some(parent));
+    dialog.present();
 }
 
 fn mark_welcome_shown() {
