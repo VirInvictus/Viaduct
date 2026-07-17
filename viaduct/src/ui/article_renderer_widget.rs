@@ -173,10 +173,10 @@ impl ArticleRenderer {
         op.run_dialog(parent);
     }
 
-    /// Read access to the underlying `WebKitWebView`. Currently unused
-    /// by callers outside `ArticlePaneView`; exposed for future preview /
-    /// printing code paths that need the raw view.
-    #[allow(dead_code)]
+    /// Read access to the underlying `WebKitWebView`. The window needs it
+    /// to install capture-phase nav shortcuts and to move keyboard focus
+    /// into the article body (Phase 19); preview / printing paths may want
+    /// the raw view too.
     pub fn web_view(&self) -> Option<webkit6::WebView> {
         self.imp().web_view.get().cloned()
     }

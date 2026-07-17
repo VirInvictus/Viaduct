@@ -1,5 +1,15 @@
 # viaduct: Patch Notes
 
+## v2.9.0: Reading with the keyboard
+
+viaduct could be navigated by keyboard but not actually *read* by one. Space pages the article, as the shortcut window has always advertised, but only while the article body holds keyboard focus, and nothing ever gave it focus. Moving through the timeline with `j`, `k`, or `n` left focus on the list, so Space did nothing and reading a long piece meant reaching for the mouse to click into the pane first. That is now closed.
+
+- **Selecting an article with the keyboard focuses it.** Press `j`, `k`, or `n` and focus follows into the article, so Space and Shift+Space page it immediately. Navigation keeps working from there: `j`, `k`, `n`, `Down`, and `Up` still move through the timeline while you are in the body, so nothing is traded away for it. Selecting with the mouse deliberately does not move focus, which keeps searching from being interrupted.
+- **`F6` focuses the article pane** for an article you opened by clicking. `Escape` returns to the timeline, as before.
+- **The keyboard cheat sheet is accurate again.** `Ctrl+?` listed Space and Shift+Space as if they always worked; they now do, and `F6` joins them.
+
+One gap stays open and is now written down in the spec rather than left implied: NetNewsWire's Space also jumps to the next unread article once you reach the bottom of the current one. viaduct's Space pages but never advances. Detecting the bottom of an article needs to run JavaScript inside the reading pane, which the article renderer forbids by design, so this needs a real decision rather than a patch.
+
 ## v2.8.3: NetNewsWire upstream sync (July 2026)
 
 Bug fixes drawn from fast-forwarding the NetNewsWire reference clone to `08d10f501`. Most of upstream's 85 new commits are Mac timeline work and release plumbing that does not apply here, but this window carried real fixes to code we share, plus one bug the sync work turned up on our side. No new features.

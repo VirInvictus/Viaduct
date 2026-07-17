@@ -153,6 +153,7 @@ Standard desktop accelerators, prioritizing spatial navigation without forcing a
 | Action | Shortcut |
 |--------|----------|
 | Smart Read (Scroll down, jump to next unread) | Space |
+| Focus Article Pane | F6 |
 | Move down list | j, Down |
 | Move up list | k, Up |
 | Toggle Read/Unread | m |
@@ -162,9 +163,9 @@ Standard desktop accelerators, prioritizing spatial navigation without forcing a
 | Focus Search | Ctrl+F |
 | Toggle Sidebar | F9 |
 
----
+**Space is WebKit's, and only half of Smart Read is implemented.** Paging the article body is WebKit's own native binding, which applies only while the `WebKitWebView` holds keyboard focus. Phase 19 makes that reachable without a mouse: `j`/`k`/`n` hand focus to the body once they select an article, and `F6` does it on demand for an article opened by click. The capture-phase nav shortcuts installed on the WebView keep `Down`/`Up`/`j`/`k`/`n` navigating from there, so both halves of this table hold at once.
 
-## 6. Storage & State Persistence
+The *"jump to next unread"* half of Smart Read is **not implemented**. It needs an at-bottom scroll monitor, which needs a JS bridge that §2.2's lockdown disables. Space pages; it never advances. Reaching NNW parity here means either finding a non-JS scroll-position signal or carving a deliberate exception into the lockdown, and the latter is a §7 decision, not an implementation detail.
 
 All state lives under `$XDG_DATA_HOME/viaduct/`:
 
@@ -332,7 +333,9 @@ A single `theme.rs`: one `const STRUCTURE: &str` plus a `format!` interpolating 
 
 Two non-negotiables, both inherited as lessons rather than preferences:
 
-- **Load at `STYLE_PROVIDER_PRIORITY_USER + 1`, never `APPLICATION`.** A global `~/.config/gtk-4.0/gtk.css` loads at USER (800) and outranks APPLICATION (600), silently half-overriding the in-app sheet. This hid in the pilot for a long time because a Kanagawa Dragon system skin over a Dragon default looks correct. Brandon's desktop carries exactly such a skin, so viaduct would hit it. Remove the previous provider before adding the new one on every apply.
+- **Load at `STYLE_PROVIDER_PRIORITY_USER + 1`, never `APPLICATION`.** A global `~/.config/gtk-4.0/gtk.css` loads at USER (800) and outranks APPLICATION (600), silently half-overriding the in-app sheet. This hid in the pilot for a long time because a Kanagawa Dragon system skin over a Dragon default looks correct. **Confirmed present on the dev machine (2026-07-17), not hypothetical:** `~/.config/gtk-4.0/gtk.css` is a symlink to `~/.themes/Kanagawa-Dark-Dragon/gtk-4.0/gtk.css`. Remove the previous provider before adding the new one on every apply.
+
+**The system GTK theme starts applying the moment libadwaita leaves, and that is new ground the pilot did not cover.** libadwaita apps ignore `gtk-theme-name`; plain GTK4 apps do not. The dev machine's `~/.config/gtk-4.0/settings.ini` sets `gtk-theme-name=Kanagawa-Dark-Dragon` **and** `gtk-application-prefer-dark-theme=1`, and libadwaita is actively overriding both today (the running app logs `Adwaita-WARNING: Using GtkSettings:gtk-application-prefer-dark-theme with libadwaita is unsupported`). After the toolkit cut, GTK4 will honour both: viaduct will load the full Kanagawa theme underneath our sheet, and the dark preference will take effect on its own. Neither is a regression, but both change what the owned sheet is layered over, so 20d must be authored and reviewed on a machine with that theme active rather than against stock Adwaita. This also cuts the other way and in our favour: §12.3's plan to force polarity via `set_gtk_application_prefer_dark_theme` for fixed themes only works *because* libadwaita is gone.
 - **Scope the focus ring from day one.** The pilot shipped `*:focus-visible { outline: … }`; pressing a bare modifier (a tiling workspace-switch chord) flips GTK into focus-visible mode and flashes the accent across every widget in the focus chain. It **does not reproduce in a screenshot**, which is why the pilot's own verification missed it and a sibling app found it later. Write it scoped to `button, entry, spinbutton, switch, checkbutton, check, dropdown, scale` with `outline-offset: -1px`. Lists and grids show position through the selection background and need no outline.
 
 House rule, unit-tested: **no `font-family` anywhere in the sheet.** The bundled fonts (`fonts.rs`: Inter, SourceSerif4, JetBrainsMono, Atkinson Hyperlegible) are unchanged.

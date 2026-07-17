@@ -966,6 +966,15 @@ impl ViaductWindow {
                     gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT,
                     None,
                 );
+                // Phase 19: hand focus to the article body, so Space and
+                // Shift+Space reach WebKit's native paging without a click
+                // into the pane first. Only the keyboard-nav path does this;
+                // doing it from the selection-changed handler instead would
+                // steal focus out of the search entry every time a search
+                // repopulated the timeline. Safe because the nav keys are
+                // captured on the WebView too, so j/k/n/Down/Up still work
+                // from there.
+                self.act_focus_article();
                 return;
             }
             i += step;
@@ -1848,6 +1857,17 @@ impl ViaductWindow {
         imp.timeline_view.get().focus_search_entry();
     }
 
+    /// Move keyboard focus into the article body, mirroring how
+    /// `act_focus_search` jumps into the search entry. Focus is what makes
+    /// WebKit's native Space / Shift+Space paging apply, so without this a
+    /// mouse-free user had no way to scroll a long article: the keyboard
+    /// nav actions only move the timeline selection. `advance_unread` calls
+    /// this too, so `j`/`k`/`n` land here automatically; the explicit action
+    /// covers articles opened by mouse click.
+    pub(crate) fn act_focus_article(&self) {
+        self.imp().article_pane.get().focus_article();
+    }
+
     /// Toggles the outer split view between uncollapsed (both panes visible)
     /// and collapsed (only the content pane, content-mode-shown). Not a true
     /// "hide sidebar" on wide screens because AdwNavigationSplitView doesn't
@@ -2271,7 +2291,43 @@ impl ViaductWindow {
     /// soon as the user clicked a row. By attaching a Capture-phase
     /// controller directly to the list view, the action fires before the
     /// list view's built-in handlers.
+    /// Install the capture-phase navigation shortcuts on every widget that
+    /// can hold keyboard focus while reading.
+    ///
+    /// The timeline `GtkListView` needs them to beat its own cursor
+    /// handling. The article `WebKitWebView` needs them for the opposite
+    /// reason (Phase 19): once focus moves into the body so Space can reach
+    /// WebKit's native paging, WebKit would otherwise swallow `Down`/`Up`
+    /// as scrolling and strand `j`/`k`/`n` behind the focused widget, since
+    /// app accelerators run at bubble phase. Capturing here keeps spec.md
+    /// §5's two halves ("Space pages the article" and "Down moves the
+    /// list") true at the same time. Space is deliberately absent from
+    /// `NAV_BINDINGS`, so it alone falls through to WebKit.
+    ///
+    /// Each widget needs its own controller; a `GtkShortcutController` can
+    /// only be added to one widget.
     fn install_timeline_capture_shortcuts(&self) {
+        self.imp()
+            .timeline_view
+            .get()
+            .list_view()
+            .add_controller(Self::build_nav_capture_controller());
+
+        // `ArticlePaneView::bootstrap` builds the WebView and runs before
+        // `wire_models`, so this resolves. Warn rather than skip quietly if
+        // that order ever changes: the symptom would be nav keys dying
+        // whenever the article body has focus, which is easy to misread as
+        // a WebKit quirk.
+        match self.imp().article_pane.get().web_view() {
+            Some(web_view) => web_view.add_controller(Self::build_nav_capture_controller()),
+            None => tracing::warn!(
+                "article WebView missing when installing nav shortcuts; \
+                 keyboard navigation will not work from the article pane"
+            ),
+        }
+    }
+
+    fn build_nav_capture_controller() -> gtk::ShortcutController {
         let controller = gtk::ShortcutController::new();
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
 
@@ -2309,11 +2365,7 @@ impl ViaductWindow {
             controller.add_shortcut(shortcut);
         }
 
-        self.imp()
-            .timeline_view
-            .get()
-            .list_view()
-            .add_controller(controller);
+        controller
     }
 }
 

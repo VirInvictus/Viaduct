@@ -28,6 +28,12 @@ Licensed under the MIT License. See LICENSE in the project root for details.
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
+                <property name="title" translatable="yes">Focus Article Pane</property>
+                <property name="accelerator">F6</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
                 <property name="title" translatable="yes">Next Unread</property>
                 <property name="accelerator">n Down j</property>
               </object>

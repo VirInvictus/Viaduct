@@ -429,6 +429,21 @@ impl ArticlePaneView {
         self.imp().article_renderer.get().print(parent);
     }
 
+    /// The article `WebKitWebView`, for the window's Phase 19 keyboard
+    /// plumbing: it installs capture-phase nav shortcuts here so `j`/`k`/
+    /// `Down` keep navigating even while the body holds focus, and moves
+    /// focus in so Space reaches WebKit's native paging.
+    pub fn web_view(&self) -> Option<webkit6::WebView> {
+        self.imp().article_renderer.get().web_view()
+    }
+
+    /// Move keyboard focus into the article body. Returns false when there
+    /// is no WebView yet (bootstrap hasn't run) or it refuses focus, which
+    /// the caller uses to leave focus where it was rather than stranding it.
+    pub fn focus_article(&self) -> bool {
+        self.web_view().is_some_and(|wv| wv.grab_focus())
+    }
+
     /// Read the current article's preferred URL. Used by `act_copy_url` /
     /// `act_open_in_browser` on the window when the timeline isn't focused.
     pub fn current_article_url(&self) -> Option<String> {

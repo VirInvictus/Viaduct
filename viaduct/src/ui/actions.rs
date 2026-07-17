@@ -53,6 +53,7 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     // App chrome
     register(window, "refresh", |w| w.act_refresh());
     register(window, "focus-search", |w| w.act_focus_search());
+    register(window, "focus-article", |w| w.act_focus_article());
     register(window, "toggle-sidebar", |w| w.act_toggle_sidebar());
     register(window, "shortcuts", |w| w.act_shortcuts());
     register(window, "preferences", |w| w.act_preferences());
@@ -126,13 +127,17 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     //
     // gtk-rs accelerator strings use GTK's shorthand: "<Ctrl>r", "space",
     // "<Shift>space", "question", etc. — see gtk_accelerator_parse.
-    // Space / Shift+Space intentionally NOT bound at the window level —
-    // WebKit handles them natively for page-down / page-up inside the
-    // article pane. Reintroduces NNW's "advance at bottom" behaviour
-    // pending a webkit-side scroll-position monitor (deferred, requires
-    // JS bridge that's currently disabled by Phase 6 lockdown).
-    // The smart-read / scroll-up actions remain registered so any
-    // future binding (or programmatic activation) still routes here.
+    // Space / Shift+Space stay unbound at the window level: WebKit pages
+    // the article natively, and it can only do that while the WebView holds
+    // focus. Phase 19 makes that reachable without a mouse — `j`/`k`/`n`
+    // hand focus to the body (`advance_unread`), and `win.focus-article`
+    // does it on demand — while the capture-phase nav shortcuts installed
+    // on the WebView keep Down/Up/j/k/n navigating from there.
+    // Still missing versus NNW: the "advance to next unread at bottom" half
+    // of Smart Read needs an at-bottom scroll monitor, which needs a JS
+    // bridge that §7.4's lockdown disables. So Space pages but never
+    // advances; the smart-read / scroll-up actions stay registered as the
+    // landing site for that work.
     app.set_accels_for_action("win.next-unread", &["n", "Down", "j"]);
     app.set_accels_for_action("win.prev-unread", &["minus", "Up", "k"]);
     app.set_accels_for_action("win.toggle-read", &["r", "m"]);
@@ -150,6 +155,9 @@ pub fn install(window: &ViaductWindow, app: &adw::Application) {
     app.set_accels_for_action("win.add-feed", &["<Ctrl>n"]);
     app.set_accels_for_action("win.refresh", &["<Ctrl>r"]);
     app.set_accels_for_action("win.focus-search", &["<Ctrl>f"]);
+    // F6 is the desktop convention for moving focus between panes, and is
+    // free here. Escape (win.close-article) is the way back out.
+    app.set_accels_for_action("win.focus-article", &["F6"]);
     app.set_accels_for_action("win.toggle-sidebar", &["F9"]);
     app.set_accels_for_action("win.shortcuts", &["<Ctrl>question"]);
 }
