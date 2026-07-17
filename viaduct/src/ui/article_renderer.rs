@@ -131,15 +131,15 @@ pub struct Theme {
     /// CSS to inline into the wrapper's `<style>[[style]]</style>`.
     pub stylesheet: &'static str,
     /// True for themes designed for dark backgrounds. `select_for_dark_mode`
-    /// uses this to honor `adw::StyleManager::dark`.
+    /// uses this to honor `theme::is_dark()`.
     pub dark: bool,
-    /// Hex color (`#rrggbb`) applied app-wide as `@define-color
-    /// accent_bg_color` / `accent_color` so the GTK chrome (sidebar
-    /// selection, focus rings, switches, buttons) visually echoes the
-    /// theme of the article pane. Pulled from each NNW stylesheet's
-    /// most distinctive accent. `None` means "don't override" — the
-    /// Adwaita theme uses this so GNOME's system accent surfaces
-    /// unchanged through the chrome.
+    /// Hex color (`#rrggbb`) injected into the article page as the
+    /// `--accent-color` CSS custom property (`render_themed`), pulled from
+    /// each NNW stylesheet's most distinctive accent. `None` (the Adwaita
+    /// theme) injects nothing, so the theme's own stylesheet colours apply.
+    /// Phase 20d: this drives the WebKit article pane only — the GTK chrome
+    /// is Kanagawa via the owned sheet and no longer echoes the article
+    /// theme.
     pub accent_hex: Option<&'static str>,
     /// Hand-tuned `@media (prefers-color-scheme: dark)` overlay that
     /// sits AFTER `stylesheet` in the cascade — the original NNW
@@ -258,7 +258,7 @@ pub fn theme_by_id(id: &str) -> Theme {
         .unwrap_or(THEMES[0])
 }
 
-/// Choose a theme appropriate for the current libadwaita color scheme.
+/// Choose a theme appropriate for the current color scheme (`theme::is_dark()`).
 /// Sepia for light; Tiqoe Dark for dark. Phase 6 ships this hardcoded
 /// pairing; v1.2.0 will expose a per-user theme picker via GSettings.
 pub fn select_for_dark_mode(is_dark: bool) -> Theme {
