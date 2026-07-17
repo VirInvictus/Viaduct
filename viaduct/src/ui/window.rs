@@ -148,10 +148,12 @@ pub(crate) mod imp {
         // stack). `size_allocate` is where a plain window learns its width.
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
             self.parent_size_allocate(width, height, baseline);
-            let sidebar = self.sidebar_view.get();
             let should_show = width >= SIDEBAR_AUTOHIDE_WIDTH;
-            if !self.sidebar_manual_override.get() && sidebar.get_visible() != should_show {
-                sidebar.set_visible(should_show);
+            if !self.sidebar_manual_override.get()
+                && self.sidebar_view.get().get_visible() != should_show
+            {
+                // Via the wrapper so the focus-move-out-of-sidebar guard runs.
+                self.obj().set_sidebar_visible(should_show);
             }
         }
     }
@@ -1863,10 +1865,30 @@ impl ViaductWindow {
     /// user control — width-driven auto-collapse (see `size_allocate`) stops
     /// managing the sidebar once they've toggled it themselves.
     pub(crate) fn act_toggle_sidebar(&self) {
+        self.imp().sidebar_manual_override.set(true);
+        let showing = self.imp().sidebar_view.get().get_visible();
+        self.set_sidebar_visible(!showing);
+    }
+
+    /// Show or hide the sidebar pane, moving keyboard focus out of it first
+    /// when hiding. Without the focus move, a `set_visible(false)` while a
+    /// sidebar row (or its search entry) holds focus strands the focus on a
+    /// now-hidden widget and subsequent key events go nowhere until the user
+    /// clicks. Shared by `act_toggle_sidebar` (F9) and the `size_allocate`
+    /// auto-collapse.
+    pub(crate) fn set_sidebar_visible(&self, show: bool) {
         let imp = self.imp();
-        imp.sidebar_manual_override.set(true);
         let sidebar = imp.sidebar_view.get();
-        sidebar.set_visible(!sidebar.get_visible());
+        if sidebar.get_visible() == show {
+            return;
+        }
+        if !show
+            && let Some(focus) = self.focus()
+            && focus.is_ancestor(&sidebar)
+        {
+            let _ = imp.timeline_view.get().list_view().grab_focus();
+        }
+        sidebar.set_visible(show);
     }
     pub(crate) fn act_shortcuts(&self) {
         let builder = gtk::Builder::from_string(include_str!("shortcuts.ui"));
