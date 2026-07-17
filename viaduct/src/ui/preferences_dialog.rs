@@ -3,108 +3,129 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 //! Preferences dialog. Port of NNW's `AppearancePreferencesView` and the
-//! "General" tab of NSPreferencesWindow into a single `AdwPreferencesDialog`.
+//! "General" tab of NSPreferencesWindow.
+//!
+//! Phase 20c: a plain modal `gtk::Window` over `ui::rows`, replacing the
+//! `AdwPreferencesDialog` / `Page` / `Group` / `ComboRow` / `SwitchRow` /
+//! `EntryRow` set. Escape-to-close is explicit (`ui::close_on_escape`);
+//! the adw sheet gave it for free.
 //!
 //! For v0.8.0 we expose color-scheme follow + new-article notifications.
 //! Other schema keys (refresh interval, retention days, font overrides) are
 //! reserved for future phases that wire them into behavior.
 
-use adw::prelude::*;
 use gtk::gio;
 use gtk::glib;
+use gtk::prelude::*;
 
 use crate::preferences::keys;
+use crate::ui::rows;
 use crate::ui::window::ViaductWindow;
 
 /// Build and present the preferences dialog. When the schema isn't installed
 /// (dev environment without `glib-compile-schemas` having run), the dialog
 /// renders a single explanatory row and the toggles remain inert.
 pub fn present(parent: &ViaductWindow) {
-    let dialog = adw::PreferencesDialog::builder()
-        .title("Preferences")
-        .build();
-    let page = adw::PreferencesPage::new();
-    page.set_title("General");
-    page.set_icon_name(Some("preferences-system-symbolic"));
-
-    let appearance = adw::PreferencesGroup::new();
-    appearance.set_title("Appearance");
-    page.add(&appearance);
-
-    let typography = adw::PreferencesGroup::new();
-    typography.set_title("Typography");
-    typography.set_description(Some(
-        "Override the font family for each surface. Empty = use system default. Type a family name (e.g. \"Atkinson Hyperlegible\") exactly as installed.",
-    ));
-    page.add(&typography);
-
-    let sync = adw::PreferencesGroup::new();
-    sync.set_title("Sync");
-    sync.set_description(Some(
-        "Automatic refresh on startup, on a periodic schedule, and optionally while the window is closed.",
-    ));
-    page.add(&sync);
-
-    let notifications = adw::PreferencesGroup::new();
-    notifications.set_title("Notifications");
-    page.add(&notifications);
-
-    let playback = adw::PreferencesGroup::new();
-    playback.set_title("Video playback");
-    page.add(&playback);
+    let (appearance, appearance_list) = rows::group(Some("Appearance"), None);
+    let (typography, typography_list) = rows::group(
+        Some("Typography"),
+        Some(
+            "Override the font family for each surface. Empty = use system default. Type a family name (e.g. \"Atkinson Hyperlegible\") exactly as installed.",
+        ),
+    );
+    let (sync, sync_list) = rows::group(
+        Some("Sync"),
+        Some(
+            "Automatic refresh on startup, on a periodic schedule, and optionally while the window is closed.",
+        ),
+    );
+    let (notifications, notifications_list) = rows::group(Some("Notifications"), None);
+    let (playback, playback_list) = rows::group(Some("Video playback"), None);
 
     if let Some(settings) = crate::preferences::settings() {
-        appearance.add(&color_scheme_row(&settings));
-        appearance.add(&article_theme_row(&settings));
-        typography.add(&font_row(
+        appearance_list.append(&color_scheme_row(&settings));
+        appearance_list.append(&article_theme_row(&settings));
+        typography_list.append(&font_row(
             &settings,
             keys::FONT_UI,
             "App font",
             "Sidebar, timeline, header bars, dialogs.",
         ));
-        typography.add(&font_row(
+        typography_list.append(&font_row(
             &settings,
             keys::FONT_SERIF,
             "Reading font",
             "Article body in the reading pane. Layered after the article theme.",
         ));
-        typography.add(&font_row(
+        typography_list.append(&font_row(
             &settings,
             keys::FONT_MONOSPACE,
             "Monospace font",
             "Code and pre blocks (article pane + chrome).",
         ));
-        sync.add(&refresh_on_startup_row(&settings));
-        sync.add(&refresh_interval_row(&settings));
-        sync.add(&run_in_background_row(&settings, parent));
-        notifications.add(&notifications_row(&settings));
-        playback.add(&video_playback_row(&settings));
+        sync_list.append(&refresh_on_startup_row(&settings));
+        sync_list.append(&refresh_interval_row(&settings));
+        sync_list.append(&run_in_background_row(&settings, parent));
+        notifications_list.append(&notifications_row(&settings));
+        playback_list.append(&video_playback_row(&settings));
     } else {
-        let warn = adw::ActionRow::new();
-        warn.set_title("Settings unavailable");
-        warn.set_subtitle(
-            "GSettings schema isn’t installed. Run `glib-compile-schemas data/` and retry.",
-        );
-        appearance.add(&warn);
+        appearance_list.append(&rows::row(
+            "Settings unavailable",
+            Some("GSettings schema isn’t installed. Run `glib-compile-schemas data/` and retry."),
+            None,
+        ));
     }
 
-    dialog.add(&page);
-    dialog.present(Some(parent));
-}
+    // Phase 20c: a plain modal window rather than an in-window
+    // `adw::PreferencesDialog` sheet. `AdwPreferencesPage` scrolled and
+    // clamped its groups for us, so both are explicit here.
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(24)
+        .margin_top(24)
+        .margin_bottom(24)
+        .margin_start(24)
+        .margin_end(24)
+        .build();
+    for group in [&appearance, &typography, &sync, &notifications, &playback] {
+        content.append(group);
+    }
 
-fn color_scheme_row(settings: &gio::Settings) -> adw::ComboRow {
-    let row = adw::ComboRow::builder()
-        .title("Color scheme")
-        .subtitle("Follow the system theme or force light/dark.")
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&content)
         .build();
 
-    let model = gtk::StringList::new(&["Follow system", "Force light", "Force dark"]);
-    row.set_model(Some(&model));
-    row.set_selected(nick_to_index(&settings.string(keys::COLOR_SCHEME)));
+    let outer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    outer.append(&gtk::HeaderBar::new());
+    outer.append(&scroller);
+
+    let window = gtk::Window::builder()
+        .title("Preferences")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(600)
+        .default_height(700)
+        .child(&outer)
+        .build();
+    crate::ui::close_on_escape(&window);
+    window.present();
+}
+
+fn color_scheme_row(settings: &gio::Settings) -> gtk::ListBoxRow {
+    let (row, drop_down) = rows::combo_row(
+        "Color scheme",
+        Some("Follow the system theme or force light/dark."),
+        &["Follow system", "Force light", "Force dark"],
+    );
+    drop_down.set_selected(nick_to_index(&settings.string(keys::COLOR_SCHEME)));
 
     let settings_for_row = settings.clone();
-    row.connect_selected_notify(move |row| {
-        let nick = index_to_nick(row.selected());
+    drop_down.connect_selected_notify(move |drop_down| {
+        let nick = index_to_nick(drop_down.selected());
         if settings_for_row.string(keys::COLOR_SCHEME).as_str() != nick
             && let Err(e) = settings_for_row.set_string(keys::COLOR_SCHEME, nick)
         {
@@ -117,10 +138,10 @@ fn color_scheme_row(settings: &gio::Settings) -> adw::ComboRow {
         Some(keys::COLOR_SCHEME),
         glib::clone!(
             #[weak]
-            row,
+            drop_down,
             move |s, _| {
                 let nick = s.string(keys::COLOR_SCHEME);
-                row.set_selected(nick_to_index(&nick));
+                drop_down.set_selected(nick_to_index(&nick));
             }
         ),
     );
@@ -132,25 +153,24 @@ fn color_scheme_row(settings: &gio::Settings) -> adw::ComboRow {
 /// color scheme" plus all 8 NNW-ported themes; the selected theme's
 /// accent color also propagates app-wide via
 /// `preferences::apply_article_theme_accent`.
-fn article_theme_row(settings: &gio::Settings) -> adw::ComboRow {
+fn article_theme_row(settings: &gio::Settings) -> gtk::ListBoxRow {
     use crate::ui::article_renderer::THEMES;
-
-    let row = adw::ComboRow::builder()
-        .title("Article theme")
-        .subtitle("Reading pane typography. Accent color propagates app-wide.")
-        .build();
 
     // Index 0 = Auto; subsequent indices match THEMES[i-1].
     let mut labels = vec!["Follow color scheme".to_string()];
     labels.extend(THEMES.iter().map(|t| t.display_name.to_string()));
     let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-    let model = gtk::StringList::new(&label_refs);
-    row.set_model(Some(&model));
-    row.set_selected(theme_nick_to_index(&settings.string(keys::ARTICLE_THEME)));
+
+    let (row, drop_down) = rows::combo_row(
+        "Article theme",
+        Some("Reading pane typography. Accent color propagates app-wide."),
+        &label_refs,
+    );
+    drop_down.set_selected(theme_nick_to_index(&settings.string(keys::ARTICLE_THEME)));
 
     let settings_for_row = settings.clone();
-    row.connect_selected_notify(move |row| {
-        let nick = theme_index_to_nick(row.selected());
+    drop_down.connect_selected_notify(move |drop_down| {
+        let nick = theme_index_to_nick(drop_down.selected());
         if settings_for_row.string(keys::ARTICLE_THEME).as_str() != nick
             && let Err(e) = settings_for_row.set_string(keys::ARTICLE_THEME, nick)
         {
@@ -163,10 +183,10 @@ fn article_theme_row(settings: &gio::Settings) -> adw::ComboRow {
         Some(keys::ARTICLE_THEME),
         glib::clone!(
             #[weak]
-            row,
+            drop_down,
             move |s, _| {
                 let nick = s.string(keys::ARTICLE_THEME);
-                row.set_selected(theme_nick_to_index(&nick));
+                drop_down.set_selected(theme_nick_to_index(&nick));
             }
         ),
     );
@@ -214,25 +234,23 @@ fn theme_index_to_nick(index: u32) -> &'static str {
 /// In-pane spawns a transient WebKit dialog; External hands off to the
 /// system handler (xdg-open / mpv / browser); Disabled hides the play
 /// button entirely.
-fn video_playback_row(settings: &gio::Settings) -> adw::ComboRow {
-    let row = adw::ComboRow::builder()
-        .title("Video playback")
-        .subtitle("How YouTube / Vimeo videos play when one is detected on an article.")
-        .build();
-
-    let model = gtk::StringList::new(&[
-        "Play in app (sandboxed)",
-        "Open in default handler",
-        "Don’t show play button",
-    ]);
-    row.set_model(Some(&model));
-    row.set_selected(video_mode_nick_to_index(
+fn video_playback_row(settings: &gio::Settings) -> gtk::ListBoxRow {
+    let (row, drop_down) = rows::combo_row(
+        "Video playback",
+        Some("How YouTube / Vimeo videos play when one is detected on an article."),
+        &[
+            "Play in app (sandboxed)",
+            "Open in default handler",
+            "Don’t show play button",
+        ],
+    );
+    drop_down.set_selected(video_mode_nick_to_index(
         &settings.string(keys::VIDEO_PLAYBACK_MODE),
     ));
 
     let settings_for_row = settings.clone();
-    row.connect_selected_notify(move |row| {
-        let nick = video_mode_index_to_nick(row.selected());
+    drop_down.connect_selected_notify(move |drop_down| {
+        let nick = video_mode_index_to_nick(drop_down.selected());
         if settings_for_row.string(keys::VIDEO_PLAYBACK_MODE).as_str() != nick
             && let Err(e) = settings_for_row.set_string(keys::VIDEO_PLAYBACK_MODE, nick)
         {
@@ -244,10 +262,10 @@ fn video_playback_row(settings: &gio::Settings) -> adw::ComboRow {
         Some(keys::VIDEO_PLAYBACK_MODE),
         glib::clone!(
             #[weak]
-            row,
+            drop_down,
             move |s, _| {
                 let nick = s.string(keys::VIDEO_PLAYBACK_MODE);
-                row.set_selected(video_mode_nick_to_index(&nick));
+                drop_down.set_selected(video_mode_nick_to_index(&nick));
             }
         ),
     );
@@ -286,33 +304,32 @@ fn font_row(
     key: &'static str,
     title: &str,
     subtitle: &str,
-) -> adw::EntryRow {
-    let row = adw::EntryRow::builder().title(title).build();
-    row.set_show_apply_button(false);
-    let placeholder = format!("{subtitle}  (empty = default)");
-    row.set_tooltip_text(Some(&placeholder));
-    settings.bind(key, &row, "text").build();
+) -> gtk::ListBoxRow {
+    // `adw::EntryRow` floated the title inside the entry; a plain entry
+    // cannot, so the title sits left and the subtitle stays a subtitle.
+    let (row, entry) = rows::entry_row(title, Some(subtitle), Some("empty = default"));
+    settings.bind(key, &entry, "text").build();
     row
 }
 
-fn notifications_row(settings: &gio::Settings) -> adw::SwitchRow {
-    let row = adw::SwitchRow::builder()
-        .title("New article notifications")
-        .subtitle("Show a desktop notification after each refresh that fetches new articles.")
-        .build();
+fn notifications_row(settings: &gio::Settings) -> gtk::ListBoxRow {
+    let (row, switch) = rows::switch_row(
+        "New article notifications",
+        Some("Show a desktop notification after each refresh that fetches new articles."),
+    );
     settings
-        .bind(keys::NOTIFICATIONS_ON_REFRESH, &row, "active")
+        .bind(keys::NOTIFICATIONS_ON_REFRESH, &switch, "active")
         .build();
     row
 }
 
-fn refresh_on_startup_row(settings: &gio::Settings) -> adw::SwitchRow {
-    let row = adw::SwitchRow::builder()
-        .title("Sync feeds when viaduct opens")
-        .subtitle("Run a refresh cycle automatically when the main window is shown.")
-        .build();
+fn refresh_on_startup_row(settings: &gio::Settings) -> gtk::ListBoxRow {
+    let (row, switch) = rows::switch_row(
+        "Sync feeds when viaduct opens",
+        Some("Run a refresh cycle automatically when the main window is shown."),
+    );
     settings
-        .bind(keys::REFRESH_ON_STARTUP, &row, "active")
+        .bind(keys::REFRESH_ON_STARTUP, &switch, "active")
         .build();
     row
 }
@@ -329,23 +346,21 @@ const REFRESH_INTERVAL_OPTIONS: &[(i32, &str)] = &[
     (1440, "Once a day"),
 ];
 
-fn refresh_interval_row(settings: &gio::Settings) -> adw::ComboRow {
-    let row = adw::ComboRow::builder()
-        .title("Sync feeds periodically")
-        .subtitle("How often viaduct refreshes while running.")
-        .build();
-
+fn refresh_interval_row(settings: &gio::Settings) -> gtk::ListBoxRow {
     let labels: Vec<&str> = REFRESH_INTERVAL_OPTIONS.iter().map(|(_, l)| *l).collect();
-    let model = gtk::StringList::new(&labels);
-    row.set_model(Some(&model));
-    row.set_selected(refresh_interval_to_index(
+    let (row, drop_down) = rows::combo_row(
+        "Sync feeds periodically",
+        Some("How often viaduct refreshes while running."),
+        &labels,
+    );
+    drop_down.set_selected(refresh_interval_to_index(
         settings.int(keys::REFRESH_INTERVAL_MINUTES),
     ));
 
     let settings_for_row = settings.clone();
-    row.connect_selected_notify(move |row| {
+    drop_down.connect_selected_notify(move |drop_down| {
         let value = REFRESH_INTERVAL_OPTIONS
-            .get(row.selected() as usize)
+            .get(drop_down.selected() as usize)
             .map(|(v, _)| *v)
             .unwrap_or(0);
         if settings_for_row.int(keys::REFRESH_INTERVAL_MINUTES) != value
@@ -359,9 +374,9 @@ fn refresh_interval_row(settings: &gio::Settings) -> adw::ComboRow {
         Some(keys::REFRESH_INTERVAL_MINUTES),
         glib::clone!(
             #[weak]
-            row,
+            drop_down,
             move |s, _| {
-                row.set_selected(refresh_interval_to_index(
+                drop_down.set_selected(refresh_interval_to_index(
                     s.int(keys::REFRESH_INTERVAL_MINUTES),
                 ));
             }
@@ -377,15 +392,15 @@ fn refresh_interval_row(settings: &gio::Settings) -> adw::ComboRow {
 /// switch back off and toast the parent window so the user understands why.
 /// On non-Flatpak installs the portal call is a no-op and always returns
 /// `true`, so the toggle just works.
-fn run_in_background_row(settings: &gio::Settings, parent: &ViaductWindow) -> adw::SwitchRow {
-    let row = adw::SwitchRow::builder()
-        .title("Keep refreshing after the window is closed")
-        .subtitle(
+fn run_in_background_row(settings: &gio::Settings, parent: &ViaductWindow) -> gtk::ListBoxRow {
+    let (row, switch) = rows::switch_row(
+        "Keep refreshing after the window is closed",
+        Some(
             "viaduct hides the window on close instead of quitting, so periodic refresh keeps running. The first time you enable this, the desktop will ask for permission.",
-        )
-        .build();
+        ),
+    );
     settings
-        .bind(keys::RUN_IN_BACKGROUND, &row, "active")
+        .bind(keys::RUN_IN_BACKGROUND, &switch, "active")
         .build();
 
     // Fire the portal request when the GSetting flips to true, regardless
