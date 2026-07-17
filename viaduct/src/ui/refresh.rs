@@ -318,7 +318,7 @@ impl ViaductWindow {
                 if total == 1 { "" } else { "s" },
             )
         };
-        self.imp().toast_overlay.add_toast(adw::Toast::new(&msg));
+        self.show_toast_public(&msg);
     }
 
     /// Show desktop notifications for a refresh cycle's new articles,

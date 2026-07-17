@@ -31,8 +31,18 @@ pub(crate) mod imp {
         pub timeline_view: TemplateChild<crate::ui::timeline_view::TimelineView>,
         #[template_child]
         pub article_pane: TemplateChild<crate::ui::article_pane_view::ArticlePaneView>,
+        // Phase 20c: the `adw::ToastOverlay` / `adw::Toast` replacement, a
+        // `GtkOverlay` with an auto-hiding `GtkRevealer` at the bottom.
+        // Newest toast wins: `show_toast` cancels the pending hide before
+        // arming a new one (`toast_timeout`), so a burst doesn't dismiss
+        // the last message early.
         #[template_child]
-        pub toast_overlay: TemplateChild<adw::ToastOverlay>,
+        pub toast_overlay: TemplateChild<gtk::Overlay>,
+        #[template_child]
+        pub toast_revealer: TemplateChild<gtk::Revealer>,
+        #[template_child]
+        pub toast_label: TemplateChild<gtk::Label>,
+        pub toast_timeout: RefCell<Option<glib::SourceId>>,
         // v2.6.10 refresh-progress strip (Revealer + label + bar at
         // window bottom). Hidden until a refresh cycle starts; the
         // poll loop in `show_refresh_progress` reads
@@ -1128,15 +1138,11 @@ impl ViaductWindow {
             return;
         };
         let Some(url) = article.external_url.or(article.url) else {
-            self.imp()
-                .toast_overlay
-                .add_toast(adw::Toast::new("This article has no URL to copy."));
+            self.show_toast("This article has no URL to copy.");
             return;
         };
         self.clipboard().set_text(&url);
-        self.imp()
-            .toast_overlay
-            .add_toast(adw::Toast::new("Article URL copied."));
+        self.show_toast("Article URL copied.");
     }
 
     /// v2.6.25 — copy "Title <newline> URL" to the clipboard. Common
@@ -1144,9 +1150,7 @@ impl ViaductWindow {
     /// a URL loses context.
     pub(crate) fn act_copy_title_and_url(&self) {
         let Some((title, url)) = self.current_article_title_and_url() else {
-            self.imp()
-                .toast_overlay
-                .add_toast(adw::Toast::new("This article has no URL to copy."));
+            self.show_toast("This article has no URL to copy.");
             return;
         };
         let payload = if title.is_empty() {
@@ -1155,9 +1159,7 @@ impl ViaductWindow {
             format!("{title}\n{url}")
         };
         self.clipboard().set_text(&payload);
-        self.imp()
-            .toast_overlay
-            .add_toast(adw::Toast::new("Article title and URL copied."));
+        self.show_toast("Article title and URL copied.");
     }
 
     /// v2.6.25 — open the user's default mail client with a prefilled
@@ -1166,9 +1168,7 @@ impl ViaductWindow {
     /// recipients will have to click through.
     pub(crate) fn act_share_email(&self) {
         let Some((title, url)) = self.current_article_title_and_url() else {
-            self.imp()
-                .toast_overlay
-                .add_toast(adw::Toast::new("This article has no URL to share."));
+            self.show_toast("This article has no URL to share.");
             return;
         };
         let subject = mailto_encode(&title);
@@ -1178,9 +1178,7 @@ impl ViaductWindow {
             gio::AppInfo::launch_default_for_uri(&mailto, None::<&gio::AppLaunchContext>)
         {
             tracing::warn!(?e, "failed to launch mail client");
-            self.imp()
-                .toast_overlay
-                .add_toast(adw::Toast::new("Couldn't open your mail client."));
+            self.show_toast("Couldn't open your mail client.");
         }
     }
 
@@ -1206,9 +1204,7 @@ impl ViaductWindow {
 
     fn share_to(&self, prefix: &str, no_url_msg: &'static str, fail_msg: &'static str) {
         let Some((_title, url)) = self.current_article_title_and_url() else {
-            self.imp()
-                .toast_overlay
-                .add_toast(adw::Toast::new(no_url_msg));
+            self.show_toast(no_url_msg);
             return;
         };
         let target = format!("{prefix}{}", percent_encode_uri_component(&url));
@@ -1216,9 +1212,7 @@ impl ViaductWindow {
             gio::AppInfo::launch_default_for_uri(&target, None::<&gio::AppLaunchContext>)
         {
             tracing::warn!(target = %target, ?e, "failed to launch share target");
-            self.imp()
-                .toast_overlay
-                .add_toast(adw::Toast::new(fail_msg));
+            self.show_toast(fail_msg);
         }
     }
 
@@ -2192,8 +2186,23 @@ impl ViaductWindow {
     }
 
     fn show_toast(&self, message: &str) {
-        let toast = adw::Toast::new(message);
-        self.imp().toast_overlay.add_toast(toast);
+        let imp = self.imp();
+        imp.toast_label.set_text(message);
+        imp.toast_revealer.set_reveal_child(true);
+        // Newest wins: cancel the pending hide before arming a new one, or a
+        // burst of toasts would let the first one's timer dismiss the last.
+        if let Some(previous) = imp.toast_timeout.borrow_mut().take() {
+            previous.remove();
+        }
+        let revealer = imp.toast_revealer.get();
+        let self_weak = self.downgrade();
+        let source = glib::timeout_add_seconds_local_once(4, move || {
+            revealer.set_reveal_child(false);
+            if let Some(window) = self_weak.upgrade() {
+                *window.imp().toast_timeout.borrow_mut() = None;
+            }
+        });
+        *imp.toast_timeout.borrow_mut() = Some(source);
     }
 
     /// Re-emit OPML into the sidebar tree after import. Same tokio-context

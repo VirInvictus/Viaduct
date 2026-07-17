@@ -10,7 +10,26 @@ Licensed under the MIT License. See LICENSE in the project root for details.
     <property name="default-width">1200</property>
     <property name="default-height">800</property>
     <property name="content">
-      <object class="AdwToastOverlay" id="toast_overlay">
+      <object class="GtkOverlay" id="toast_overlay">
+        <child type="overlay">
+          <object class="GtkRevealer" id="toast_revealer">
+            <property name="halign">center</property>
+            <property name="valign">end</property>
+            <property name="margin-bottom">18</property>
+            <property name="can-target">False</property>
+            <property name="transition-type">crossfade</property>
+            <property name="reveal-child">False</property>
+            <property name="child">
+              <object class="GtkLabel" id="toast_label">
+                <property name="wrap">True</property>
+                <property name="max-width-chars">50</property>
+                <style>
+                  <class name="toast"/>
+                </style>
+              </object>
+            </property>
+          </object>
+        </child>
         <property name="child">
           <object class="GtkBox">
             <property name="orientation">vertical</property>
