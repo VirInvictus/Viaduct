@@ -7,7 +7,7 @@ use crate::database::opml::OpmlFile;
 use crate::models::{Feed, Folder};
 use crate::network::ImageCache;
 use crate::ui::tree::{TreeController, TreeControllerDelegate, TreeNode};
-use adw::prelude::*;
+use gtk::prelude::*;
 use gtk::{gio, glib};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -347,8 +347,9 @@ pub fn setup_sidebar_list_view(
         box_widget.add_controller(drop_target);
 
         // Icon slot is a Stack with two pages — a symbolic GtkImage for groups
-        // and folders, an AdwAvatar for feeds and smart feeds. Same row factory
-        // reused across the whole sidebar, switched at bind time.
+        // and folders, a ViaductAvatar for feeds and smart feeds (Phase 20c;
+        // was AdwAvatar). Same row factory reused across the whole sidebar,
+        // switched at bind time.
         let icon_stack = gtk::Stack::new();
         icon_stack.set_transition_type(gtk::StackTransitionType::None);
 
@@ -357,7 +358,7 @@ pub fn setup_sidebar_list_view(
         icon_image.set_valign(gtk::Align::Center);
         icon_stack.add_named(&icon_image, Some("icon"));
 
-        let avatar = adw::Avatar::new(24, None, true);
+        let avatar = crate::ui::avatar::Avatar::new(24);
         avatar.set_valign(gtk::Align::Center);
         icon_stack.add_named(&avatar, Some("avatar"));
 
@@ -420,7 +421,7 @@ pub fn setup_sidebar_list_view(
             .unwrap();
         let avatar = icon_stack
             .child_by_name("avatar")
-            .and_downcast::<adw::Avatar>()
+            .and_downcast::<crate::ui::avatar::Avatar>()
             .unwrap();
         let label = icon_stack
             .next_sibling()
@@ -433,7 +434,7 @@ pub fn setup_sidebar_list_view(
             .unwrap();
 
         // Reset transient row state so reused rows don't bleed across feeds.
-        avatar.set_custom_image(None::<&gtk::gdk::Paintable>);
+        avatar.set_custom_image(None);
         warning_icon.set_visible(false);
 
         // Extract domain data to bind
@@ -493,11 +494,10 @@ pub fn setup_sidebar_list_view(
                             .or(feed.name.as_deref())
                             .unwrap_or("Unnamed Feed");
                         label.set_text(name);
-                        // AdwAvatar auto-derives a stable accent color from the
-                        // displayed text — semantically equivalent to NNW's
-                        // ColorHash(feed.url) for our purposes.
-                        avatar.set_text(Some(name));
-                        avatar.set_show_initials(true);
+                        // ViaductAvatar hashes a stable colour from the text
+                        // (network::color_for = NNW ColorHash) and shows
+                        // initials until a favicon arrives.
+                        avatar.set_text(name);
                         // Stamp the unique feed id for the favicon stale-row
                         // guard; the display name collides for same-named feeds.
                         avatar.set_widget_name(&feed.id);
@@ -591,16 +591,16 @@ fn apply_feed_warning(icon: &gtk::Image, last_response_code: Option<i64>) {
 /// Async-fetch the favicon for a feed and apply it to the row's avatar.
 ///
 /// The flow is settings DB → favicon URL → ImageCache (in-memory → disk → net) →
-/// `gdk::Texture::from_bytes` → `adw::Avatar::set_custom_image`. Stale-row guard:
-/// the row factory recycles widgets as the user scrolls, so by the time the bytes
-/// arrive the row may have been re-bound to a different feed. We compare the
-/// avatar's stamped feed id (`widget_name`) to the id we kicked off with and
-/// bail if it changed.
+/// `gdk::Texture::from_bytes` → `avatar::Avatar::set_custom_image`. Stale-row
+/// guard: the row factory recycles widgets as the user scrolls, so by the time
+/// the bytes arrive the row may have been re-bound to a different feed. We
+/// compare the avatar's stamped feed id (`widget_name`) to the id we kicked off
+/// with and bail if it changed.
 fn spawn_favicon_fetch(
     account: Arc<Account>,
     image_cache: Arc<ImageCache>,
     feed_id: String,
-    avatar: adw::Avatar,
+    avatar: crate::ui::avatar::Avatar,
     warning_icon: gtk::Image,
 ) {
     glib::spawn_future_local(async move {
