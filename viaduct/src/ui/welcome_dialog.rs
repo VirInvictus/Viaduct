@@ -67,11 +67,15 @@ pub fn present(parent: &ViaductWindow) {
         .transient_for(parent)
         .modal(true)
         .default_width(520)
+        .default_height(640)
         .build();
     crate::ui::close_on_escape(&dialog);
 
     let header = gtk::HeaderBar::new();
 
+    // The window carries an explicit `default_height`; without it a
+    // `vexpand` scroller in a headerbar+scroller box had no height to fill
+    // and the window opened collapsed (the "tiny welcome dialog" bug).
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
     scroller.set_vexpand(true);
