@@ -35,6 +35,7 @@ pub fn close_on_escape(window: &impl IsA<gtk::Window>) {
 pub mod actions;
 pub mod activity_dialog;
 pub mod add_feed_dialog;
+pub mod alert;
 pub mod article_pane_view;
 pub mod article_renderer;
 pub mod article_renderer_widget;

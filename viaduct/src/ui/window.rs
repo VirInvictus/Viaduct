@@ -1317,7 +1317,8 @@ impl ViaductWindow {
         };
         let display_name = display_name_for_feed(&feed);
 
-        let alert = adw::AlertDialog::new(
+        let alert = crate::ui::alert::Alert::new(
+            self,
             Some(&format!("Remove “{display_name}”?")),
             Some(
                 "Articles already saved from this feed will be cleaned up the next time \
@@ -1325,19 +1326,20 @@ impl ViaductWindow {
                  cannot be undone.",
             ),
         );
-        alert.add_response("cancel", "Cancel");
-        alert.add_response("delete", "Delete");
-        alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-        alert.set_default_response(Some("cancel"));
-        alert.set_close_response("cancel");
+        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
+        alert.add_response(
+            "delete",
+            "Delete",
+            crate::ui::alert::ResponseStyle::Destructive,
+        );
+        alert.set_default_response("cancel");
 
         let window_weak = self.downgrade();
         let feed_url = feed.url.clone();
-        alert.connect_response(None, move |dialog, response| {
+        alert.present(move |response| {
             if response != "delete" {
                 return;
             }
-            dialog.close();
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
@@ -1376,8 +1378,6 @@ impl ViaductWindow {
                 }
             });
         });
-
-        alert.present(Some(self));
     }
 
     /// v2.1.0: rename a feed via the right-click menu. Shows an
@@ -1391,31 +1391,37 @@ impl ViaductWindow {
         };
         let current_name = display_name_for_feed(&feed);
 
-        let alert = adw::AlertDialog::new(
+        let alert = crate::ui::alert::Alert::new(
+            self,
             Some("Rename feed"),
             Some("Choose a display name for this feed in the sidebar."),
         );
-        alert.add_response("cancel", "Cancel");
-        alert.add_response("save", "Save");
-        alert.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-        alert.set_default_response(Some("save"));
-        alert.set_close_response("cancel");
+        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
+        alert.add_response("save", "Save", crate::ui::alert::ResponseStyle::Suggested);
+        alert.set_default_response("save");
 
         let entry = gtk::Entry::builder()
             .text(&current_name)
             .activates_default(true)
             .build();
         entry.select_region(0, -1);
-        alert.set_extra_child(Some(&entry));
+        alert.set_extra_child(&entry);
 
         let window_weak = self.downgrade();
         let feed_url = feed.url.clone();
         let entry_for_response = entry.clone();
-        alert.connect_response(None, move |dialog, response| {
+
+        // Focus the entry once the window is up so the user can type
+        // immediately; select_region pre-selects the name to overwrite.
+        let entry_for_focus = entry.clone();
+        glib::idle_add_local_once(move || {
+            entry_for_focus.grab_focus();
+        });
+
+        alert.present(move |response| {
             if response != "save" {
                 return;
             }
-            dialog.close();
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
@@ -1445,45 +1451,43 @@ impl ViaductWindow {
                 }
             });
         });
-
-        // Focus the entry after dialog presents so the user can type
-        // immediately. The select_region above pre-selects the existing
-        // name so they can overwrite it with one keystroke.
-        let entry_for_focus = entry.clone();
-        glib::idle_add_local_once(move || {
-            entry_for_focus.grab_focus();
-        });
-
-        alert.present(Some(self));
     }
 
     /// v2.1.0: prompt for a folder name and create it via
     /// `Account::create_folder`. The folder appears in the sidebar
     /// (empty until the user moves feeds into it via "Move to Folder…").
     pub(crate) fn act_new_folder(&self) {
-        let alert = adw::AlertDialog::new(
+        let alert = crate::ui::alert::Alert::new(
+            self,
             Some("New folder"),
             Some("Folders group related feeds in the sidebar."),
         );
-        alert.add_response("cancel", "Cancel");
-        alert.add_response("create", "Create");
-        alert.set_response_appearance("create", adw::ResponseAppearance::Suggested);
-        alert.set_default_response(Some("create"));
-        alert.set_close_response("cancel");
+        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
+        alert.add_response(
+            "create",
+            "Create",
+            crate::ui::alert::ResponseStyle::Suggested,
+        );
+        alert.set_default_response("create");
 
         let entry = gtk::Entry::builder()
             .placeholder_text("Folder name")
             .activates_default(true)
             .build();
-        alert.set_extra_child(Some(&entry));
+        alert.set_extra_child(&entry);
 
         let window_weak = self.downgrade();
         let entry_for_response = entry.clone();
-        alert.connect_response(None, move |dialog, response| {
+
+        let entry_for_focus = entry.clone();
+        glib::idle_add_local_once(move || {
+            entry_for_focus.grab_focus();
+        });
+
+        alert.present(move |response| {
             if response != "create" {
                 return;
             }
-            dialog.close();
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
@@ -1519,13 +1523,6 @@ impl ViaductWindow {
                 }
             });
         });
-
-        let entry_for_focus = entry.clone();
-        glib::idle_add_local_once(move || {
-            entry_for_focus.grab_focus();
-        });
-
-        alert.present(Some(self));
     }
 
     /// v2.1.0: move the right-clicked feed to a different folder (or to
@@ -1582,26 +1579,24 @@ impl ViaductWindow {
             }
         }
 
-        let alert = adw::AlertDialog::new(
+        let alert = crate::ui::alert::Alert::new(
+            self,
             Some("Move feed"),
             Some("Choose where this feed should appear in the sidebar."),
         );
-        alert.add_response("cancel", "Cancel");
-        alert.add_response("move", "Move");
-        alert.set_response_appearance("move", adw::ResponseAppearance::Suggested);
-        alert.set_default_response(Some("move"));
-        alert.set_close_response("cancel");
-        alert.set_extra_child(Some(&dropdown));
+        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
+        alert.add_response("move", "Move", crate::ui::alert::ResponseStyle::Suggested);
+        alert.set_default_response("move");
+        alert.set_extra_child(&dropdown);
 
         let window_weak = self.downgrade();
         let feed_url = feed.url.clone();
         let dropdown_for_response = dropdown.clone();
         let folders_for_response = folders.clone();
-        alert.connect_response(None, move |dialog, response| {
+        alert.present(move |response| {
             if response != "move" {
                 return;
             }
-            dialog.close();
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
@@ -1638,8 +1633,6 @@ impl ViaductWindow {
                 }
             });
         });
-
-        alert.present(Some(self));
     }
 
     /// v2.4.0: open the Feed Settings dialog for the right-clicked feed.
@@ -1656,32 +1649,34 @@ impl ViaductWindow {
         };
         let display_name = display_name_for_feed(&feed);
 
-        let alert = adw::AlertDialog::new(Some(&format!("Settings for “{display_name}”")), None);
-        alert.add_response("cancel", "Cancel");
-        alert.add_response("save", "Save");
-        alert.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-        alert.set_default_response(Some("save"));
-        alert.set_close_response("cancel");
+        let alert = crate::ui::alert::Alert::new(
+            self,
+            Some(&format!("Settings for “{display_name}”")),
+            None,
+        );
+        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
+        alert.add_response("save", "Save", crate::ui::alert::ResponseStyle::Suggested);
+        alert.set_default_response("save");
 
-        let group = adw::PreferencesGroup::new();
-        let notif_row = adw::SwitchRow::builder()
-            .title("New article notifications")
-            .subtitle("Show a desktop notification when this feed has new articles.")
-            .build();
-        let reader_row = adw::SwitchRow::builder()
-            .title("Always use Reader View")
-            .subtitle("Open every article from this feed in extracted-text mode.")
-            .build();
-        group.add(&notif_row);
-        group.add(&reader_row);
-        alert.set_extra_child(Some(&group));
+        let (group, group_list) = crate::ui::rows::group(None, None);
+        let (notif_row, notif_switch) = crate::ui::rows::switch_row(
+            "New article notifications",
+            Some("Show a desktop notification when this feed has new articles."),
+        );
+        let (reader_row, reader_switch) = crate::ui::rows::switch_row(
+            "Always use Reader View",
+            Some("Open every article from this feed in extracted-text mode."),
+        );
+        group_list.append(&notif_row);
+        group_list.append(&reader_row);
+        alert.set_extra_child(&group);
 
         // Pre-load current values so the switches reflect the existing
         // state before the user touches them.
         let account = self.account();
         let feed_id_for_load = feed.id.clone();
-        let notif_for_load = notif_row.clone();
-        let reader_for_load = reader_row.clone();
+        let notif_for_load = notif_switch.clone();
+        let reader_for_load = reader_switch.clone();
         let (load_tx, load_rx) = tokio::sync::oneshot::channel();
         crate::spawn_on_runtime(async move {
             let _ = load_tx.send(account.fetch_feed_settings(feed_id_for_load).await);
@@ -1695,13 +1690,12 @@ impl ViaductWindow {
 
         let window_weak = self.downgrade();
         let feed_for_response = feed.clone();
-        let notif_for_response = notif_row.clone();
-        let reader_for_response = reader_row.clone();
-        alert.connect_response(None, move |dialog, response| {
+        let notif_for_response = notif_switch.clone();
+        let reader_for_response = reader_switch.clone();
+        alert.present(move |response| {
             if response != "save" {
                 return;
             }
-            dialog.close();
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
@@ -1743,8 +1737,6 @@ impl ViaductWindow {
                 }
             });
         });
-
-        alert.present(Some(self));
     }
 
     pub(crate) fn act_mark_clicked_feed_read(&self) {
