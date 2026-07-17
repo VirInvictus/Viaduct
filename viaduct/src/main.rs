@@ -274,10 +274,12 @@ fn build_ui(app: &gtk::Application, account: Arc<Account>) {
     if let Some(settings) = viaduct::preferences::settings() {
         viaduct::preferences::apply_color_scheme(&settings);
         viaduct::preferences::apply_fonts(&settings);
-        // v1.2.0-pre1: paint the GTK chrome with the article theme's
-        // accent so the whole window visually echoes the reading pane.
-        viaduct::preferences::apply_article_theme_accent(&settings);
     }
+    // Phase 20d: the chrome is Kanagawa, consistently. The v1.2.0 feature that
+    // painted the GTK chrome with the *article theme's* accent (so the window
+    // echoed the reading pane) is retired — it fought the owned Kanagawa sheet.
+    // The article pane still uses its theme accent (`render_themed`), which is
+    // where reading-pane theming belongs.
     // Phase 20d: the sidebar/timeline refinement classes (viaduct-sidebar-
     // heading, viaduct-unread-badge, viaduct-row-read, viaduct-timeline-thumb)
     // moved into the owned Kanagawa stylesheet (theme.rs). The old
