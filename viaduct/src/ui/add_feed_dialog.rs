@@ -15,55 +15,46 @@
 //! as the rest of the app — never run reqwest directly off the GLib
 //! executor (panics — see CLAUDE.md gotchas section).
 
-use adw::prelude::*;
 use gtk::glib;
+use gtk::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use viaduct_core::network::feed_discovery;
 
+use crate::ui::rows;
 use crate::ui::window::ViaductWindow;
 
 /// Build and present the Add Feed dialog modal to `parent`.
 pub fn present(parent: &ViaductWindow) {
-    let dialog = adw::Dialog::new();
-    dialog.set_title("Add Feed");
-    dialog.set_content_width(440);
-
-    let header = adw::HeaderBar::new();
+    // Phase 20c: plain modal window. The Add button rides a `GtkHeaderBar`;
+    // the rows are `ui::rows` in a `.boxed-list`.
     let add_btn = gtk::Button::with_label("Add");
     add_btn.add_css_class("suggested-action");
     add_btn.set_sensitive(false);
+    let header = gtk::HeaderBar::new();
     header.pack_end(&add_btn);
 
-    let toolbar = adw::ToolbarView::new();
-    toolbar.add_top_bar(&header);
+    let (group, list) = rows::group(
+        None,
+        Some("Paste a feed URL or a website URL. Viaduct will look up the feed automatically."),
+    );
 
-    let page = adw::PreferencesPage::new();
-    let group = adw::PreferencesGroup::new();
-    group.set_description(Some(
-        "Paste a feed URL or a website URL. Viaduct will look up the feed automatically.",
-    ));
+    let (url_row, url_entry) = rows::entry_row("Feed or website URL", None, None);
+    let (name_row, name_entry) = rows::entry_row("Name (optional)", None, None);
 
-    let url_row = adw::EntryRow::builder()
-        .title("Feed or website URL")
-        .build();
-    let name_row = adw::EntryRow::builder().title("Name (optional)").build();
-
-    let folder_row = adw::ComboRow::builder()
-        .title("Folder")
-        .subtitle("Where the feed will live in the sidebar")
-        .build();
     let folder_names = list_folder_names(parent);
     let mut combo_labels: Vec<String> = vec!["None".to_string()];
     combo_labels.extend(folder_names.iter().cloned());
     let combo_strs: Vec<&str> = combo_labels.iter().map(|s| s.as_str()).collect();
-    let combo_model = gtk::StringList::new(&combo_strs);
-    folder_row.set_model(Some(&combo_model));
+    let (folder_row, folder_drop_down) = rows::combo_row(
+        "Folder",
+        Some("Where the feed will live in the sidebar"),
+        &combo_strs,
+    );
 
-    group.add(&url_row);
-    group.add(&name_row);
-    group.add(&folder_row);
-    page.add(&group);
+    list.append(&url_row);
+    list.append(&name_row);
+    list.append(&folder_row);
 
     // Status row at the bottom — shows discovery progress + error
     // messages without taking the user out of the dialog. Uses
@@ -73,19 +64,27 @@ pub fn present(parent: &ViaductWindow) {
     status_label.set_xalign(0.0);
     status_label.add_css_class("caption");
     status_label.add_css_class("dim-label");
-    status_label.set_margin_start(12);
-    status_label.set_margin_end(12);
-    status_label.set_margin_top(4);
-    status_label.set_margin_bottom(8);
 
-    let status_group = adw::PreferencesGroup::new();
-    let status_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    status_box.append(&status_label);
-    status_group.add(&status_box);
-    page.add(&status_group);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.set_margin_top(18);
+    content.set_margin_bottom(18);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
+    content.append(&group);
+    content.append(&status_label);
 
-    toolbar.set_content(Some(&page));
-    dialog.set_child(Some(&toolbar));
+    let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    outer.append(&header);
+    outer.append(&content);
+
+    let dialog = gtk::Window::builder()
+        .title("Add Feed")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(440)
+        .child(&outer)
+        .build();
+    crate::ui::close_on_escape(&dialog);
 
     // Tracks whether a discovery is in flight — prevents double-submits
     // and disables the Add button while we're working.
@@ -94,8 +93,8 @@ pub fn present(parent: &ViaductWindow) {
     // Bind Add-button sensitivity to "URL non-empty AND not currently busy."
     let add_btn_for_text = add_btn.clone();
     let busy_for_text = busy.clone();
-    url_row.connect_changed(move |row| {
-        let has_text = !row.text().trim().is_empty();
+    url_entry.connect_changed(move |entry| {
+        let has_text = !entry.text().trim().is_empty();
         let idle = !*busy_for_text.borrow();
         add_btn_for_text.set_sensitive(has_text && idle);
     });
@@ -105,9 +104,9 @@ pub fn present(parent: &ViaductWindow) {
     let parent_weak = parent.downgrade();
     let dialog_weak = dialog.downgrade();
     let submit = {
-        let url_row = url_row.clone();
-        let name_row = name_row.clone();
-        let folder_row = folder_row.clone();
+        let url_entry = url_entry.clone();
+        let name_entry = name_entry.clone();
+        let folder_drop_down = folder_drop_down.clone();
         let combo_labels = combo_labels.clone();
         let status_label = status_label.clone();
         let add_btn = add_btn.clone();
@@ -119,15 +118,15 @@ pub fn present(parent: &ViaductWindow) {
             if *busy.borrow() {
                 return;
             }
-            let url_input = url_row.text().to_string();
+            let url_input = url_entry.text().to_string();
             if url_input.trim().is_empty() {
                 return;
             }
             let name_input = {
-                let s = name_row.text().to_string();
+                let s = name_entry.text().to_string();
                 if s.trim().is_empty() { None } else { Some(s) }
             };
-            let folder_idx = folder_row.selected() as usize;
+            let folder_idx = folder_drop_down.selected() as usize;
             let folder_name = if folder_idx == 0 {
                 None
             } else {
@@ -229,9 +228,9 @@ pub fn present(parent: &ViaductWindow) {
 
     let submit_for_btn = submit.clone();
     add_btn.connect_clicked(move |_| submit_for_btn());
-    url_row.connect_entry_activated(move |_| submit());
+    url_entry.connect_activate(move |_| submit());
 
-    dialog.present(Some(parent));
+    dialog.present();
 }
 
 /// Read the parent window's OPML and return the folder names the user
