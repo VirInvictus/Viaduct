@@ -1728,4 +1728,41 @@ mod tests {
         let feed = parse_atom(xml, "https://example.com/feed").unwrap();
         assert_eq!(feed.items[0].title.as_deref(), Some("Real Entry Title"));
     }
+
+    #[test]
+    fn html_named_entities_decode_rather_than_dropping_the_text() {
+        // Regression: unescape() returns Err on any entity outside the five
+        // predefined XML ones, and the callers treat Err as "skip this text",
+        // so before the quick-xml escape-html feature every one of these
+        // titles parsed to None instead of merely keeping the raw entity.
+        let xml = r#"<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Chan</title>
+  <item><guid>g1</guid><title>Tom &mdash; Jerry</title></item>
+  <item><guid>g2</guid><title>Mary&rsquo;s &ldquo;cat&rdquo;</title></item>
+  <item><guid>g3</guid><title>Tom &amp; Jerry &#8212; live</title></item>
+</channel></rss>"#;
+        let feed = parse_rss(xml.as_bytes(), "https://example.com/feed", false).unwrap();
+        let titles: Vec<_> = feed
+            .items
+            .iter()
+            .filter_map(|i| i.title.as_deref())
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["Tom — Jerry", "Mary’s “cat”", "Tom & Jerry — live"]
+        );
+    }
+
+    #[test]
+    fn zero_width_entities_decode() {
+        // NNW 3a948b755: &zwj;/&zwnj; carry emoji ZWJ sequences and Indic /
+        // Arabic / Persian shaping, so an undecoded one is a rendering bug.
+        let xml = r#"<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Chan</title>
+  <item><guid>g1</guid><title>a&zwj;b</title><description>c&zwnj;d</description></item>
+</channel></rss>"#;
+        let feed = parse_rss(xml.as_bytes(), "https://example.com/feed", false).unwrap();
+        assert_eq!(feed.items[0].title.as_deref(), Some("a\u{200D}b"));
+        assert_eq!(feed.items[0].content_html.as_deref(), Some("c\u{200C}d"));
+    }
 }

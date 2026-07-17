@@ -1,5 +1,16 @@
 # viaduct: Patch Notes
 
+## v2.8.3: NetNewsWire upstream sync (July 2026)
+
+Bug fixes drawn from fast-forwarding the NetNewsWire reference clone to `08d10f501`. Most of upstream's 85 new commits are Mac timeline work and release plumbing that does not apply here, but this window carried real fixes to code we share, plus one bug the sync work turned up on our side. No new features.
+
+- **Article titles containing an HTML entity no longer vanish.** A title written as `Tom &mdash; Jerry` produced an article with no title at all: the parser resolved only the five entities XML defines by itself, treated everything else as an error, and dropped the offending text rather than keeping it. Every named entity now decodes, so those titles read the way the feed intended. Titles that were missing will fill themselves in as each feed next refreshes.
+- **Inoreader accounts no longer stop updating after a failed status send** (upstream `08d10f501`). Handing your read and starred changes back to Inoreader was the first step of a sync, and a single failed hand-off abandoned the rest of the run, so no new articles arrived until a later send happened to succeed. A failure is now reported and the sync carries on; the unsent changes stay queued and go out on the next pass.
+- **An expired Inoreader edit token now refreshes itself** (upstream `08134a8fc`). These tokens are short-lived and we fetched one per session, so a token that aged out mid-session broke every write and the article fetch until viaduct was restarted. A rejected token is now discarded and the request retried once with a fresh one.
+- **Feeds that ask us to slow down are obeyed even when they do not say for how long** (upstream `c9bd65b1f`). A server answering "too many requests" without saying when to return got no cooldown at all, so the next refresh hit it again immediately. Those hosts, Reddit among them, now get a ten-minute pause by default.
+- **Timeline previews no longer leak markup.** A preview drawn from an article using responsive images could show fragments like `700px" type="image/avif"`, because a `>` inside a quoted attribute was mistaken for the end of the tag (upstream `d44b3b921`).
+- **Zero-width joiners decode** (upstream `3a948b755`). `&zwj;` and `&zwnj;` drive emoji sequences and shape words in Indic, Arabic, and Persian scripts; they now resolve instead of showing up as literal text.
+
 ## v2.8.2: NetNewsWire upstream sync (June 2026)
 
 Three small ports drawn from fast-forwarding the NetNewsWire reference clone to `4c85c907f` (the 7.1 beta line). The bulk of upstream's 267 new commits is a Swift-concurrency rewrite that does not apply to our already-async Rust; the feed parser was unchanged. No new user-facing features.

@@ -508,6 +508,8 @@ const PREVIEW_MAX_CHARS: usize = 400;
 fn strip_html_for_preview(input: &str) -> String {
     let mut out = String::with_capacity(PREVIEW_MAX_CHARS * 2);
     let mut in_tag = false;
+    let mut in_quote = false;
+    let mut quote_char = '\0';
     let mut last_was_space = false;
     let mut counted: usize = 0;
     for ch in input.chars() {
@@ -519,7 +521,21 @@ fn strip_html_for_preview(input: &str) -> String {
             break;
         }
         if in_tag {
-            if ch == '>' {
+            // Track quoted attribute values so that a '>' inside one reads
+            // as a literal rather than the end of the tag. Responsive-image
+            // markup is full of them: <source media="(width >= 700px)" …>
+            // used to close at the '>' in the media query and leak the rest
+            // of the attributes into the preview text.
+            if ch == '"' || ch == '\'' {
+                if !in_quote {
+                    in_quote = true;
+                    quote_char = ch;
+                } else if ch == quote_char {
+                    in_quote = false;
+                }
+                continue;
+            }
+            if ch == '>' && !in_quote {
                 in_tag = false;
                 if !last_was_space {
                     out.push(' ');
@@ -563,6 +579,14 @@ fn decode_common_entities(s: &str) -> String {
         .replace("&lsquo;", "‘")
         .replace("&rdquo;", "”")
         .replace("&ldquo;", "“")
+        .replace("&infin;", "∞")
+        // NNW 3a948b755. The parser decodes these for us now (quick-xml's
+        // escape-html), but a CDATA body carries its entities through
+        // literally, so preview text can still arrive holding them. Both are
+        // invisible once decoded, which is the point: left alone they render
+        // as the visible string "&zwj;".
+        .replace("&zwj;", "\u{200D}")
+        .replace("&zwnj;", "\u{200C}")
 }
 
 /// Detect a video URL on the article and async-load its thumbnail through
@@ -688,6 +712,20 @@ mod tests {
         let input = "  Already plain  text  ";
         let out = strip_html_for_preview(input);
         assert_eq!(out, "Already plain text");
+    }
+
+    #[test]
+    fn strip_html_keeps_gt_inside_quoted_attributes() {
+        let input = "<source media=\"(resolution >= 2x) and (width >= 700px)\" type=\"image/avif\"><p>Hello</p>";
+        assert_eq!(strip_html_for_preview(input), "Hello");
+        assert_eq!(
+            strip_html_for_preview("<a title=\"a > b\">link</a>"),
+            "link"
+        );
+        assert_eq!(
+            strip_html_for_preview("<div data-x='1 > 0'>text</div>"),
+            "text"
+        );
     }
 
     #[test]

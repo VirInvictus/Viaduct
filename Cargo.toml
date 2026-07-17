@@ -4,7 +4,7 @@ default-members = ["viaduct"]
 resolver = "2"
 
 [workspace.package]
-version = "2.8.2"
+version = "2.8.3"
 edition = "2024"
 license = "MIT"
 authors = ["Brandon LaRocque"]
@@ -13,7 +13,12 @@ authors = ["Brandon LaRocque"]
 tokio = { version = "1", features = ["full"] }
 rusqlite = { version = "0.32", features = ["bundled", "time", "url"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "gzip", "brotli"] }
-quick-xml = { version = "0.36", features = ["serialize"] }
+# escape-html buys the full HTML5 named-entity table, our stand-in for NNW's
+# RSParser XMLEntities. Without it unescape() resolves only the five predefined
+# XML entities and returns Err on anything else, and the parser's
+# `let Ok(text) = e.unescape() else { continue }` then drops the text outright:
+# an item titled "Tom &mdash; Jerry" parsed to no title at all.
+quick-xml = { version = "0.36", features = ["serialize", "escape-html"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ammonia = "4.0"

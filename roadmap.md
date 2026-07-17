@@ -348,6 +348,28 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
 
+## Upstream Sync Candidates (July 17, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `08d10f501` (+85 commits over `4c85c907f`); `.newsflash` and `.liferea` were not re-reviewed this window. See `CLAUDE.md` §2 for the full sync note. Most of the 85 commits are Mac timeline/perf work and release plumbing that does not port, but this window carried real bugfixes to shared logic. Six ports shipped in v2.8.3; the rest are recorded below.
+
+### Ported from NetNewsWire
+
+- [x] **Failed status send must not abort the refresh** (NNW `08d10f501`) *(shipped v2.8.3)*. `delegate.rs` used `?` on all four `update_state_to_entries` calls, so one transient failure skipped the status pull and the article fetch and the Inoreader account silently stopped updating. Now log-and-continue; only articles whose every batch landed are cleared, since `syncStatus` deletes by `articleID` alone.
+- [x] **Edit-token invalidate-and-retry** (NNW `08134a8fc` `withWriteToken`) *(shipped v2.8.3)*. `with_write_token` in `inoreader.rs` drops the cached token and retries once on 401/403, wrapping all seven token-bearing calls.
+- [x] **Default `Retry-After` for 429s that omit it** (NNW `c9bd65b1f`) *(shipped v2.8.3)*. `DEFAULT_RETRY_AFTER_SECS` (10 min) + `retry_after_secs`; the old `&&`-chain recorded no cooldown at all when the header was absent.
+- [x] **Quoted-attribute tracking in the preview stripper** (NNW `d44b3b921`, #5339) *(shipped v2.8.3)*. A `>` inside `<source media="(width >= 700px)">` no longer ends the tag early.
+- [x] **`&zwj;` / `&zwnj;` decoding** (NNW `3a948b755`) *(shipped v2.8.3)*. Landed as the `escape-html` feature on quick-xml, which also fixed a worse local bug: named HTML entities made `unescape()` return `Err` and the parsers *dropped* the text, so `Tom &mdash; Jerry` parsed to no title at all.
+
+### Deferred candidates (not yet ported)
+
+- [ ] **Reddit one-feed-per-minute throttle** (NNW `e3aed79d1`, `80a090c5b`, `88aa60160`). Reddit now rate-limits to one feed per minute, so NNW refreshes only the least-recently-checked Reddit feed per session. Structural for us: `skip_reason` is per-feed and has no view of the refresh set, so it needs a `reddit_url_to_refresh` computed in `refresh_feeds` (picking the min `last_check_date`, which already lives in `FeedSettings`) threaded into the skip check, plus a `SkipReason::RedditRateLimit` variant in `activity.rs`. Ordering: after cache-control and disallowed-host, before timing. `url_host_matches_domain` already passes NNW's new lookalike tests, so no change there.
+- [ ] **`ArticleStringFormatter.sanitizedTitle`** (NNW `3eac947dd`, `de464b6a3`). We have no port at all: `article_pane_view.rs` runs titles through `escape_html` wholesale, so an allowlisted `<em>` renders as literal markup. Port the function as a unit and take its fixes with it (match tags by name so attributes are ignored, allowlist `abbr`, and the `tagWasClosed` guard that stops an unclosed tag gaining a synthesized `>`, #4742). Timeline is unaffected (`set_text`, plain text).
+- [ ] **`core.css`: `scrollbar-gutter: stable`** (NNW `808403b00`). Evaluate against `VIADUCT_PANE_OVERRIDE_CSS`, which already hand-styles the WebKit scrollbar and re-enables `overflow: auto`. Cheap to try; affects article-pane layout shift only.
+- [ ] **Feed-declared icon URLs + ignore list** (NNW `1af39fe86`, `24b294a87`). Inapplicable today: `favicon_discovery.rs` resolves only from the home page's `<link rel=icon>` and never reads a feed-declared icon, so NNW's `feedURLSubstringsToIgnoreFeedIconURL` has no counterpart. If feed-declared icons are ever added, bring the list and its substring semantics together. NNW's companion fix (one image URL shared by several feeds left all but the last un-iconed) is worth knowing then.
+- [ ] **Icon-background luminance** (NNW `5aa0dd386`). No counterpart today. If ever implemented, port the *fixed* version: skip transparent pixels (counting them black drags a bright icon dark), un-premultiply the channels before measuring, and divide by pixels processed rather than total.
+
+---
+
 ## Upstream Sync Candidates (June 20, 2026)
 
 Surfaced by fast-forwarding `.netnewswire` to `4c85c907f` (+267 commits over `8c02fb3ba`, the `mac-7.1bN` beta line) and `.liferea` to `fe797c3`; `.newsflash` main was unchanged (dev moved to a `stable` branch + `v.5.1.0` tag). See `CLAUDE.md` §2 for the full sync note. The vast majority of the 267 commits is a Swift-concurrency (async/await + actors) migration that does not port; `RSParser` was unchanged; the themes only relocated. Three ports shipped; the rest are recorded below.

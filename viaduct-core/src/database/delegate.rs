@@ -133,52 +133,54 @@ impl AccountDelegate for InoreaderAccountDelegate {
                     }
                 }
 
-                if !read_ids.is_empty() {
-                    self.caller
-                        .update_state_to_entries(
-                            &auth_token,
-                            &read_ids,
-                            "user/-/state/com.google/read",
-                            true,
-                        )
-                        .await?;
-                }
-                if !unread_ids.is_empty() {
-                    self.caller
-                        .update_state_to_entries(
-                            &auth_token,
-                            &unread_ids,
-                            "user/-/state/com.google/read",
-                            false,
-                        )
-                        .await?;
-                }
-                if !starred_ids.is_empty() {
-                    self.caller
-                        .update_state_to_entries(
-                            &auth_token,
-                            &starred_ids,
-                            "user/-/state/com.google/starred",
-                            true,
-                        )
-                        .await?;
-                }
-                if !unstarred_ids.is_empty() {
-                    self.caller
-                        .update_state_to_entries(
-                            &auth_token,
-                            &unstarred_ids,
-                            "user/-/state/com.google/starred",
-                            false,
-                        )
-                        .await?;
+                // A failed status send must not abort the refresh: the status
+                // pull and article fetch below still need to run, or the
+                // account silently stops updating until a send happens to
+                // succeed. Failed rows stay queued and step 3 clears their
+                // `selected` flag, so the next cycle retries them.
+                // <https://discourse.netnewswire.com/t/no-feed-updates/336>
+                let batches: [(&[String], &str, bool); 4] = [
+                    (&read_ids, "user/-/state/com.google/read", true),
+                    (&unread_ids, "user/-/state/com.google/read", false),
+                    (&starred_ids, "user/-/state/com.google/starred", true),
+                    (&unstarred_ids, "user/-/state/com.google/starred", false),
+                ];
+                let mut failed_ids: std::collections::HashSet<&str> =
+                    std::collections::HashSet::new();
+                for (ids, state, flag) in batches {
+                    if ids.is_empty() {
+                        continue;
+                    }
+                    if let Err(e) = self
+                        .caller
+                        .update_state_to_entries(&auth_token, ids, state, flag)
+                        .await
+                    {
+                        tracing::warn!(
+                            ?e,
+                            state,
+                            flag,
+                            count = ids.len(),
+                            "status send failed; rows stay queued for the next cycle"
+                        );
+                        failed_ids.extend(ids.iter().map(String::as_str));
+                    }
                 }
 
-                let processed_ids: Vec<String> =
-                    sync_statuses.into_iter().map(|s| s.article_id).collect();
-                account
-                    .delete_sync_statuses_selected_for_processing(processed_ids)
-                    .await?;
+                // Clear only articles whose every batch landed. syncStatus
+                // deletes by articleID alone, so clearing a half-sent article
+                // would drop the row for its other key too.
+                let processed_ids: Vec<String> = sync_statuses
+                    .iter()
+                    .map(|s| s.article_id.as_str())
+                    .filter(|id| !failed_ids.contains(id))
+                    .map(str::to_owned)
+                    .collect();
+                if !processed_ids.is_empty() {
+                    account
+                        .delete_sync_statuses_selected_for_processing(processed_ids)
+                        .await?;
+                }
             }
 
             // 3. Refresh Article Status (Remote -> Local)

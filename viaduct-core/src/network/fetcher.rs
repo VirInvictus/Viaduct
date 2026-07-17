@@ -23,6 +23,12 @@ const CACHE_CONTROL_MAX_MAX_AGE_SECS: i64 = 5 * 60 * 60;
 /// full re-sync. openrss.org and rachelbythebay.com are excluded.
 const CONDITIONAL_GET_EXPIRY_DAYS: i64 = 8;
 
+/// Port of NNW's `defaultRetryAfter`. Some hosts (Reddit) answer 429
+/// without a `Retry-After` header; without a fallback we'd record no
+/// cooldown at all and hammer them again on the very next cycle, which
+/// is the opposite of what the 429 asked for.
+const DEFAULT_RETRY_AFTER_SECS: i64 = 10 * 60;
+
 /// v2.6.9: cap on simultaneously-running per-feed pipelines inside a
 /// single refresh cycle. Pre-v2.6.9 we `tokio::spawn`-ed every feed at
 /// once, which made the cycle's peak RSS scale linearly with feed
@@ -142,12 +148,13 @@ impl Fetcher {
                                 .headers()
                                 .get(header::CONTENT_ENCODING)
                                 .and_then(|v| v.to_str().ok().map(|s| s.to_string()));
-                            if status == StatusCode::TOO_MANY_REQUESTS
-                                && let Some(retry_after) =
-                                    response.headers().get(header::RETRY_AFTER)
-                                && let Ok(s) = retry_after.to_str()
-                                && let Ok(secs) = s.parse::<i64>()
-                            {
+                            if status == StatusCode::TOO_MANY_REQUESTS {
+                                let secs = retry_after_secs(
+                                    response
+                                        .headers()
+                                        .get(header::RETRY_AFTER)
+                                        .and_then(|v| v.to_str().ok()),
+                                );
                                 let mut cooldowns = cooldowns_clone.lock().await;
                                 cooldowns.insert(
                                     host_clone.clone(),
@@ -509,6 +516,17 @@ const NO_MINIMUM_TIME_DOMAINS: &[&str] = &[
     "flyingmeat.com",
 ];
 
+/// Resolves the cooldown a 429 earns us. Port of NNW
+/// `createHTTPResponse429`: a missing, unparseable, or non-positive
+/// `Retry-After` falls back to `DEFAULT_RETRY_AFTER_SECS` rather than
+/// skipping the cooldown, which is what the header's absence used to do.
+fn retry_after_secs(header_value: Option<&str>) -> i64 {
+    header_value
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_RETRY_AFTER_SECS)
+}
+
 /// Returns true if the URL's host belongs to one of the supplied domains,
 /// ignoring case and an optional leading `www.`. Port of NNW
 /// `SpecialCase.urlStringMatchesDomain`. Domains in `domains` must already
@@ -825,5 +843,25 @@ mod tests {
         assert!(!is_no_minimum_time_domain(
             "https://example.com/daringfireball.net"
         ));
+    }
+
+    #[test]
+    fn retry_after_secs_uses_a_supplied_value() {
+        assert_eq!(retry_after_secs(Some("120")), 120);
+        assert_eq!(retry_after_secs(Some(" 120 ")), 120);
+    }
+
+    #[test]
+    fn retry_after_secs_defaults_when_absent_or_unusable() {
+        // Reddit 429s with no Retry-After at all; before the default we
+        // recorded no cooldown and hit it again on the next cycle.
+        assert_eq!(retry_after_secs(None), DEFAULT_RETRY_AFTER_SECS);
+        // An HTTP-date Retry-After is legal but we don't parse it.
+        assert_eq!(
+            retry_after_secs(Some("Wed, 21 Oct 2026 07:28:00 GMT")),
+            DEFAULT_RETRY_AFTER_SECS
+        );
+        assert_eq!(retry_after_secs(Some("0")), DEFAULT_RETRY_AFTER_SECS);
+        assert_eq!(retry_after_secs(Some("-5")), DEFAULT_RETRY_AFTER_SECS);
     }
 }
