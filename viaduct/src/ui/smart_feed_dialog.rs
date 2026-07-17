@@ -12,14 +12,15 @@
 //! Out of scope for v2.7.0: OR / NOT, nested groups, edit-existing
 //! (the sidebar right-click delete + recreate covers that for now).
 
-use adw::prelude::*;
-use adw::subclass::prelude::ObjectSubclassIsExt;
 use chrono::Utc;
 use gtk::glib;
+use gtk::prelude::*;
+use gtk::subclass::prelude::ObjectSubclassIsExt;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::smart_feeds::{Condition, SmartFeed, SmartFeedRules};
+use crate::ui::rows;
 use crate::ui::window::ViaductWindow;
 
 const FIELD_OPTIONS: &[(&str, &str)] = &[
@@ -202,27 +203,13 @@ impl RuleRow {
 pub fn present(parent: &ViaductWindow) {
     let feed_pairs = collect_feed_pairs(parent);
 
-    let dialog = adw::Dialog::new();
-    dialog.set_title("New Smart Feed");
-    dialog.set_content_width(560);
-    dialog.set_content_height(520);
-
-    let toolbar = adw::ToolbarView::new();
-    let header = adw::HeaderBar::new();
-    header.set_show_end_title_buttons(true);
+    // Phase 20c: plain modal window. Cancel / Save ride a `GtkHeaderBar`.
     let cancel_btn = gtk::Button::with_label("Cancel");
-    cancel_btn.connect_clicked(glib::clone!(
-        #[weak]
-        dialog,
-        move |_| {
-            dialog.close();
-        }
-    ));
-    header.pack_start(&cancel_btn);
     let save_btn = gtk::Button::with_label("Save");
     save_btn.add_css_class("suggested-action");
+    let header = gtk::HeaderBar::new();
+    header.pack_start(&cancel_btn);
     header.pack_end(&save_btn);
-    toolbar.add_top_bar(&header);
 
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 12);
     outer.set_margin_top(18);
@@ -230,25 +217,37 @@ pub fn present(parent: &ViaductWindow) {
     outer.set_margin_start(18);
     outer.set_margin_end(18);
 
-    let name_group = adw::PreferencesGroup::new();
-    let name_row = adw::EntryRow::new();
-    name_row.set_title("Name");
-    name_group.add(&name_row);
+    let (name_group, name_list) = rows::group(None, None);
+    let (name_row, name_entry) = rows::entry_row("Name", None, None);
+    name_list.append(&name_row);
     outer.append(&name_group);
 
-    let rules_group = adw::PreferencesGroup::new();
-    rules_group.set_title("Conditions");
-    rules_group.set_description(Some("All conditions must match (AND). Add at least one."));
+    // The Conditions section is not a boxed-list; it holds a vertical stack
+    // of custom horizontal rule editors, so it is a plain heading +
+    // description + container rather than `rows::group`.
+    let rules_section = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    rules_section.append(
+        &gtk::Label::builder()
+            .label("Conditions")
+            .xalign(0.0)
+            .css_classes(["heading"])
+            .build(),
+    );
+    rules_section.append(
+        &gtk::Label::builder()
+            .label("All conditions must match (AND). Add at least one.")
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["caption", "dim-label"])
+            .build(),
+    );
     let rules_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let rules_holder = adw::PreferencesRow::new();
-    rules_holder.set_activatable(false);
-    rules_holder.set_child(Some(&rules_box));
-    rules_group.add(&rules_holder);
+    rules_section.append(&rules_box);
 
     let add_btn = gtk::Button::with_label("Add Condition");
     add_btn.add_css_class("flat");
     add_btn.set_halign(gtk::Align::Start);
-    outer.append(&rules_group);
+    outer.append(&rules_section);
     outer.append(&add_btn);
 
     let footer = gtk::Label::new(Some(
@@ -262,9 +261,30 @@ pub fn present(parent: &ViaductWindow) {
 
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
+    scroller.set_vexpand(true);
     scroller.set_child(Some(&outer));
-    toolbar.set_content(Some(&scroller));
-    dialog.set_child(Some(&toolbar));
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.append(&header);
+    content.append(&scroller);
+
+    let dialog = gtk::Window::builder()
+        .title("New Smart Feed")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(560)
+        .default_height(520)
+        .child(&content)
+        .build();
+    crate::ui::close_on_escape(&dialog);
+
+    cancel_btn.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
 
     let rule_rows: Rc<RefCell<Vec<Rc<RuleRow>>>> = Rc::new(RefCell::new(Vec::new()));
 
@@ -310,7 +330,7 @@ pub fn present(parent: &ViaductWindow) {
         let Some(window) = weak_window.upgrade() else {
             return;
         };
-        let name = name_row.text().trim().to_string();
+        let name = name_entry.text().trim().to_string();
         if name.is_empty() {
             window.show_toast_public("Give your Smart Feed a name first.");
             return;
@@ -359,7 +379,7 @@ pub fn present(parent: &ViaductWindow) {
         }
     });
 
-    dialog.present(Some(parent));
+    dialog.present();
 }
 
 fn collect_feed_pairs(window: &ViaductWindow) -> Vec<(String, String)> {
