@@ -951,6 +951,45 @@ impl ViaductWindow {
         self.advance_unread(Direction::Prev);
     }
 
+    /// Move the timeline selection by one row (spec.md §5 "move down/up
+    /// list"). This is the arrow / j / k binding; `n` / `minus` do the
+    /// unread-skip via `advance_unread`. Previously Down/Up were wired to
+    /// `advance_unread`, so Up appeared dead once every row above was read.
+    pub(crate) fn act_select_next(&self) {
+        self.select_row(Direction::Next);
+    }
+    pub(crate) fn act_select_prev(&self) {
+        self.select_row(Direction::Prev);
+    }
+
+    fn select_row(&self, dir: Direction) {
+        let imp = self.imp();
+        let store = imp.timeline_view.get().store();
+        let selection = imp.timeline_view.get().selection();
+        let n = store.n_items();
+        if n == 0 {
+            return;
+        }
+        let current = selection.selected();
+        let target: i64 = match (dir, current) {
+            (Direction::Next, pos) if pos == gtk::INVALID_LIST_POSITION => 0,
+            (Direction::Prev, pos) if pos == gtk::INVALID_LIST_POSITION => n as i64 - 1,
+            (Direction::Next, pos) => pos as i64 + 1,
+            (Direction::Prev, pos) => pos as i64 - 1,
+        };
+        if target < 0 || target >= n as i64 {
+            return; // at the boundary — stay put
+        }
+        selection.set_selected(target as u32);
+        imp.timeline_view.get().list_view().scroll_to(
+            target as u32,
+            gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT,
+            None,
+        );
+        // Same focus hand-off as advance_unread, so Space pages the article.
+        self.act_focus_article();
+    }
+
     /// Move the timeline selection to the next (or previous) unread row.
     /// If no unread article exists in the requested direction, the selection
     /// doesn't move — matching NNW's behavior of no-op at the boundary.
@@ -2365,11 +2404,11 @@ impl ViaductWindow {
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
 
         const NAV_BINDINGS: &[(&str, &str)] = &[
-            ("Down", "win.next-unread"),
-            ("j", "win.next-unread"),
+            ("Down", "win.select-next"),
+            ("j", "win.select-next"),
             ("n", "win.next-unread"),
-            ("Up", "win.prev-unread"),
-            ("k", "win.prev-unread"),
+            ("Up", "win.select-prev"),
+            ("k", "win.select-prev"),
             ("minus", "win.prev-unread"),
             // Space / Shift+Space removed — WebKit owns article-pane
             // page-down/up natively (pre1.6). Re-add once we have an

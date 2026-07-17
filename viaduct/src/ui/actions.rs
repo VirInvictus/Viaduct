@@ -28,6 +28,8 @@ pub fn install(window: &ViaductWindow, app: &gtk::Application) {
     register(window, "scroll-up", |w| w.act_scroll_up());
     register(window, "next-unread", |w| w.act_next_unread());
     register(window, "prev-unread", |w| w.act_prev_unread());
+    register(window, "select-next", |w| w.act_select_next());
+    register(window, "select-prev", |w| w.act_select_prev());
 
     // Status
     register(window, "toggle-read", |w| w.act_toggle_read());
@@ -138,8 +140,10 @@ pub fn install(window: &ViaductWindow, app: &gtk::Application) {
     // bridge that §7.4's lockdown disables. So Space pages but never
     // advances; the smart-read / scroll-up actions stay registered as the
     // landing site for that work.
-    app.set_accels_for_action("win.next-unread", &["n", "Down", "j"]);
-    app.set_accels_for_action("win.prev-unread", &["minus", "Up", "k"]);
+    app.set_accels_for_action("win.next-unread", &["n"]);
+    app.set_accels_for_action("win.prev-unread", &["minus"]);
+    app.set_accels_for_action("win.select-next", &["Down", "j"]);
+    app.set_accels_for_action("win.select-prev", &["Up", "k"]);
     app.set_accels_for_action("win.toggle-read", &["r", "m"]);
     app.set_accels_for_action("win.mark-unread-advance", &["<Shift>m"]);
     app.set_accels_for_action("win.toggle-star", &["s"]);
