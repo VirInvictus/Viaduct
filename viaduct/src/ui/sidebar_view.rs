@@ -74,9 +74,12 @@ mod imp {
     impl ObjectSubclass for SidebarView {
         const NAME: &'static str = "ViaductSidebarView";
         type Type = super::SidebarView;
-        type ParentType = adw::Bin;
+        type ParentType = gtk::Widget;
 
         fn class_init(klass: &mut Self::Class) {
+            // Phase 20c: what `adw::Bin` was for. BinLayout gives the same
+            // "size to my one child" behaviour with no libadwaita.
+            klass.set_layout_manager_type::<gtk::BinLayout>();
             klass.bind_template();
         }
 
@@ -85,14 +88,19 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for SidebarView {}
+    impl ObjectImpl for SidebarView {
+        // `adw::Bin` unparented its child for us; plain `gtk::Widget`
+        // does not, and GTK warns about surviving children at finalize.
+        fn dispose(&self) {
+            self.dispose_template();
+        }
+    }
     impl WidgetImpl for SidebarView {}
-    impl BinImpl for SidebarView {}
 }
 
 glib::wrapper! {
     pub struct SidebarView(ObjectSubclass<imp::SidebarView>)
-        @extends adw::Bin, gtk::Widget,
+        @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 

@@ -208,9 +208,12 @@ mod imp {
     impl ObjectSubclass for ArticlePaneView {
         const NAME: &'static str = "ViaductArticlePaneView";
         type Type = super::ArticlePaneView;
-        type ParentType = adw::Bin;
+        type ParentType = gtk::Widget;
 
         fn class_init(klass: &mut Self::Class) {
+            // Phase 20c: what `adw::Bin` was for. BinLayout gives the same
+            // "size to my one child" behaviour with no libadwaita.
+            klass.set_layout_manager_type::<gtk::BinLayout>();
             // ArticleRenderer's template is a child of this template, so
             // its GType must be registered before the GTK builder
             // resolves our template.
@@ -223,14 +226,19 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for ArticlePaneView {}
+    impl ObjectImpl for ArticlePaneView {
+        // `adw::Bin` unparented its child for us; plain `gtk::Widget`
+        // does not, and GTK warns about surviving children at finalize.
+        fn dispose(&self) {
+            self.dispose_template();
+        }
+    }
     impl WidgetImpl for ArticlePaneView {}
-    impl BinImpl for ArticlePaneView {}
 }
 
 glib::wrapper! {
     pub struct ArticlePaneView(ObjectSubclass<imp::ArticlePaneView>)
-        @extends adw::Bin, gtk::Widget,
+        @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 

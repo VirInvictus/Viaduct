@@ -427,7 +427,8 @@ Portfolio direction change (Brandon, 2026-07-09): the goal moved from "runs poli
 
 ### 20c — Widget migration
 
-- [ ] **Mechanical middle, in the pilot's proven order**, each step green on its own: `Bin` → `gtk::Widget` + `BinLayout` (unparent children in `dispose()` or GTK warns at finalize) → owned rows module (extend it with the four net-new row flavours) → dialogs / preferences / About → shell.
+- [x] **`Bin` → `gtk::Widget` + `BinLayout`** *(done)*. All four subclasses (`ArticlePaneView`, `ArticleRenderer`, `TimelineView`, `SidebarView`) plus their `.ui` templates (`parent="AdwBin"` → `"GtkWidget"`). Each gained a `dispose` calling `dispose_template()`, since `adw::Bin` unparented children for us and plain `gtk::Widget` does not. No API breakage: nothing called `adw::Bin::set_child` on any of them. **Not yet verified:** a clean launch shows no GTK criticals, but the teardown path needs a real window close to exercise `dispose`, so the finalize warning this guards against is unproven either way. Fold into 20f's hands-on pass.
+- [ ] **Rest of the mechanical middle, in the pilot's proven order**, each step green on its own: owned rows module (extend it with the four net-new row flavours) → dialogs / preferences / About → shell.
 - [ ] **The shell is two commits, not one.** `AdwApplicationWindow` forbids a real titlebar, so first merge the header bars into `GtkHeaderBar`s riding as ordinary content children, then cut to `gtk::ApplicationWindow` and promote to `<property name="titlebar">`. Attempting both at once fights the toolkit.
 - [ ] **Rebuild what adw gave for free:** Escape handling on plain `gtk::Window` (reconcile with the existing `close-article` Escape action in `actions.rs`), and the `GtkPaned` width-driven collapse replacing the two `AdwBreakpoint`s. Pane widths persist in GSettings, saved on close rather than on `notify::position`.
 

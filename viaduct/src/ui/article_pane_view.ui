@@ -28,7 +28,7 @@
       </item>
     </section>
   </menu>
-  <template class="ViaductArticlePaneView" parent="AdwBin">
+  <template class="ViaductArticlePaneView" parent="GtkWidget">
     <child>
       <object class="AdwToolbarView">
         <child type="top">

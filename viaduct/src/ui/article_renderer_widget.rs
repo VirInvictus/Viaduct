@@ -54,9 +54,12 @@ mod imp {
     impl ObjectSubclass for ArticleRenderer {
         const NAME: &'static str = "ViaductArticleRenderer";
         type Type = super::ArticleRenderer;
-        type ParentType = adw::Bin;
+        type ParentType = gtk::Widget;
 
         fn class_init(klass: &mut Self::Class) {
+            // Phase 20c: what `adw::Bin` was for. BinLayout gives the same
+            // "size to my one child" behaviour with no libadwaita.
+            klass.set_layout_manager_type::<gtk::BinLayout>();
             klass.bind_template();
         }
 
@@ -65,14 +68,19 @@ mod imp {
         }
     }
 
-    impl ObjectImpl for ArticleRenderer {}
+    impl ObjectImpl for ArticleRenderer {
+        // `adw::Bin` unparented its child for us; plain `gtk::Widget` does
+        // not, and GTK warns about surviving children at finalize.
+        fn dispose(&self) {
+            self.dispose_template();
+        }
+    }
     impl WidgetImpl for ArticleRenderer {}
-    impl BinImpl for ArticleRenderer {}
 }
 
 glib::wrapper! {
     pub struct ArticleRenderer(ObjectSubclass<imp::ArticleRenderer>)
-        @extends adw::Bin, gtk::Widget,
+        @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 

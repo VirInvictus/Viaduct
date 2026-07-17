@@ -17,7 +17,7 @@
       </item>
     </section>
   </menu>
-  <template class="ViaductTimelineView" parent="AdwBin">
+  <template class="ViaductTimelineView" parent="GtkWidget">
     <child>
       <object class="AdwToolbarView">
         <child type="top">

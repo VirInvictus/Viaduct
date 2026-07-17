@@ -48,7 +48,7 @@
       </item>
     </section>
   </menu>
-  <template class="ViaductSidebarView" parent="AdwBin">
+  <template class="ViaductSidebarView" parent="GtkWidget">
     <child>
       <object class="AdwToolbarView">
         <child type="top">
