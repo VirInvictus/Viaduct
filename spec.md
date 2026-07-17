@@ -66,49 +66,49 @@ Unconstrained web engines are memory black holes. viaduct ships **exactly one** 
 6. **`viaduct-img://` URI scheme handler** routes every image lookup through our `ImageCache` (memory LRU → disk → network). WebKit can render images, but every byte travels through the cache, and no other origin can load anything.
 7. **Link interception:** `decide-policy` cancels every `LinkClicked` / `FormSubmitted` / `NewWindowAction` and shells the URL out to `xdg-open` (system browser). `Other` / `Reload` / `BackForward` allowed through so `load_html`'s synthetic about:blank works.
 8. **Hover URL overlay:** `mouse-target-changed` updates a `gtk::Label` overlay (osd + caption) in the bottom-left so the user can preview link destinations.
-9. **Memory:** see §11 for the full budget + measured numbers + the architectural floor analysis. The locked-down WebProcess + the GTK4 / libadwaita / WebKitGTK shared libraries together pin a ~150 MB anon floor inside the main process that no Rust-side allocator tuning can reach (`#[global_allocator] = mimalloc` only redirects Rust allocations; the C side keeps its own glibc heap). The single-WebView constraint is the biggest knob we *do* control here; every additional `WebKitWebView` would add ~100–150 MB.
+9. **Memory:** see §11 for the full budget + measured numbers + the architectural floor analysis. The locked-down WebProcess + the GTK4 / WebKitGTK shared libraries pin an anon floor inside the main process that no Rust-side allocator tuning can reach (`#[global_allocator] = mimalloc` only redirects Rust allocations; the C side keeps its own glibc heap). **Dropping libadwaita in v3.0.0 lowered that floor**: a 130-feed refresh cycle now measures `anon_mb ≈ 112` and `peak_mb ≈ 302` (was ~150 MB anon / ~333–364 MB peak with libadwaita), so the de-adwaita move was memory-positive, not just neutral. The single-WebView constraint is the biggest knob we *do* control here; every additional `WebKitWebView` would add ~100–150 MB.
 
 ### 2.3 Widget Tree
 
-> **Stale as of v3.0.0 (libadwaita dropped, Phase 20).** The `Adw*` types
-> below are gone: the shell is `GtkApplicationWindow` + nested `GtkPaned`,
-> the bars are plain `GtkHeaderBar`, the toast is `GtkOverlay`+`GtkRevealer`,
-> and the status pages / avatars / rows are viaduct-owned widgets. See §12
-> for the current design. This tree is kept until it is rewritten.
+Post-v3.0.0 (libadwaita dropped, Phase 20). The shell is plain GTK4; the
+custom `Viaduct*` widgets are the owned `adw::` replacements (§12.5).
 
 ```text
-AdwApplicationWindow
-├── AdwBreakpoint (max-width 900sp → inner_split_view.collapsed)
-├── AdwBreakpoint (max-width 600sp → both split_views.collapsed)
-└── AdwToastOverlay
-    └── AdwNavigationSplitView outer_split_view (220–360 px sidebar)
-        ├── [sidebar] AdwNavigationPage "Feeds"
-        │   └── AdwToolbarView
-        │       ├── AdwHeaderBar
-        │       │   ├── [start] mark_all_read_btn
-        │       │   ├── [start] sync_btn (GtkStack: refresh icon ⇄ spinner)
-        │       │   ├── [end]   search_btn (toggle)
-        │       │   └── [end]   menu_btn (primary menu)
-        │       └── GtkScrolledWindow
-        │           └── GtkListView sidebar_list_view
-        │               (TreeListModel: Smart Feeds, Folders, Subscriptions)
-        └── [content] AdwNavigationSplitView inner_split_view (320–480 px sidebar)
-            ├── [sidebar] AdwNavigationPage "Timeline"
-            │   └── AdwToolbarView
-            │       ├── AdwHeaderBar + GtkSearchBar
-            │       └── GtkStack timeline_stack
-            │           ├── content: GtkScrolledWindow (hscrollbar=never)
-            │           │            → GtkListView (recycled, capped natural width)
-            │           └── empty:   AdwStatusPage "No articles"
-            └── [content] AdwNavigationPage "Article"
-                └── AdwToolbarView
-                    ├── AdwHeaderBar + reader_btn
-                    └── GtkStack article_stack
-                        ├── content: GtkOverlay
-                        │              ├── WebKitWebView article_web_view
-                        │              └── GtkLabel url_overlay (hover preview)
-                        └── empty:   AdwStatusPage "No article selected"
+GtkApplicationWindow  (titlebar = invisible GtkHeaderBar → no default titlebar)
+└── GtkOverlay toast_overlay
+    ├── [overlay] GtkRevealer toast_revealer → GtkLabel .toast   (can-target=false)
+    └── GtkBox (vertical)
+        ├── GtkPaned outer_split_view  (position 260; resize/shrink-start = false)
+        │   ├── [start] ViaductSidebarView
+        │   │            └── GtkBox → GtkHeaderBar  (show-title-buttons=TRUE →
+        │   │                │        window controls live here, the outermost bar)
+        │   │                │  ├── [start] mark_all_read_btn
+        │   │                │  ├── [start] sync_btn (GtkStack: refresh icon ⇄ spinner)
+        │   │                │  ├── [end]   search_btn (toggle)
+        │   │                │  └── [end]   menu_btn (primary menu)
+        │   │                └── GtkScrolledWindow → GtkListView sidebar_list_view
+        │   │                     (TreeListModel; feed rows use ViaductAvatar)
+        │   └── [end] GtkPaned inner_split_view  (position 340)
+        │       ├── [start] ViaductTimelineView
+        │       │            └── GtkBox → GtkHeaderBar (show-title-buttons=false)
+        │       │                       + GtkSearchBar
+        │       │               └── GtkStack timeline_stack
+        │       │                   ├── content: GtkScrolledWindow → GtkListView
+        │       │                   └── empty:   ViaductStatusPage
+        │       └── [end] ViaductArticlePaneView
+        │                    └── GtkBox → GtkHeaderBar (ViaductWindowTitle title-widget,
+        │                       │          reader_btn / appearance / share / play-video)
+        │                       └── GtkStack article_stack
+        │                           ├── content: ViaductArticleRenderer
+        │                           │              (GtkOverlay → WebKitWebView + url label)
+        │                           └── empty:   ViaductStatusPage
+        └── GtkRevealer refresh_progress_revealer → label + progress bar
 ```
+
+Adaptive layout: `size_allocate` on the window hides the sidebar pane below
+600 px (`F9` toggles it and hands the user manual control thereafter). The
+medium-width inner collapse (`AdwNavigationSplitView`'s navigation stack) has
+no `GtkPaned` analog and is a deferred refinement.
 
 ---
 
@@ -210,7 +210,7 @@ To enforce the memory and disk footprint, the database is regularly vacuumed.
 
 ### C/GTK Libraries (Frontend)
 * `gtk4` (via `gtk4-rs`): Minimum 4.16.
-* `libadwaita` (via `libadwaita-rs`): Minimum 1.7. *(Removed by Phase 20; see §12.)*
+* ~~`libadwaita`~~ **Removed in v3.0.0 (Phase 20).** The design layer is viaduct-owned; see §12.
 * `webkitgtk-6.0` (via `webkit6` 0.4): Minimum 2.42; the article reading pane runs a single neutered instance (see §2.2).
 
 ---
@@ -310,7 +310,7 @@ If a future v2.x adds something that pushes peak past 600 MB on the realistic 30
 
 ## 12. Design System: post-libadwaita (Phase 20 target)
 
-**Status: implemented in v3.0.0 (libadwaita dropped); owned stylesheet first cut landed.** §2.3's widget tree and §7's dependency list below still describe the pre-3.0 adwaita app and are stale pending a rewrite; this section is the current contract. Colophon's Phase 6 is the pilot and its patterns are the default; every divergence below is deliberate and reasoned.
+**Status: implemented in v3.0.0 (libadwaita dropped); owned stylesheet first cut landed.** §2.3's widget tree is rewritten to the GtkPaned shell; §7's dependency list still lists the pre-3.0 deps and is stale. This section is the current design contract. Colophon's Phase 6 is the pilot and its patterns are the default; every divergence below is deliberate and reasoned.
 
 ### 12.1 Toolkit stance
 

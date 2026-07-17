@@ -461,11 +461,11 @@ Portfolio direction change (Brandon, 2026-07-09): the goal moved from "runs poli
 
 - [x] **Stripped adw from the manifests** *(done, v3.0.0)*: workspace `Cargo.toml`, `viaduct/Cargo.toml`, and `libadwaita-1-dev` from CI. Keep breadcrumb doc comments naming what each owned construct replaces (the pilot's convention), including the three in `viaduct-core` that reference `adw::Avatar` (reword, do not delete). `APP_ID` must keep matching the `.desktop` basename and Flatpak app-id so Hyprland `windowrulev2` matching stays stable.
 - [ ] **Flatpak runtime: evaluated, declined.** Stays on `org.gnome.Platform`: GTK4 ships in the GNOME runtime and not in `org.freedesktop.Platform`, so moving means maintaining GTK4 as manifest modules to drop a name. Our manifest never listed libadwaita as a module. Recorded in spec.md §12.6; revisit only if a gtk4 freedesktop BaseApp appears. **This bullet is a doc note, not work.**
-- [ ] **Docs follow-through:** `CLAUDE.md` §5's "targets GNOME 50+" stance, §3's widget-layer entries, and spec.md §2.3's widget tree + §7's dependency list (all still describe the shipped adwaita app). Major version bump for a zero-feature release, as the pilot did.
+- [x] **Docs follow-through** *(mostly done)*: CLAUDE.md §5 rewritten (plain-GTK stance), §3 widget entries updated per-migration, spec.md §2.3 widget tree rewritten to the GtkPaned shell, §2.2/§11 memory numbers updated, major bump to **v3.0.0** shipped. Remaining: spec §7's dependency list still lists pre-3.0 deps.
 
 ### 20f — Verification tail
 
-- [ ] **Phase 19's geometry/keyboard/portal/WebKit audit items** re-run against the migrated shell as acceptance criteria, plus `mem_check` to confirm memory neutrality against spec.md §11.
+- [x] **`mem_check` + live memory: memory-positive, not just neutral** *(done)*. Headless harness: peak 59 MB (< 500 budget). Live GTK app, 130-feed refresh: `peak_mb ≈ 302`, `anon_mb ≈ 112` — down from ~333–364 peak / ~150 anon with libadwaita. Recorded in spec.md §2.2/§11. **The Phase 19 geometry/keyboard/portal/WebKit audit items still want the hands-on pass** (below).
 - [ ] **Check the WebKit article path for adwaita assumptions.** Viaduct carries WebKitGTK and the pilot did not, so this is unprecedented territory: the v2.0.0-pre6 WebKit ↔ GTK CSS bridge propagates `--accent-color` from the libadwaita system accent, and `currentColor`-driven scrollbars key off GTK theme colours.
 - [ ] **Hands-on pass, keyboard in hand, on Hyprland and a GNOME session.** The pilot verified everything scriptable and deferred exactly this, which is how the focus flash escaped. Budget for it; do not let it be the residue.
 
