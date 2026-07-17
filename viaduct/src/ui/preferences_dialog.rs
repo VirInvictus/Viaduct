@@ -492,3 +492,91 @@ fn index_to_nick(index: u32) -> &'static str {
         _ => "default",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A throwaway settings object on a memory backend, so a test can drive
+    /// the rows without touching the user's real dconf.
+    fn test_settings() -> Option<gio::Settings> {
+        let source = gio::SettingsSchemaSource::from_directory(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()?
+                .join("data"),
+            None,
+            true,
+        )
+        .ok()?;
+        let schema = source.lookup("org.virinvictus.Viaduct", true)?;
+        Some(gio::Settings::new_full(
+            &schema,
+            Some(&gio::memory_settings_backend_new()),
+            None,
+        ))
+    }
+
+    /// Walk a row's widget tree for the first control of type `T`. The row
+    /// builders return their control directly, but `color_scheme_row` hands
+    /// back only the row, which is the thing a caller appends.
+    fn find_child<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Option<T> {
+        let mut next = widget.first_child();
+        while let Some(child) = next {
+            if let Ok(found) = child.clone().downcast::<T>() {
+                return Some(found);
+            }
+            if let Some(found) = find_child::<T>(&child) {
+                return Some(found);
+            }
+            next = child.next_sibling();
+        }
+        None
+    }
+
+    /// The regression Brandon hit: picking "Force light" in the dialog has
+    /// to reach the GSetting, or nothing downstream (libadwaita's chrome or
+    /// our own `theme::is_dark`) ever learns about it.
+    #[test]
+    fn color_scheme_row_writes_the_setting() {
+        if gtk::init().is_err() {
+            return;
+        }
+        let Some(settings) = test_settings() else {
+            return;
+        };
+        settings
+            .set_string(keys::COLOR_SCHEME, "force-dark")
+            .unwrap();
+
+        let row = color_scheme_row(&settings);
+        let drop_down = find_child::<gtk::DropDown>(row.upcast_ref()).expect("row has a DropDown");
+        assert_eq!(drop_down.selected(), 2, "starts on the stored value");
+
+        drop_down.set_selected(1);
+        assert_eq!(settings.string(keys::COLOR_SCHEME), "force-light");
+
+        drop_down.set_selected(0);
+        assert_eq!(settings.string(keys::COLOR_SCHEME), "default");
+    }
+
+    /// The sync-back half: an external write (dconf-editor, another window)
+    /// has to move the dropdown.
+    #[test]
+    fn color_scheme_row_follows_external_writes() {
+        if gtk::init().is_err() {
+            return;
+        }
+        let Some(settings) = test_settings() else {
+            return;
+        };
+        settings.set_string(keys::COLOR_SCHEME, "default").unwrap();
+
+        let row = color_scheme_row(&settings);
+        let drop_down = find_child::<gtk::DropDown>(row.upcast_ref()).expect("row has a DropDown");
+
+        settings
+            .set_string(keys::COLOR_SCHEME, "force-light")
+            .unwrap();
+        assert_eq!(drop_down.selected(), 1);
+    }
+}
