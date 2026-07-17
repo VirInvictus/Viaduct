@@ -13,65 +13,53 @@
 //! between "did my refresh run?" and "why didn't this feed update?"
 //! that previously required tailing `RUST_LOG=debug` output.
 
-use adw::prelude::*;
+use gtk::prelude::*;
+
 use chrono::{DateTime, Local, Utc};
 use std::sync::Arc;
 
 use crate::network::activity::{ActivityEvent, ActivityKind, ActivityLog, SkipReason};
+use crate::ui::rows;
 use crate::ui::window::ViaductWindow;
 
 pub fn present(parent: &ViaductWindow) {
     let log = parent.activity_log();
-    let dialog = adw::Dialog::new();
-    dialog.set_title("Activity Log");
-    dialog.set_content_width(640);
-    dialog.set_content_height(560);
 
-    let toolbar = adw::ToolbarView::new();
-    let header = adw::HeaderBar::new();
-    header.set_show_end_title_buttons(true);
-
+    // Phase 20c: plain modal window. Was `adw::Dialog` + `ToolbarView` +
+    // `HeaderBar`; the Clear button rides a `gtk::HeaderBar` set as the
+    // window titlebar.
     let clear_btn = gtk::Button::with_label("Clear");
     clear_btn.add_css_class("flat");
+    let header = gtk::HeaderBar::new();
     header.pack_end(&clear_btn);
-    toolbar.add_top_bar(&header);
 
     let stack = gtk::Stack::new();
     stack.set_transition_type(gtk::StackTransitionType::Crossfade);
 
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
-    scroller.set_propagate_natural_height(false);
+    scroller.set_vexpand(true);
 
+    let (group, list_box) = rows::group(
+        Some("Recent feed activity"),
+        Some("Newest first. Most recent 500 events are kept; clear to start fresh."),
+    );
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 18);
     outer.set_margin_top(18);
     outer.set_margin_bottom(18);
     outer.set_margin_start(18);
     outer.set_margin_end(18);
-
-    let group = adw::PreferencesGroup::new();
-    group.set_title("Recent feed activity");
-    group.set_description(Some(
-        "Newest first. Most recent 500 events are kept; clear to start fresh.",
-    ));
-    let list_box = gtk::ListBox::new();
-    list_box.add_css_class("boxed-list");
-    list_box.set_selection_mode(gtk::SelectionMode::None);
-    group.add(&list_box);
     outer.append(&group);
     scroller.set_child(Some(&outer));
 
-    let empty = adw::StatusPage::new();
-    empty.set_icon_name(Some("document-open-recent-symbolic"));
-    empty.set_title("No activity yet");
-    empty.set_description(Some(
+    let empty = status_page(
+        "document-open-recent-symbolic",
+        "No activity yet",
         "Refresh a feed to see what happens here. Successes, 304 not-modified, HTTP and network errors all show up.",
-    ));
+    );
 
     stack.add_named(&scroller, Some("content"));
     stack.add_named(&empty, Some("empty"));
-    toolbar.set_content(Some(&stack));
-    dialog.set_child(Some(&toolbar));
 
     populate(&list_box, &stack, &log);
 
@@ -85,7 +73,56 @@ pub fn present(parent: &ViaductWindow) {
         }
     });
 
-    dialog.present(Some(parent));
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.append(&header);
+    content.append(&stack);
+
+    let window = gtk::Window::builder()
+        .title("Activity Log")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(640)
+        .default_height(560)
+        .child(&content)
+        .build();
+    crate::ui::close_on_escape(&window);
+    window.present();
+}
+
+/// The `adw::StatusPage` replacement: a centred icon, title, and dim
+/// wrapping description. No adwaita-specific behaviour to preserve, so this
+/// is a plain composite rather than an owned widget.
+fn status_page(icon: &str, title: &str, description: &str) -> gtk::Box {
+    let outer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .vexpand(true)
+        .hexpand(true)
+        .margin_start(24)
+        .margin_end(24)
+        .build();
+    let image = gtk::Image::from_icon_name(icon);
+    image.set_pixel_size(48);
+    image.add_css_class("dim-label");
+    outer.append(&image);
+    outer.append(
+        &gtk::Label::builder()
+            .label(title)
+            .css_classes(["title-2"])
+            .build(),
+    );
+    outer.append(
+        &gtk::Label::builder()
+            .label(description)
+            .justify(gtk::Justification::Center)
+            .wrap(true)
+            .max_width_chars(48)
+            .css_classes(["dim-label"])
+            .build(),
+    );
+    outer
 }
 
 fn populate(list: &gtk::ListBox, stack: &gtk::Stack, log: &Arc<ActivityLog>) {
@@ -103,16 +140,15 @@ fn populate(list: &gtk::ListBox, stack: &gtk::Stack, log: &Arc<ActivityLog>) {
     }
 }
 
-fn row_for(ev: &ActivityEvent) -> adw::ActionRow {
-    let row = adw::ActionRow::new();
-    row.set_title(&display_title(ev));
-    row.set_subtitle(&display_subtitle(ev));
+fn row_for(ev: &ActivityEvent) -> gtk::ListBoxRow {
     let stamp = gtk::Label::new(Some(&format_when(ev.at)));
     stamp.add_css_class("dim-label");
     stamp.add_css_class("caption");
-    stamp.set_valign(gtk::Align::Center);
-    row.add_suffix(&stamp);
-    row
+    rows::row(
+        &display_title(ev),
+        Some(&display_subtitle(ev)),
+        Some(stamp.upcast_ref()),
+    )
 }
 
 fn display_title(ev: &ActivityEvent) -> String {
