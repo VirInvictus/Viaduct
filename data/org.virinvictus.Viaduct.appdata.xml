@@ -7,13 +7,13 @@
   <summary>Fast, native RSS reader for GNOME</summary>
   <description>
     <p>
-      Viaduct is a native RSS reader for GNOME, built in Rust with GTK4 and libadwaita.
+      Viaduct is a native Linux RSS reader built in Rust with GTK4, with its own flat design.
       It aims for full feature parity with NetNewsWire, providing a fast and familiar experience.
     </p>
     <ul>
       <li>Local account support</li>
       <li>Inoreader sync support</li>
-      <li>Adaptive UI for mobile and desktop</li>
+      <li>Runs on GNOME, Hyprland, and other Wayland desktops</li>
       <li>Blazing fast FTS5 search</li>
     </ul>
   </description>
@@ -21,7 +21,7 @@
   <url type="homepage">https://github.com/virinvictus/Viaduct</url>
   <screenshots>
     <screenshot type="default">
-      <caption>Three-pane wide layout with the Adwaita theme — system accent</caption>
+      <caption>Three-pane wide layout</caption>
       <image>https://raw.githubusercontent.com/VirInvictus/Viaduct/main/docs/screenshots/main-adwaita.png</image>
     </screenshot>
     <screenshot>

@@ -331,7 +331,7 @@ Two rules bind throughout, unchanged: **no regression for a GNOME user** (behavi
 
 Take the pilot's **weak-ref redraw registry** with it: the migration there exposed a real leak where per-widget `connect_dark_notify` closures accumulated on the singleton and were never disconnected.
 
-**The eight NNW article themes are byte-for-byte cargo and do not change.** Their resolution path does: `select_for_dark_mode` (`article_renderer.rs`) and the Adwaita theme's `prefers-color-scheme` handling key off `AdwStyleManager::is_dark()` today and must read the portal instead. The Adwaita article theme's `accent_hex: None` currently lets the libadwaita system accent through; once libadwaita is gone that accent has no source, so the Adwaita theme needs an explicit stance rather than inheriting one.
+**The eight NNW article themes are byte-for-byte cargo and do not change.** Their resolution path did: `select_for_dark_mode` (`article_renderer.rs`) and the Adwaita theme's `prefers-color-scheme` handling now read `theme::is_dark()` (portal) instead of `AdwStyleManager`. **Resolved in v3.0.0:** the Adwaita article theme's `accent_hex: None` used to inherit the libadwaita system accent; with libadwaita gone it contributes no accent override at all (the theme's own stylesheet colours apply), and the whole GTK chrome is Kanagawa via the owned sheet rather than following the article theme.
 
 ### 12.4 The owned stylesheet
 
