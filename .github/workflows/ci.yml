@@ -40,6 +40,7 @@ jobs:
             gtk4-devel \
             webkitgtk6.0-devel \
             sqlite-devel \
+            openssl-devel \
             xorg-x11-server-Xvfb
 
       - uses: actions/checkout@v4
