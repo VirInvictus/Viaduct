@@ -13,18 +13,28 @@ env:
 jobs:
   check:
     name: fmt + clippy + test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    # viaduct requires gtk4 >= 4.16 (v4_16); Ubuntu runners ship 4.14.5, so
+    # the build aborts in gdk4-sys before a single crate of ours compiles.
+    # That is why this workflow had never once gone green on ubuntu-24.04.
+    # Fedora carries a new-enough GTK, and the same container pattern is
+    # already proven in Atrium and Colophon. rusqlite is bundled, so it
+    # compiles from source and needs only a C toolchain.
+    container: fedora:latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install GTK4 / WebKitGTK
+      - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-4-dev \
-            libwebkitgtk-6.0-dev \
-            libsqlite3-dev \
-            pkg-config
+          dnf install -y \
+            gcc \
+            git \
+            pkgconf-pkg-config \
+            glib2-devel \
+            gtk4-devel \
+            webkitgtk6.0-devel \
+            sqlite-devel \
+            xorg-x11-server-Xvfb
+
+      - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -40,4 +50,10 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test
-        run: cargo test --workspace
+        # No current test calls gtk::init(), but the binary crate links gtk4
+        # and webkit6 and a widget test could land later; running under xvfb
+        # keeps a display available so the suite never depends on a headful
+        # runner. Matches the Colophon/Atrium convention.
+        env:
+          GDK_BACKEND: x11
+        run: xvfb-run -a cargo test --workspace
