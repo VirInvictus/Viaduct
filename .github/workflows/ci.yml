@@ -23,8 +23,16 @@ jobs:
     container: fedora:latest
     steps:
       - name: Install system dependencies
+        # --disablerepo=fedora-cisco-openh264: webkitgtk6.0-devel pulls
+        # openh264, which Fedora hosts on ciscobinary.openh264.org rather than
+        # in its own mirrors. That host is unreachable from GitHub runners and
+        # fails the whole transaction. We only need headers to compile, so the
+        # codec is irrelevant; --setopt=install_weak_deps=False drops it and
+        # the rest of the runtime-only baggage too.
         run: |
           dnf install -y \
+            --disablerepo=fedora-cisco-openh264 \
+            --setopt=install_weak_deps=False \
             gcc \
             git \
             pkgconf-pkg-config \
