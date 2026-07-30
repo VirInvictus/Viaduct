@@ -329,6 +329,19 @@ impl ViaductWindow {
     /// **and** that feed's per-feed `new_article_notifications_enabled`
     /// flag is set. Silent when either gate is off, when no feeds had
     /// new articles, or when the feed couldn't be resolved.
+    ///
+    /// **Gated on zero *unread*, not zero *new*.** A newly-arrived
+    /// article is not necessarily unread: `UpdateFeed` marks anything
+    /// older than six months `read = 1` on insert, so a feed that
+    /// backfills its archive reports a large `per_feed_new` while
+    /// leaving the user nothing to read. Notifying there trains people
+    /// to ignore the notification. Each feed's unread count is checked
+    /// and a feed sitting at zero stays silent no matter how much it
+    /// just delivered.
+    ///
+    /// Every id sent is recorded in `sent_notification_ids` so
+    /// `withdraw_refresh_notifications` can clear the tray when the user
+    /// comes back to the window.
     fn dispatch_refresh_notification(&self, tally: &RefreshTally) {
         if tally.per_feed_new.is_empty() {
             return;
@@ -351,8 +364,15 @@ impl ViaductWindow {
             .filter(|(_, count)| **count > 0)
             .map(|(id, count)| (id.clone(), *count))
             .collect();
+        let weak = self.downgrade();
         glib::spawn_future_local(async move {
+            // One bulk query for the whole cycle rather than per feed;
+            // a feed absent from the map has no unread rows at all.
+            let unread = account.unread_counts_by_feed().await.unwrap_or_default();
             for (feed_id, count) in entries {
+                if unread.get(&feed_id).copied().unwrap_or(0) <= 0 {
+                    continue;
+                }
                 let s = match account.fetch_feed_settings(feed_id.clone()).await {
                     Ok(Some(s)) => s,
                     _ => continue,
@@ -379,8 +399,33 @@ impl ViaductWindow {
                 // several times in quick succession.
                 let id = format!("viaduct.refresh.{}", feed_id);
                 app.send_notification(Some(&id), &notif);
+                if let Some(window) = weak.upgrade() {
+                    window.imp().sent_notification_ids.borrow_mut().insert(id);
+                }
             }
         });
+    }
+
+    /// Withdraw every per-feed refresh notification this session sent and
+    /// forget the ids. Called when the window becomes active (the user is
+    /// looking at the app, so a tray badge telling them to look at the app
+    /// is noise) and on the background re-summon path.
+    ///
+    /// Withdrawing an id that has already been dismissed is harmless, so
+    /// there is no need to track which ones are still on screen.
+    pub(crate) fn withdraw_refresh_notifications(&self) {
+        let Some(app) = self.application() else {
+            return;
+        };
+        let ids: Vec<String> = self
+            .imp()
+            .sent_notification_ids
+            .borrow_mut()
+            .drain()
+            .collect();
+        for id in ids {
+            app.withdraw_notification(&id);
+        }
     }
     pub(crate) fn refresh_specific_feeds(&self, feeds: Vec<crate::models::Feed>) {
         // v2.6.13: same re-entry guard as `act_refresh`. Used by the

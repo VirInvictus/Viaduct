@@ -110,6 +110,12 @@ pub(crate) mod imp {
         /// Phase 20c: once the user presses F9, they own the sidebar's
         /// visibility and width-driven auto-collapse stops touching it.
         pub sidebar_manual_override: std::cell::Cell<bool>,
+        /// Per-feed notification ids handed to `send_notification`, kept so
+        /// they can be withdrawn again when the user comes back to the
+        /// window. `gio::Application` has no "list what I sent" API, so the
+        /// ids have to be remembered on our side or they can only expire on
+        /// the daemon's own schedule.
+        pub sent_notification_ids: RefCell<std::collections::HashSet<String>>,
     }
 
     #[glib::object_subclass]
@@ -345,6 +351,7 @@ impl ViaductWindow {
         if let Some(source) = self.imp().hidden_state_ticker.borrow_mut().take() {
             source.remove();
         }
+        self.withdraw_refresh_notifications();
         let (rss_mb, peak_mb) = crate::read_memory_mb();
         tracing::info!(rss_mb, peak_mb, "diag: reload_current_timeline re-show");
     }
@@ -381,6 +388,16 @@ impl ViaductWindow {
 
     fn wire_models(&self) {
         let imp = self.imp();
+
+        // Clear any per-feed refresh notifications the moment the window
+        // becomes active. Keyed on `is-active` rather than the background
+        // re-summon path alone, because the notification is equally stale
+        // when the window never went away and the user simply focused it.
+        self.connect_notify_local(Some("is-active"), |window, _| {
+            if window.is_active() {
+                window.withdraw_refresh_notifications();
+            }
+        });
 
         // Phase 18 (v2.0.0-pre1): the WebKit lockdown, link interceptor,
         // viaduct-img:// / viaduct-font:// scheme handlers, and hover URL

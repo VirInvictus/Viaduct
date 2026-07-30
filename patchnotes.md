@@ -1,5 +1,14 @@
 # viaduct: Patch Notes
 
+## v3.0.1: Notifications that mean something
+
+Two fixes to refresh notifications, so that one appearing actually tells you there is something to read. No new features.
+
+- **A feed that backfills its archive no longer notifies you about nothing.** Articles older than six months arrive already marked read, which is deliberate: a feed republishing years of history should not hand you hundreds of unread items. But the notification counted everything that arrived, read or not, so one of those feeds could announce ninety new articles and leave you with an unchanged timeline. Notifications now check whether a feed actually has anything unread, and stay quiet when it does not.
+- **Notifications clear themselves when you come back to the window.** Previously they sat in the tray until you dismissed them by hand or your notification daemon expired them, which meant returning to viaduct and still being told to look at viaduct. Focusing the window now withdraws them, whether it had been hidden in the background or was simply behind another window.
+
+Also in this release: the meson build declared version 1.9.1 while the crate said 3.0.0, so anything reading the version through the build system (including the Flatpak) reported a number from many releases ago. Both now agree.
+
 ## v3.0.0: viaduct's own look (libadwaita is gone)
 
 viaduct no longer depends on libadwaita. The toolkit stays GTK4 and the reading pane stays WebKitGTK; what leaves is the GNOME design layer. Every widget that used to come from libadwaita, the window shell, the dialogs, the rows, the toasts, the sidebar avatars, the status pages, now belongs to viaduct, styled the way viaduct wants rather than the way GNOME does. The whole app keeps working exactly as before; this release changes what it is made of and gives it its own look.
