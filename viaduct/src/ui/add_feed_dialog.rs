@@ -52,9 +52,18 @@ pub fn present(parent: &ViaductWindow) {
         &combo_strs,
     );
 
+    // NewsFlash #905 analog: reader-on-by-default per feed at creation
+    // time. Same row copy as the feed-settings dialog so the two
+    // surfaces read as one setting.
+    let (reader_row, reader_switch) = rows::switch_row(
+        "Always use Reader View",
+        Some("Open every article from this feed in extracted-text mode."),
+    );
+
     list.append(&url_row);
     list.append(&name_row);
     list.append(&folder_row);
+    list.append(&reader_row);
 
     // Status row at the bottom — shows discovery progress + error
     // messages without taking the user out of the dialog. Uses
@@ -107,6 +116,7 @@ pub fn present(parent: &ViaductWindow) {
         let url_entry = url_entry.clone();
         let name_entry = name_entry.clone();
         let folder_drop_down = folder_drop_down.clone();
+        let reader_switch = reader_switch.clone();
         let combo_labels = combo_labels.clone();
         let status_label = status_label.clone();
         let add_btn = add_btn.clone();
@@ -132,6 +142,7 @@ pub fn present(parent: &ViaductWindow) {
             } else {
                 combo_labels.get(folder_idx).cloned()
             };
+            let reader_on = reader_switch.is_active();
 
             *busy.borrow_mut() = true;
             add_btn.set_sensitive(false);
@@ -200,6 +211,49 @@ pub fn present(parent: &ViaductWindow) {
                 });
                 match add_rx.await {
                     Ok(Ok(feed)) => {
+                        // Persist the reader-view default BEFORE the
+                        // first refresh of the feed, so the refresher's
+                        // own settings writes can't race a fresh row.
+                        // Same fetch-or-default shape as
+                        // act_feed_settings' save path.
+                        if reader_on {
+                            let account = parent.account();
+                            let feed_for_settings = feed.clone();
+                            let (set_tx, set_rx) = tokio::sync::oneshot::channel();
+                            crate::spawn_on_runtime(async move {
+                                let existing = account
+                                    .fetch_feed_settings(feed_for_settings.id.clone())
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                let mut s =
+                                    existing.unwrap_or_else(|| crate::models::FeedSettings {
+                                        feed_id: feed_for_settings.id.clone(),
+                                        feed_url: feed_for_settings.url.clone(),
+                                        home_page_url: feed_for_settings.home_page_url.clone(),
+                                        icon_url: None,
+                                        favicon_url: None,
+                                        edited_name: feed_for_settings.edited_name.clone(),
+                                        content_hash: None,
+                                        last_modified: None,
+                                        etag: None,
+                                        date_created: None,
+                                        max_age: None,
+                                        authors_json: None,
+                                        folder_relationship_json: None,
+                                        last_check_date: None,
+                                        reader_view_always_enabled: false,
+                                        new_article_notifications_enabled: false,
+                                        last_response_code: None,
+                                    });
+                                s.reader_view_always_enabled = true;
+                                let result = account.upsert_feed_settings(s).await;
+                                let _ = set_tx.send(result);
+                            });
+                            if let Ok(Err(e)) = set_rx.await {
+                                tracing::warn!(?e, "reader-view default upsert failed");
+                            }
+                        }
                         parent.show_toast_public(&format!("Added “{display_name}”."));
                         parent.reload_sidebar_after_opml_change();
                         parent.refresh_specific_feeds_public(vec![feed]);

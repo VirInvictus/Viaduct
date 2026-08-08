@@ -1,6 +1,11 @@
 # viaduct: Patch Notes
 
-## v3.0.1: Notifications that mean something
+## v3.1.0: Reader View from the start
+
+One small feature: the Add Feed dialog gains an "Always use Reader View" switch, so a feed that only publishes summaries can be set to open every article in extracted-text mode from the moment you subscribe, instead of adding it, opening its settings, and flipping the same switch there. The NewsFlash analog (its add-feed "scrape full articles" toggle, #905) had been sitting on the roadmap-candidates list since the May upstream review.
+
+- Same row copy and behavior as the feed-settings dialog; the two surfaces are one per-feed setting (`reader_view_always_enabled`), stored before the feed's first refresh so the refresher cannot race it.
+- Default is off, matching the database default; nothing changes for feeds added without it.
 
 Two fixes to refresh notifications, so that one appearing actually tells you there is something to read. No new features.
 
