@@ -526,7 +526,10 @@ impl ArticlePaneView {
         };
 
         let subs = article_renderer::ArticleSubstitutions {
-            title: article_renderer::escape_html(&state.title),
+            // NNW sanitizedTitle port (v3.2.0): the harmless inline
+            // subset (<em>, <b>, <abbr>…) renders as markup instead of
+            // literal escaped text; everything else is escaped.
+            title: crate::text::sanitized_title(&state.title, true),
             body: body_html,
             preferred_link: state.article_url.clone().unwrap_or_default(),
             feed_link: state.feed_link.clone(),

@@ -1,6 +1,12 @@
 # viaduct: Patch Notes
 
-## v3.1.0: Reader View from the start
+## v3.2.0: titles keep their emphasis
+
+One NNW port off the deferred-candidates list: `ArticleStringFormatter.sanitizedTitle`. Article titles carrying inline HTML used to be escaped wholesale in the article pane, so a feed titling a post with `<em>actually</em>` showed the tags as literal text. The port renders NNW's harmless inline subset (em, b, i, abbr, code, and the rest of the 22-tag allowlist) as real markup and escapes everything else.
+
+- Byte-level single-pass port in `viaduct-core` (`text::sanitized_title`), with NNW's fixes taken as a unit: attributes are ignored when matching a tag's name, and an unclosed tag never gains a synthesized `>` (their #4742, the `<16s in UK…` headline bug).
+- One deliberate NNW quirk preserved rather than fixed: the allowlist lookup is byte-exact, so `<EM>` is treated as disallowed, exactly as upstream behaves.
+- Ten unit tests pin the behavior matrix. The timeline is untouched; it always rendered titles as plain text.
 
 One small feature: the Add Feed dialog gains an "Always use Reader View" switch, so a feed that only publishes summaries can be set to open every article in extracted-text mode from the moment you subscribe, instead of adding it, opening its settings, and flipping the same switch there. The NewsFlash analog (its add-feed "scrape full articles" toggle, #905) had been sitting on the roadmap-candidates list since the May upstream review.
 
