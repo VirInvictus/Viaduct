@@ -52,15 +52,25 @@ impl Account {
         let opml_file_path = opml_path()?;
         let opml_writer = OpmlWriter::spawn(opml_file_path.clone());
 
-        let delegate: Arc<dyn AccountDelegate> =
-            if crate::network::credentials::fetch_credentials("inoreader")
-                .await?
-                .is_some()
-            {
-                Arc::new(crate::database::delegate::InoreaderAccountDelegate::new())
-            } else {
-                Arc::new(LocalAccountDelegate)
-            };
+        // A Secret Service that cannot be reached at all is not a fatal
+        // condition, it just means there are no stored Inoreader credentials
+        // to find. Propagating the error here made `Account::new` fail on any
+        // system without a running keyring daemon (a bare Wayland session, a
+        // container, CI), which took the whole app down at startup rather
+        // than degrading to the local account it would have used anyway.
+        let creds = match crate::network::credentials::fetch_credentials("inoreader").await {
+            Ok(creds) => creds,
+            Err(e) => {
+                tracing::warn!(?e, "Secret Service unavailable; using a local account");
+                None
+            }
+        };
+
+        let delegate: Arc<dyn AccountDelegate> = if creds.is_some() {
+            Arc::new(crate::database::delegate::InoreaderAccountDelegate::new())
+        } else {
+            Arc::new(LocalAccountDelegate)
+        };
 
         let account = Self {
             db_tx,
