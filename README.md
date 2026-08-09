@@ -45,14 +45,14 @@ Modern feed readers tend to be Electron / browser-engine apps with sprawling mem
 
 ## Screenshots
 
-Captures in dark mode, three-pane wide layout. *(Pre-v3.0.0 look; the v3.0 flat Kanagawa design is not yet re-captured.)*
+Captures in dark mode, three-pane wide layout.
 
 <p align="center">
-  <img src="docs/screenshots/main-adwaita.png" alt="Three-pane wide layout" width="800">
+  <img src="docs/screenshots/main.png" alt="Three-pane wide layout: feed sidebar with unread counts, article timeline, and the reading pane" width="800">
 </p>
 
 <p align="center">
-  <em>Three-pane wide layout (pre-v3.0.0 capture; the v3.0 flat Kanagawa look is not yet re-shot)</em>
+  <em>Three-pane wide layout on the v3.0 flat Kanagawa design</em>
 </p>
 
 <p align="center">
