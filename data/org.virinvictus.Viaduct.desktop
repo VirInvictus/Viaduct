@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Viaduct
-Comment=Fast, native RSS reader for GNOME
+Comment=Fast, native RSS reader for Linux
 Exec=viaduct
 Icon=org.virinvictus.Viaduct
 Terminal=false
