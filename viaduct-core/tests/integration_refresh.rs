@@ -7,8 +7,31 @@ use viaduct_core::database::worker::{
 };
 use viaduct_core::models::ParsedItem;
 
+/// Route the DBs into a tempdir, the same way `mem_check` does. Without
+/// this the test wrote "test-feed" straight into the developer's real
+/// `articles.sqlite`, and it only passed at all because that file already
+/// existed: nothing here calls `ensure_dirs`, so on a fresh machine (a CI
+/// container) the writer thread failed to open the DB and every op came
+/// back `WriterGone`.
+fn redirect_xdg_to_tempdir() {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let base = std::env::temp_dir().join(format!("viaduct-itest-{}-{}", std::process::id(), ts));
+    // SAFETY: this binary holds exactly one test, so no other thread is
+    // reading the environment at this point.
+    unsafe {
+        std::env::set_var("XDG_DATA_HOME", base.join("data"));
+        std::env::set_var("XDG_CACHE_HOME", base.join("cache"));
+    }
+    viaduct_core::paths::ensure_dirs().expect("Failed to create XDG dirs");
+}
+
 #[tokio::test]
 async fn test_account_update_feed_integration() {
+    redirect_xdg_to_tempdir();
+
     let (db_tx, db_rx) = mpsc::channel(256);
     spawn_db_worker(db_rx).expect("Failed to spawn db worker");
 
@@ -20,9 +43,6 @@ async fn test_account_update_feed_integration() {
     // open onto an already-initialized articles DB.
     let (read_tx, read_rx) = read_channel();
 
-    // Note: Account::new might try to create XDG directories.
-    // In a test environment, we might want to override these,
-    // but for now let's hope it works in the CI/Test environment.
     let account = Account::new(db_tx, Some(read_tx), sync_tx)
         .await
         .expect("Failed to create account");
