@@ -64,7 +64,7 @@ Every phase ends with a `heaptrack` / `massif` profiling checkpoint. Features th
 - [x] XDG path helpers: `$XDG_DATA_HOME/viaduct/` for OPML + DBs, `$XDG_CACHE_HOME/viaduct/` for images + favicons. *(v0.0.1)*
 - [x] Error type hierarchy via `thiserror` (`DatabaseError`, `NetworkError`, `ParseError`, `ViaductError`). *(v0.0.1)*
 - [x] `tracing-subscriber` configured with env-filter. *(v0.0.1)*
-- [x] GitHub Actions CI: `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` on Linux. *(v0.0.1)*
+- [x] GitHub Actions CI: `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` on Linux. *(v0.0.1; first green run v3.2.1, 2026-08-08. The workflow existed from v0.0.1 but never once passed: Ubuntu runners ship GTK 4.14 and the Fedora-container move that fixed that only exposed the next failure down, a `gtk::init()` race in the widget tests that segfaulted the suite.)*
 
 ## Phase 1: Core Data Models & ArticlesDatabase
 - [x] Rust structs: `Feed`, `Folder`, `Article`, `ArticleStatus`, `Author`, `ParsedItem`, `ParsedFeed`.

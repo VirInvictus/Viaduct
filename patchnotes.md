@@ -1,5 +1,17 @@
 # viaduct: Patch Notes
 
+## v3.2.1: viaduct starts without a keyring
+
+A startup fix. viaduct checks for stored Inoreader credentials at launch to know whether it is running as a local account or a syncing one, and it asks the Secret Service over D-Bus to find out. On a system with no keyring daemon running there is nothing to answer, the lookup fails, and viaduct treated that failure as fatal: the app did not start at all, when the honest answer was simply that there are no credentials and this is a local account. A bare Wayland session without a keyring, or a container, never got past launch.
+
+- **An unreachable keyring is no longer fatal.** It now means what it should mean, which is that there is nothing stored, so viaduct opens as a local account. The reason is logged, so a genuinely broken keyring stays diagnosable rather than silent.
+- **Nothing changes if your keyring works**, with or without an Inoreader account. Saving credentials, and the per-refresh fetch that Inoreader sync performs, still report their errors; those are the moments you are actually asking for the keyring.
+
+Also in this release: CI passes for the first time in the project's history. Two problems were hiding behind each other.
+
+- Five GTK widget tests each called `gtk::init()`, and cargo runs tests in parallel, so two threads could race inside GTK's initializer and take the whole test process down with a segfault. It only reproduces on the X11 backend, which is what CI runs under, so a local run on Wayland always looked clean. Those tests now go through `#[gtk::test]`, which hands every GTK test one already-initialized thread.
+- The refresh integration test never created its data directory, so it quietly depended on a real viaduct install already being there, and it wrote its fixture article into that real database. It gets its own temporary directory now, which is also why `cargo test` no longer leaves a "test-feed" entry in your library.
+
 ## v3.2.0: titles keep their emphasis
 
 One NNW port off the deferred-candidates list: `ArticleStringFormatter.sanitizedTitle`. Article titles carrying inline HTML used to be escaped wholesale in the article pane, so a feed titling a post with `<em>actually</em>` showed the tags as literal text. The port renders NNW's harmless inline subset (em, b, i, abbr, code, and the rest of the 22-tag allowlist) as real markup and escapes everything else.
