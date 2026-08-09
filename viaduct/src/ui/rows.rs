@@ -181,35 +181,30 @@ mod tests {
 
     /// The row builders are pure widget construction, so the useful thing
     /// to pin is the shape the stylesheet and the callers depend on.
-    fn init() -> bool {
-        gtk::init().is_ok()
-    }
-
-    #[test]
+    ///
+    /// `#[gtk::test]`, not `#[test]`: cargo runs tests on a thread pool, and
+    /// `gtk::init()` is not safe to call concurrently — two threads racing
+    /// inside `gtk_init_check()` abort with "gdk_display_open_default() was
+    /// called before gtk_init()" or segfault outright. It reproduces on the
+    /// x11 backend (which is what CI runs under xvfb) and hid on Wayland.
+    /// `#[gtk::test]` funnels every body through one already-initialized
+    /// thread instead.
+    #[gtk::test]
     fn group_list_is_a_non_selectable_boxed_list() {
-        if !init() {
-            return;
-        }
         let (_, list) = group(Some("Title"), None);
         assert!(list.has_css_class("boxed-list"));
         assert_eq!(list.selection_mode(), gtk::SelectionMode::None);
     }
 
-    #[test]
+    #[gtk::test]
     fn rows_are_not_activatable_unless_they_act() {
-        if !init() {
-            return;
-        }
         assert!(!row("Title", None, None).is_activatable());
         let button = gtk::Button::new();
         assert!(button_row("Title", None, &button).is_activatable());
     }
 
-    #[test]
+    #[gtk::test]
     fn spin_row_hands_back_a_bindable_control() {
-        if !init() {
-            return;
-        }
         let (_, spin) = spin_row("Text Size", None, 75.0, 200.0, 5.0);
         spin.set_value(125.0);
         assert_eq!(spin.value(), 125.0);

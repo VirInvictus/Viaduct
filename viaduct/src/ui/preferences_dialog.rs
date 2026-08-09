@@ -497,6 +497,9 @@ fn index_to_nick(index: u32) -> &'static str {
 mod tests {
     use super::*;
 
+    // `#[gtk::test]` rather than `#[test]` for anything touching a widget —
+    // see the note in `ui::rows`; concurrent `gtk::init()` crashes on x11.
+
     /// A throwaway settings object on a memory backend, so a test can drive
     /// the rows without touching the user's real dconf.
     fn test_settings() -> Option<gio::Settings> {
@@ -536,11 +539,8 @@ mod tests {
     /// The regression Brandon hit: picking "Force light" in the dialog has
     /// to reach the GSetting, or nothing downstream (libadwaita's chrome or
     /// our own `theme::is_dark`) ever learns about it.
-    #[test]
+    #[gtk::test]
     fn color_scheme_row_writes_the_setting() {
-        if gtk::init().is_err() {
-            return;
-        }
         let Some(settings) = test_settings() else {
             return;
         };
@@ -561,11 +561,8 @@ mod tests {
 
     /// The sync-back half: an external write (dconf-editor, another window)
     /// has to move the dropdown.
-    #[test]
+    #[gtk::test]
     fn color_scheme_row_follows_external_writes() {
-        if gtk::init().is_err() {
-            return;
-        }
         let Some(settings) = test_settings() else {
             return;
         };
