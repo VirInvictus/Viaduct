@@ -1,10 +1,16 @@
-
 use gtk::prelude::*;
 use std::cell::RefCell;
 
-pub fn system_is_dark() -> bool { vir_gtk::portal::system_is_dark() }
-pub fn is_dark() -> bool { vir_gtk::portal::is_dark() }
-pub fn connect_dark_changed<F>(owner: &impl IsA<gtk::glib::Object>, f: F) where F: Fn(bool) + 'static {
+pub fn system_is_dark() -> bool {
+    vir_gtk::portal::system_is_dark()
+}
+pub fn is_dark() -> bool {
+    vir_gtk::portal::is_dark()
+}
+pub fn connect_dark_changed<F>(owner: &impl IsA<gtk::glib::Object>, f: F)
+where
+    F: Fn(bool) + 'static,
+{
     vir_gtk::portal::connect_dark_changed(owner, f)
 }
 
@@ -187,9 +193,15 @@ pub fn install_stylesheet() {
 }
 
 fn apply_stylesheet() {
-    let Some(display) = gtk::gdk::Display::default() else { return; };
-    let palette = if is_dark() { vir_gtk::theme::Palette::dragon() } else { vir_gtk::theme::Palette::lotus() };
-    
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    let palette = if is_dark() {
+        vir_gtk::theme::Palette::dragon()
+    } else {
+        vir_gtk::theme::Palette::lotus()
+    };
+
     let css = format!("{}{}", palette.to_css_custom_properties(), STRUCTURE);
     let provider = gtk::CssProvider::new();
     provider.load_from_string(&css);
