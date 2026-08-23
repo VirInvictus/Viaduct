@@ -8,6 +8,7 @@ authors.workspace = true
 default-run = "viaduct"
 
 [dependencies]
+vir-gtk = { git = "https://github.com/VirInvictus/vir-gtk.git" }
 viaduct-core = { path = "../viaduct-core" }
 gtk.workspace = true
 webkit6.workspace = true

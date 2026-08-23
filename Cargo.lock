@@ -3507,6 +3507,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "viaduct-core",
+ "vir-gtk",
  "webkit6",
 ]
 
@@ -3531,6 +3532,15 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "vir-gtk"
+version = "1.0.0"
+source = "git+https://github.com/VirInvictus/vir-gtk.git#4899f273c9a03ff105cb85beddf545bb24ee76e5"
+dependencies = [
+ "gtk4",
+ "tracing",
 ]
 
 [[package]]
