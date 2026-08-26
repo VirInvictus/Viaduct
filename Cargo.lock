@@ -894,7 +894,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3484,7 +3484,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viaduct"
-version = "3.2.1"
+version = "3.3.1"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -3513,7 +3513,7 @@ dependencies = [
 
 [[package]]
 name = "viaduct-core"
-version = "3.2.1"
+version = "3.3.1"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -3536,8 +3536,8 @@ dependencies = [
 
 [[package]]
 name = "vir-gtk"
-version = "1.0.0"
-source = "git+https://github.com/VirInvictus/vir-gtk.git#4899f273c9a03ff105cb85beddf545bb24ee76e5"
+version = "1.0.2"
+source = "git+https://github.com/VirInvictus/vir-gtk.git#1ac027a46c2e4f0a37399041132eb0f597e3fc1a"
 dependencies = [
  "gtk4",
  "tracing",
@@ -3823,15 +3823,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]
