@@ -1,3 +1,7 @@
+## v3.3.1 (2026-08-23)
+
+- **Build:** chore: format source code to fix CI
+
 # viaduct: Patch Notes
 
 ## v3.2.1: viaduct starts without a keyring
