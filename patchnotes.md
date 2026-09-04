@@ -1,3 +1,16 @@
+# viaduct: Patch Notes
+
+## v3.4.1: the documentation audit (2026-09-04)
+
+A docs-only release out of AUDIT_THREE, the workspace-wide audit: every version carrier disagreed with every other one, and the prose had drifted behind the v3.0.0 de-adwaita shell. No code changes; one packaging fix.
+
+- **The version carriers agree again.** meson.build said 3.2.1, the AppStream releases stopped at 3.2.1, the spec header said 3.0.0, and the roadmap header still read "as of v2.7.0" while Cargo.toml and the v3.4.0 tag were current. All carriers now agree at 3.4.1, the missing 3.3.1 and 3.4.0 AppStream entries are backfilled, and the untagged-release gap (3.2.1 and 3.3.1 have no git tags) is recorded in the roadmap pending the workspace tag-backfill decision. A VERSION file was considered and declined: Cargo owns the version and cannot consume a VERSION file, so one would have been a seventh carrier rather than a single source.
+- **Flatpak preferences could not persist.** The manifest's finish-args omitted the dconf access that spec §8 always required, so a sandboxed build's GSettings writes (article theme, refresh cadence, run-in-background) had nowhere to land. `--filesystem=xdg-run/dconf` plus `--device=dconf` are granted now.
+- **Dead references removed.** README, CLAUDE.md, and two roadmap entries pointed at `docs/background-service-plan.md` and `two-plans.md`; neither file exists, and both subjects shipped long ago (the background daemon in v1.10.0, the Phase 18 verdicts in the roadmap itself).
+- **CLAUDE.md caught up.** Its CI paragraph described the retired Ubuntu runner (CI has run a Fedora container since the first green run in v3.2.1, because Ubuntu runners ship GTK 4.14), the "owned application stylesheet is still pending" line now reflects the stylesheet's v3.0.0 landing, and a test-count baseline is recorded: 188 test functions as of this release (180 `#[test]` plus 8 `#[gtk::test]`, counted by grep). That also corrects the "142 total" claim in the v3.4.0 entry below, which undercounted.
+- **The 20f verification tail re-anchored.** The Phase 19-deferred audit items in the roadmap cited widgets the de-adwaita migration deleted (`AdwNavigationSplitView`, `AdwBreakpoint`, `adw::Dialog`, `AdwStyleManager`, `AdwHeaderBar`); every citation now names the shipped shell, so the hands-on passes audit real code. The window-geometry item, a pure decision record (no save/restore of geometry under a tiling WM), is ticked.
+- **Litter swept.** `to-test.md`, a frozen manual-QA checklist scoped to the v2.6.22 to v2.7.0 arc, is deleted (recoverable from git history); manual-QA passes now live with the phase that needs them. `.ruff_cache/`, untracked Python-tool residue, is gone from disk.
+
 ## v3.4.0: the July-September upstream sync (2026-09-03)
 
 Eight fixes ported from the NetNewsWire `mac-7.1.3`/`7.1.4b1` line (upstream `08d10f501`..`d794eeafb`, 326 commits triaged). Most of the range is Feedly and CloudKit work that does not apply to viaduct; what did apply was a cluster of Inoreader sync bugs, one refresher bug with an 8-day failure mode, and three article-pane hardening fixes. Every port carries tests (15 new unit tests plus one new integration test; 142 total, clippy `-D warnings` clean).
@@ -23,8 +36,6 @@ Three article-pane hardening fixes.
 One OPML durability fix: control characters (anything illegal in XML 1.0 besides tab, newline, and carriage return) arriving in a feed title used to be written into `local.opml` verbatim, and one bad byte made the whole file unparseable on the next launch. Both OPML writers now drop illegal characters, so the subscription file always round-trips through viaduct's own parser.
 
 Also in this release: the bundled NetNewsWire themes were verified byte-identical to upstream `Themes/` (upstream did not touch them this window), and the reference-clone note in `CLAUDE.md` documents the full triage. The Inoreader rate-limit machinery upstream added this window (pause on 429, Zone-1 quota skip, conditional-GET for subscription lists) is recorded as a roadmap candidate for a future release; it is a feature-sized port, not a patch.
-
-# viaduct: Patch Notes
 
 ## v3.3.1 (2026-08-23)
 

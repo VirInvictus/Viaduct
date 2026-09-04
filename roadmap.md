@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v2.7.0.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v3.4.1.
 
 ---
 
@@ -532,15 +532,15 @@ Portfolio direction change (Brandon, 2026-07-09): the goal moved from "runs poli
 
 Filed from `~/.gitrepos/AUDIT_THREE.md` §3 per its rule: a finding lands in the owning roadmap before the fix. These are the Stage 0 (version/CI/record repair) and Stage 4 (re-anchor) findings; each is fixed in this same docs release and ticked with a ship note. Code work from Stage 4 (the Inoreader rate-limit machinery and the upstream-sync windows) stays tracked in the phase sections above; this list only carries what the audit found that no roadmap recorded.
 
-- [ ] Version drift is 4-way: meson 3.2.1, metainfo newest release 3.2.1 (missing 3.3.1 and 3.4.0), spec header 3.0.0, roadmap header "Updated as of v2.7.0", while Cargo.toml and the v3.4.0 tag are current. Reconcile every carrier to one version.
+- [x] Version drift is 4-way: meson 3.2.1, metainfo newest release 3.2.1 (missing 3.3.1 and 3.4.0), spec header 3.0.0, roadmap header "Updated as of v2.7.0", while Cargo.toml and the v3.4.0 tag are current. Reconcile every carrier to one version. *(Reconciled 2026-09-04: the 3.4.1 docs release carries every carrier; 3.3.1/3.4.0 backfilled into the metainfo.)*
 - [x] Dead references: `docs/background-service-plan.md` is cited by README (Auto-sync row), CLAUDE.md (v1.8.0 prose), and the Phase 17 checklist below; README and the Phase 18 intro also cite `two-plans.md`. Neither file exists; both subjects shipped long ago. *(References replaced 2026-09-04 with pointers to what actually shipped.)*
 - [x] CLAUDE.md's CI paragraph describes an Ubuntu runner with apt deps; `.github/workflows/ci.yml` has run a Fedora container since the first green run (v3.2.1) because Ubuntu runners ship GTK 4.14. *(Paragraph rewritten 2026-09-04.)*
 - [x] CLAUDE.md §UI says the owned application stylesheet (Phase 20d) "is still pending"; it shipped in v3.0.0 (`theme.rs::install_stylesheet`, USER+1 priority). *(Line corrected 2026-09-04.)*
-- [ ] Test-count claims disagree: 142 (patchnotes v3.4.0), 162 (the Phase 18 SHELL DONE note, v3.0.0-era), 188 counted 2026-09-04 (180 `#[test]` + 8 `#[gtk::test]`). Record a counting-method baseline in CLAUDE.md; leave historical notes as written.
+- [x] Test-count claims disagree: 142 (patchnotes v3.4.0), 162 (the Phase 18 SHELL DONE note, v3.0.0-era), 188 counted 2026-09-04 (180 `#[test]` + 8 `#[gtk::test]`). Record a counting-method baseline in CLAUDE.md; leave historical notes as written. *(Baseline recorded in CLAUDE.md's status line; the correction is noted in the v3.4.1 patchnotes entry.)*
 - [x] spec.md §8 requires `xdg-run/dconf` for the GSettings backend, but `org.virinvictus.Viaduct.json` finish-args omit it (and `--device=dconf`), so a sandboxed build's preference writes had nowhere to land. The manifest was wrong; fix it there. *(Verdict 2026-09-04: spec §8 right, manifest wrong; `--filesystem=xdg-run/dconf` + `--device=dconf` granted in the manifest.)*
 - [x] `.ruff_cache/` (untracked Python-tool residue in a Rust repo): delete from disk. *(Deleted 2026-09-04; nothing tracked.)*
 - [x] `to-test.md` (tracked; a frozen manual-QA checklist for the v2.6.22 → v2.7.0 arc): decide delete vs keep. *(Deleted 2026-09-04: it was arc-scoped and four releases stale, recoverable from git history; the living manual-QA item is the 20f hands-on pass.)*
-- [ ] VERSION-file decision (audit Stage 0): add one or record why not.
-- [ ] Releases v3.2.1 and v3.3.1 exist only as patchnotes entries; no git tags. Tag-backfill policy is AUDIT_THREE §5.12 (workspace-wide, Brandon's call); recorded here so the gap is visible in-repo.
+- [x] VERSION-file decision (audit Stage 0): add one or record why not. *(Decision 2026-09-04: declined. Cargo owns the version and cannot consume a VERSION file, so one would be a seventh carrier rather than a single source; the six-carrier set stays, guarded by the stage-close sync habit. Revisit only if a packager ever needs one.)*
+- [x] Releases v3.2.1 and v3.3.1 exist only as patchnotes entries; no git tags. Tag-backfill policy is AUDIT_THREE §5.12 (workspace-wide, Brandon's call); recorded here so the gap is visible in-repo. *(Recorded 2026-09-04; v3.4.1 is likewise untagged for now. Backfill-or-forward-only waits on §5.12.)*
 - [x] Re-anchor the Phase 19-deferred verification items (the 20f tail above) to the post-v3.0.0 shell: every citation names `AdwNavigationSplitView` / `AdwBreakpoint` / `adw::Dialog` / `AdwStyleManager` / `AdwHeaderBar`, all deleted in the de-adwaita migration, so the hands-on passes as written would audit ghosts. *(Re-anchored 2026-09-04: all fifteen items rewritten against the `GtkPaned` / `gtk::Window` / `theme.rs` shell, citations updated, and the window-geometry decision record closed as done. The passes themselves remain open for the Brandon session.)*
 
