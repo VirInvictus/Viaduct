@@ -1,5 +1,9 @@
 # viaduct: Patch Notes
 
+## v3.7.1: hardened against the real feed (2026-09-04)
+
+Test-only release. Upstream validated its xml:base work against `pappacoda.atom`, Andrea Pappacoda's actual blog feed and the live case behind #5088; that file now ships in viaduct's test resources byte-for-byte, and upstream's `xmlBaseResolvesRelativeURLsInXHTMLContent` is ported 1:1 as an integration test through the public `parse` API (assertions mapped to viaduct's field shapes: one icon_url with icon preferred, and Atom ids kept verbatim). 215 tests pass. No code changes.
+
 ## v3.7.0: Atom xml:base (2026-09-04)
 
 The last port off the September upstream window: Atom feeds that declare `xml:base` now resolve their relative URLs the way NetNewsWire does upstream (#5088). Sixteen new tests (a byte-scanner suite plus parser fixtures); 214 pass.
