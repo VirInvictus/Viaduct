@@ -1,8 +1,34 @@
+## v3.4.0: the July-September upstream sync (2026-09-03)
+
+Eight fixes ported from the NetNewsWire `mac-7.1.3`/`7.1.4b1` line (upstream `08d10f501`..`d794eeafb`, 326 commits triaged). Most of the range is Feedly and CloudKit work that does not apply to viaduct; what did apply was a cluster of Inoreader sync bugs, one refresher bug with an 8-day failure mode, and three article-pane hardening fixes. Every port carries tests (15 new unit tests plus one new integration test; 142 total, clippy `-D warnings` clean).
+
+If you sync an Inoreader account, this release fixes four ways the sync could lose your data on every cycle.
+
+- **Your renamed feeds keep their names.** The Inoreader reconcile rebuilt the subscription list from the server alone, wiping every locally-renamed feed back to the server title on each sync. It now merges: the server is authoritative for which feeds exist and how they are grouped, but your edited names survive, and a just-added feed whose folder the server has not confirmed yet stays put.
+- **A feed whose folder the server forgot is no longer dropped.** If a subscription arrived categorized into a folder the tag list did not know about, the reconcile silently dropped the feed from the sidebar entirely. It now lands at the top level, matching upstream.
+- **Folders you just created no longer vanish.** The Reader API has no create-folder call; the server only learns a folder when a feed is put in it, so a freshly created empty folder was deleted by the very next sync. Local-only folders now survive until a feed makes them real on the server, exactly as upstream now behaves.
+- **Starring an article can no longer be silently lost.** The pending-status queue deleted rows by article alone, so a successful read-status batch destroyed the same article's queued star (viaduct papered over this in v2.8.3 by only clearing articles whose every batch landed; upstream has now fixed the root cause and that workaround is retired). Deletes are key-scoped: read and starred rows are independent.
+
+Two fixes to how articles and feeds are fetched, both straight from upstream's own regression fixes.
+
+- **A feed that hits a parse error no longer stalls for up to 8 days.** The refresher recorded the new ETag and content hash even when parsing or storing the body failed, so the next cycle got a 304 (or a hash short-circuit) for content viaduct never actually ingested, and the feed went quiet until the 8-day conditional-GET expiry forced a full fetch. Conditional-GET markers are now recorded only after the body is successfully parsed and stored, which is precisely the ordering fix NNW landed this window. An integration test drives a real HTTP fixture through the whole pipeline to pin it.
+- **Article IDs from Inoreader now round-trip correctly.** Inoreader's item IDs are 64-bit and can be negative; viaduct stored their hex form as a huge unsigned decimal and sent negative IDs back to the server unpadded. Both directions of the conversion now use the canonical signed form with two's-complement hex encoding, matching NNW's item-ID fixes from August 31 and September 2. Articles whose IDs had the high bit set re-insert once under their corrected IDs (recent items may briefly reappear as unread; old copies age out through normal retention).
+
+Three article-pane hardening fixes.
+
+- **The article pane recovers when the web process dies.** If WebKitGTK's web process crashes or is OOM-killed, the pane used to stay blank until you switched articles. It now re-renders what you were reading; WebKit respawns the process on the next load.
+- **Some feeds ship an entire HTML page as the article body.** viaduct now renders just the body fragment instead of letting stray `<html>`/`<body>` markup and leaked head content (title text, meta tags) clobber the theme. Port of NNW's #3008 fix, tests included.
+- **Only http, https, and mailto links open in external apps.** A `file://` or custom-scheme link in a feed body could previously reach `xdg-open`'s handler table; it is now ignored, matching NNW's link-opening restriction.
+
+One OPML durability fix: control characters (anything illegal in XML 1.0 besides tab, newline, and carriage return) arriving in a feed title used to be written into `local.opml` verbatim, and one bad byte made the whole file unparseable on the next launch. Both OPML writers now drop illegal characters, so the subscription file always round-trips through viaduct's own parser.
+
+Also in this release: the bundled NetNewsWire themes were verified byte-identical to upstream `Themes/` (upstream did not touch them this window), and the reference-clone note in `CLAUDE.md` documents the full triage. The Inoreader rate-limit machinery upstream added this window (pause on 429, Zone-1 quota skip, conditional-GET for subscription lists) is recorded as a roadmap candidate for a future release; it is a feature-sized port, not a patch.
+
+# viaduct: Patch Notes
+
 ## v3.3.1 (2026-08-23)
 
 - **Build:** chore: format source code to fix CI
-
-# viaduct: Patch Notes
 
 ## v3.2.1: viaduct starts without a keyring
 
