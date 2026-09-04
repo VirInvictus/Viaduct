@@ -223,7 +223,7 @@ viaduct is packaged as a Flatpak-first application.
 
 * **Permissions:** Strictly locked down.
     * `network`: Required for feed fetching.
-    * `xdg-run/dconf`: Required for the GSettings/dconf backend (present on any Wayland session, not GNOME-specific).
+    * `xdg-run/dconf` + `device=dconf`: Required for the GSettings/dconf backend (present on any Wayland session, not GNOME-specific). The manifest omitted both until v3.4.1, which meant sandboxed preference writes (article theme, refresh cadence, run-in-background) had nowhere to land; the finish-args now grant the standard GSettings-app pair.
     * No arbitrary home directory access. OPML import/export handled entirely via `org.freedesktop.portal.FileChooser`.
 * **Background Daemon:** App is configured to support background execution permissions via portals, allowing it to sync on a cron schedule even when the UI is closed.
 

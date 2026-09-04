@@ -537,7 +537,7 @@ Filed from `~/.gitrepos/AUDIT_THREE.md` §3 per its rule: a finding lands in the
 - [x] CLAUDE.md's CI paragraph describes an Ubuntu runner with apt deps; `.github/workflows/ci.yml` has run a Fedora container since the first green run (v3.2.1) because Ubuntu runners ship GTK 4.14. *(Paragraph rewritten 2026-09-04.)*
 - [x] CLAUDE.md §UI says the owned application stylesheet (Phase 20d) "is still pending"; it shipped in v3.0.0 (`theme.rs::install_stylesheet`, USER+1 priority). *(Line corrected 2026-09-04.)*
 - [ ] Test-count claims disagree: 142 (patchnotes v3.4.0), 162 (the Phase 18 SHELL DONE note, v3.0.0-era), 188 counted 2026-09-04 (180 `#[test]` + 8 `#[gtk::test]`). Record a counting-method baseline in CLAUDE.md; leave historical notes as written.
-- [ ] spec.md §8 requires `xdg-run/dconf` for the GSettings backend, but `org.virinvictus.Viaduct.json` finish-args omit it (and `--device=dconf`), so a sandboxed build's preference writes had nowhere to land. The manifest was wrong; fix it there.
+- [x] spec.md §8 requires `xdg-run/dconf` for the GSettings backend, but `org.virinvictus.Viaduct.json` finish-args omit it (and `--device=dconf`), so a sandboxed build's preference writes had nowhere to land. The manifest was wrong; fix it there. *(Verdict 2026-09-04: spec §8 right, manifest wrong; `--filesystem=xdg-run/dconf` + `--device=dconf` granted in the manifest.)*
 - [ ] `.ruff_cache/` (untracked Python-tool residue in a Rust repo): delete from disk.
 - [ ] `to-test.md` (tracked; a frozen manual-QA checklist for the v2.6.22 → v2.7.0 arc): decide delete vs keep.
 - [ ] VERSION-file decision (audit Stage 0): add one or record why not.

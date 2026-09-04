@@ -12,7 +12,9 @@
         "--socket=fallback-x11",
         "--socket=wayland",
         "--device=dri",
+        "--device=dconf",
         "--share=network",
+        "--filesystem=xdg-run/dconf",
         "--talk-name=org.freedesktop.secrets",
         "--talk-name=org.freedesktop.portal.Background"
     ],
