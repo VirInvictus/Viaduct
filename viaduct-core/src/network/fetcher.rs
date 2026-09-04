@@ -640,22 +640,23 @@ async fn refresh_one_feed(
                 return;
             }
 
-            // Refresh conditional-GET headers if the response provided new ones.
-            let mut got_conditional = false;
-            if result.etag.is_some() {
-                new_settings.etag = result.etag.clone();
-                got_conditional = true;
-            }
-            if result.last_modified.is_some() {
-                new_settings.last_modified = result.last_modified.clone();
-                got_conditional = true;
-            }
-            if got_conditional {
-                new_settings.date_created = Some(Utc::now());
-            }
+            // Conditional-GET headers and the content hash assert "this
+            // body is ingested". Persisting them after a failed parse
+            // or DB write would let the next cycle 304 (or
+            // hash-short-circuit) past content we never stored,
+            // stalling the feed until the 8-day conditional-GET expiry
+            // — so they are only committed to `new_settings` after
+            // `update_feed` succeeds. Keeping the *old* etag is what
+            // makes the retry work: the server still sees it as stale
+            // and re-sends the body. NNW `5e33560da`/`491df567a`
+            // (storeConditionalGetIfNeeded: after the model update,
+            // not before).
+            let got_conditional = result.etag.is_some() || result.last_modified.is_some();
 
             // Cap Cache-Control max-age (NNW's cacheControlMaxMaxAge) — many sites
             // misconfigure this and ship max-age values measured in months.
+            // Freshness timing, not an ingestion marker: safe to keep on
+            // the failure paths.
             if let Some(max_age) = result.cache_control_max_age {
                 let capped = if is_openrss(&feed.url) {
                     max_age
@@ -673,11 +674,21 @@ async fn refresh_one_feed(
             hasher.update(&result.body);
             let hash = format!("{:x}", hasher.finalize());
             if !force && Some(&hash) == settings.content_hash.as_ref() {
+                // Body identical to what was already ingested, so the
+                // new conditional-GET headers are accurate — commit them.
+                if result.etag.is_some() {
+                    new_settings.etag = result.etag.clone();
+                }
+                if result.last_modified.is_some() {
+                    new_settings.last_modified = result.last_modified.clone();
+                }
+                if got_conditional {
+                    new_settings.date_created = Some(Utc::now());
+                }
                 debug!("Feed content hash unchanged: {}", feed.url);
                 let _ = account.upsert_feed_settings(new_settings).await;
                 return;
             }
-            new_settings.content_hash = Some(hash);
 
             // Parse → diff → emit changes.
             match crate::parser::parse(&result.body, &feed.url) {
@@ -718,6 +729,18 @@ async fn refresh_one_feed(
                         .await
                     {
                         Ok(changes) => {
+                            // Body ingested — now the conditional-GET
+                            // headers and content hash may be recorded.
+                            if result.etag.is_some() {
+                                new_settings.etag = result.etag.clone();
+                            }
+                            if result.last_modified.is_some() {
+                                new_settings.last_modified = result.last_modified.clone();
+                            }
+                            if got_conditional {
+                                new_settings.date_created = Some(Utc::now());
+                            }
+                            new_settings.content_hash = Some(hash);
                             debug!(
                                 "Feed {}: {} new, {} updated, {} deleted",
                                 feed.url,

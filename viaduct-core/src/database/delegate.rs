@@ -136,50 +136,61 @@ impl AccountDelegate for InoreaderAccountDelegate {
                 // A failed status send must not abort the refresh: the status
                 // pull and article fetch below still need to run, or the
                 // account silently stops updating until a send happens to
-                // succeed. Failed rows stay queued and step 3 clears their
-                // `selected` flag, so the next cycle retries them.
+                // succeed. Failed rows stay selected and step 3's
+                // reset-all re-arms them for the next cycle.
                 // <https://discourse.netnewswire.com/t/no-feed-updates/336>
-                let batches: [(&[String], &str, bool); 4] = [
-                    (&read_ids, "user/-/state/com.google/read", true),
-                    (&unread_ids, "user/-/state/com.google/read", false),
-                    (&starred_ids, "user/-/state/com.google/starred", true),
-                    (&unstarred_ids, "user/-/state/com.google/starred", false),
+                // Each landed batch is deleted key-scoped (NNW
+                // `e5171cbb0`): clearing a read row must not drop the
+                // same article's queued starred row.
+                let batches: [(&[String], &str, &str, bool); 4] = [
+                    (&read_ids, "read", "user/-/state/com.google/read", true),
+                    (&unread_ids, "read", "user/-/state/com.google/read", false),
+                    (
+                        &starred_ids,
+                        "starred",
+                        "user/-/state/com.google/starred",
+                        true,
+                    ),
+                    (
+                        &unstarred_ids,
+                        "starred",
+                        "user/-/state/com.google/starred",
+                        false,
+                    ),
                 ];
-                let mut failed_ids: std::collections::HashSet<&str> =
-                    std::collections::HashSet::new();
-                for (ids, state, flag) in batches {
+                for (ids, key, state, flag) in batches {
                     if ids.is_empty() {
                         continue;
                     }
-                    if let Err(e) = self
+                    match self
                         .caller
                         .update_state_to_entries(&auth_token, ids, state, flag)
                         .await
                     {
-                        tracing::warn!(
-                            ?e,
-                            state,
-                            flag,
-                            count = ids.len(),
-                            "status send failed; rows stay queued for the next cycle"
-                        );
-                        failed_ids.extend(ids.iter().map(String::as_str));
+                        Ok(()) => {
+                            let pairs: Vec<(String, String)> =
+                                ids.iter().map(|id| (id.clone(), key.to_string())).collect();
+                            if let Err(e) = account
+                                .delete_sync_statuses_selected_for_processing(pairs)
+                                .await
+                            {
+                                tracing::warn!(
+                                    ?e,
+                                    key,
+                                    "landed status rows could not be cleared; reset-all will re-arm them"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                ?e,
+                                state,
+                                flag,
+                                count = ids.len(),
+                                "status send failed; rows stay queued for the next cycle"
+                            );
+                        }
                     }
-                }
-
-                // Clear only articles whose every batch landed. syncStatus
-                // deletes by articleID alone, so clearing a half-sent article
-                // would drop the row for its other key too.
-                let processed_ids: Vec<String> = sync_statuses
-                    .iter()
-                    .map(|s| s.article_id.as_str())
-                    .filter(|id| !failed_ids.contains(id))
-                    .map(str::to_owned)
-                    .collect();
-                if !processed_ids.is_empty() {
-                    account
-                        .delete_sync_statuses_selected_for_processing(processed_ids)
-                        .await?;
                 }
             }
 

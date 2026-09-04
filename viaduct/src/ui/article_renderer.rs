@@ -405,6 +405,20 @@ pub fn escape_html(s: &str) -> String {
     out
 }
 
+/// Scheme allowlist for handing a URL to the OS handler (NNW
+/// `0eacfe05c`, `preparedForOpeningInBrowser`): only http, https, and
+/// mailto leave the app. `file://` and arbitrary custom-scheme links in
+/// feed HTML have no business reaching xdg-open's handler table.
+fn is_openable_url(uri: &str) -> bool {
+    let Some((scheme, _)) = uri.split_once(':') else {
+        return false;
+    };
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "mailto"
+    )
+}
+
 /// Wires the navigation-policy interceptor: every link click in the
 /// article body routes to `xdg-open` instead of navigating the WebView
 /// away from our rendered HTML. Without this hook the user can click the
@@ -453,7 +467,7 @@ pub fn install_link_interceptor(view: &webkit6::WebView) {
             let uri_str = uri.to_string();
             // about:blank is what about:blank looks like to us — never
             // a real link, never worth shelling out for.
-            if !uri_str.starts_with("about:") {
+            if !uri_str.starts_with("about:") && is_openable_url(&uri_str) {
                 let _ = gtk::gio::AppInfo::launch_default_for_uri(
                     &uri_str,
                     gtk::gio::AppLaunchContext::NONE,
@@ -799,20 +813,120 @@ pub fn install_image_uri_scheme(ctx: &webkit6::WebContext, image_cache: Arc<Imag
     });
 }
 
+/// Case-insensitive search for a real tag-open `tag` (e.g. `"<body"`)
+/// at or after byte offset `from`. Returns the byte range of the tag
+/// name. The character after the name must be `>`, `/`, whitespace, or
+/// end-of-string, so `<head` never matches `<header`.
+fn find_tag(html: &str, tag: &str, from: usize) -> Option<(usize, usize)> {
+    let bytes = html.as_bytes();
+    let tag_bytes = tag.as_bytes();
+    let mut i = from;
+    'outer: while i + tag_bytes.len() <= bytes.len() {
+        for (k, tb) in tag_bytes.iter().enumerate() {
+            if !bytes[i + k].eq_ignore_ascii_case(tb) {
+                i += 1;
+                continue 'outer;
+            }
+        }
+        let boundary_ok = match bytes.get(i + tag_bytes.len()) {
+            None => true,
+            Some(&b) => b == b'>' || b == b'/' || b.is_ascii_whitespace(),
+        };
+        if boundary_ok {
+            return Some((i, i + tag_bytes.len()));
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Byte offset just past the next `>` at or after `from`.
+fn find_tag_close(html: &str, from: usize) -> Option<usize> {
+    html.as_bytes()[from..]
+        .iter()
+        .position(|&b| b == b'>')
+        .map(|p| from + p + 1)
+}
+
+/// Some feeds embed an entire HTML document as item content. Rendered
+/// inside the article template, the stray `<html>`/`<body>` attributes
+/// get merged onto the page's real elements, clobbering the theme, and
+/// head content (title text, meta) leaks into the pane. Render only the
+/// body fragment. Port of NNW `ArticleRenderingSpecialCases`
+/// `.extractBodyFragmentIfNeeded` (`85e527b0a`, #3008).
+pub fn extract_body_fragment(html: &str) -> String {
+    if find_tag(html, "<body", 0).is_none()
+        && find_tag(html, "<html", 0).is_none()
+        && find_tag(html, "<!doctype", 0).is_none()
+    {
+        return html.to_string();
+    }
+
+    if let Some(fragment) = body_fragment(html) {
+        return fragment.to_string();
+    }
+    removing_document_wrapper(html)
+}
+
+/// The content between a real `<body …>` tag and `</body>` (or the end
+/// of the string). `None` when there's no body tag.
+fn body_fragment(html: &str) -> Option<&str> {
+    let (_, after_tag) = find_tag(html, "<body", 0)?;
+    let content_start = find_tag_close(html, after_tag)?;
+    let content_end = find_tag(html, "</body", content_start)
+        .map(|(s, _)| s)
+        .unwrap_or(html.len());
+    Some(&html[content_start..content_end])
+}
+
+/// A document with `<html>`/`<head>` but no `<body>` tag: remove the
+/// wrapper markup, keep the rest.
+fn removing_document_wrapper(html: &str) -> String {
+    let mut s = html.to_string();
+
+    if let Some((doctype_start, _)) = find_tag(&s, "<!doctype", 0)
+        && let Some(close) = find_tag_close(&s, doctype_start)
+    {
+        s.replace_range(doctype_start..close, "");
+    }
+
+    if let Some((head_open, head_open_end)) = find_tag(&s, "<head", 0)
+        && let Some((head_close, _)) = find_tag(&s, "</head", head_open_end)
+        && let Some(close) = find_tag_close(&s, head_close)
+    {
+        s.replace_range(head_open..close, "");
+    }
+
+    if let Some((html_open, _)) = find_tag(&s, "<html", 0)
+        && let Some(close) = find_tag_close(&s, html_open)
+    {
+        s.replace_range(html_open..close, "");
+    }
+
+    if let Some((html_close, _)) = find_tag(&s, "</html", 0)
+        && let Some(close) = find_tag_close(&s, html_close)
+    {
+        s.replace_range(html_close..close, "");
+    }
+
+    s
+}
+
 /// Render an article with the NNW page-wrapper + theme. Two-pass macro
 /// substitution (matches NNW): inner pass fills the article fields into
 /// the theme template; outer pass fills the result, the theme stylesheet,
 /// and the article's title and base URL into `page.html`. The body is
-/// run through `sanitize_and_rewrite_image_srcs` first so external `img`
-/// URLs become `viaduct-img://` references and CSP can lock the pane
-/// down to our scheme alone.
+/// run through `extract_body_fragment` (some feeds embed a whole HTML
+/// document as item content) and `sanitize_and_rewrite_image_srcs` so
+/// external `img` URLs become `viaduct-img://` references and CSP can
+/// lock the pane down to our scheme alone.
 pub fn render_themed(
     view: &webkit6::WebView,
     theme: Theme,
     mut subs: ArticleSubstitutions,
     base_uri: Option<&str>,
 ) {
-    subs.body = sanitize_and_rewrite_image_srcs(&subs.body);
+    subs.body = sanitize_and_rewrite_image_srcs(&extract_body_fragment(&subs.body));
     let title_for_outer = escape_html(&subs.title);
     let inner_subs = subs.into_map();
     let inner_html = render_with_macros(theme.template, &inner_subs);
@@ -926,6 +1040,77 @@ pub fn render(view: &webkit6::WebView, html: &str, base_uri: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openable_urls_allow_http_https_mailto_only() {
+        assert!(is_openable_url("https://example.com/post"));
+        assert!(is_openable_url("http://example.com/post"));
+        assert!(is_openable_url(
+            "mailto:someone@example.com?subject=Hi%20there"
+        ));
+        assert!(is_openable_url("HTTPS://EXAMPLE.COM/UPPER"));
+
+        assert!(!is_openable_url("file:///home/bdkl/.zshrc"));
+        assert!(!is_openable_url("javascript:alert(1)"));
+        assert!(!is_openable_url("ftp://example.com/pub"));
+        assert!(!is_openable_url("viaduct-img://i/https%3A%2F%2Fx"));
+        assert!(!is_openable_url("unknown-scheme:thing"));
+        assert!(!is_openable_url("/relative/path"));
+    }
+
+    // --- extract_body_fragment (NNW `85e527b0a`, #3008) ---
+
+    #[test]
+    fn full_document_yields_body_fragment_only() {
+        let html = "<!doctype html>\n\
+                    <html xmlns=\"http://www.w3.org/1999/xhtml\">\n\
+                    <head><style>body {{ background: #FAFAFA; }}</style></head>\n\
+                    <body style=\"background-color: #FAFAFA;margin: 0;\"><p>Newsletter content</p></body>\n\
+                    </html>";
+        assert_eq!(extract_body_fragment(html), "<p>Newsletter content</p>");
+    }
+
+    #[test]
+    fn uppercase_body_tag() {
+        let html = r#"<HTML><BODY BGCOLOR="white"><p>x</p></BODY></HTML>"#;
+        assert_eq!(extract_body_fragment(html), "<p>x</p>");
+    }
+
+    #[test]
+    fn unclosed_body_runs_to_end() {
+        let html = r#"<html><body class="c"><p>one</p><p>two</p>"#;
+        assert_eq!(extract_body_fragment(html), "<p>one</p><p>two</p>");
+    }
+
+    #[test]
+    fn document_without_body_tag_loses_wrapper() {
+        let html =
+            r#"<!DOCTYPE html><html lang="en"><head><title>t</title></head><p>content</p></html>"#;
+        assert_eq!(extract_body_fragment(html), "<p>content</p>");
+    }
+
+    #[test]
+    fn doctype_only_prefix_is_removed() {
+        let html = "<!doctype html><p>content</p>";
+        assert_eq!(extract_body_fragment(html), "<p>content</p>");
+    }
+
+    #[test]
+    fn plain_fragment_is_unchanged() {
+        let html = "<p>Just a normal article <b>fragment</b>.</p>";
+        assert_eq!(extract_body_fragment(html), html);
+    }
+
+    #[test]
+    fn header_element_is_not_mistaken_for_head() {
+        // `<header` must not satisfy the `<head` tag search: its content
+        // must survive wrapper removal.
+        let html = "<html><header><h1>Site</h1></header><p>content</p></html>";
+        assert_eq!(
+            extract_body_fragment(html),
+            "<header><h1>Site</h1></header><p>content</p>"
+        );
+    }
 
     #[test]
     fn macro_substitutes_known_keys() {

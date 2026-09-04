@@ -18,7 +18,9 @@ pub struct SyncStatus {
 pub enum SyncDbOp {
     InsertStatuses(Vec<SyncStatus>, oneshot::Sender<Result<()>>),
     SelectForProcessing(Option<usize>, oneshot::Sender<Result<Vec<SyncStatus>>>),
-    DeleteSelectedForProcessing(Vec<String>, oneshot::Sender<Result<()>>),
+    /// (articleID, key) pairs. Key-scoped (NNW `e5171cbb0`): landing an
+    /// article's read batch must not delete its queued starred row.
+    DeleteSelectedForProcessing(Vec<(String, String)>, oneshot::Sender<Result<()>>),
     ResetAllSelectedForProcessing(oneshot::Sender<Result<()>>),
     /// v2.6.5: wipe every row in `syncStatus`. The table is only
     /// touched by remote-sync delegates (Inoreader); when the local
@@ -61,11 +63,10 @@ pub fn handle_op(conn: &mut Connection, op: SyncDbOp) {
             let res = (|| -> rusqlite::Result<Vec<SyncStatus>> {
                 let tx = conn.transaction()?;
                 // Port of NNW SyncStatusTable.selectForProcessing: mark EVERY
-                // row selected, then read them back. Marking all rows (not just
-                // the ones returned, and not per-(articleID,key)) keeps the
-                // selection grain aligned with DeleteSelectedForProcessing,
-                // which deletes by articleID — so an article's read + starred
-                // rows are always processed and cleared together, never split.
+                // row selected, then read them back. The delegate reads all
+                // of them and clears each landed batch per-(articleID, key);
+                // anything left selected is re-armed by
+                // ResetAllSelectedForProcessing at the end of the cycle.
                 tx.execute("UPDATE syncStatus SET selected = 1", [])?;
                 let mut results = Vec::new();
                 {
@@ -96,14 +97,15 @@ pub fn handle_op(conn: &mut Connection, op: SyncDbOp) {
             })().map_err(Into::into);
             let _ = reply.send(res);
         }
-        SyncDbOp::DeleteSelectedForProcessing(ids, reply) => {
+        SyncDbOp::DeleteSelectedForProcessing(pairs, reply) => {
             let res = (|| -> rusqlite::Result<()> {
                 let tx = conn.transaction()?;
                 {
-                    let mut stmt =
-                        tx.prepare("DELETE FROM syncStatus WHERE articleID = ? AND selected = 1")?;
-                    for id in &ids {
-                        stmt.execute(rusqlite::params![id])?;
+                    let mut stmt = tx.prepare(
+                        "DELETE FROM syncStatus WHERE articleID = ? AND key = ? AND selected = 1",
+                    )?;
+                    for (id, key) in &pairs {
+                        stmt.execute(rusqlite::params![id, key])?;
                     }
                 }
                 tx.commit()?;
@@ -125,5 +127,73 @@ pub fn handle_op(conn: &mut Connection, op: SyncDbOp) {
                 .map_err(Into::into);
             let _ = reply.send(res);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(id: &str, key: &str, flag: bool) -> SyncStatus {
+        SyncStatus {
+            article_id: id.to_string(),
+            key: key.to_string(),
+            flag,
+            selected: false,
+        }
+    }
+
+    /// NNW `e5171cbb0`: deleting an article's landed read row must
+    /// leave its queued starred row in the queue.
+    #[test]
+    fn delete_is_scoped_to_key() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        setup_schema(&conn).unwrap();
+
+        let (tx, mut rx) = oneshot::channel();
+        handle_op(
+            &mut conn,
+            SyncDbOp::InsertStatuses(
+                vec![
+                    status("a1", "read", true),
+                    status("a1", "starred", true),
+                    status("a2", "read", true),
+                ],
+                tx,
+            ),
+        );
+        rx.try_recv().unwrap().unwrap();
+
+        let (tx, mut rx) = oneshot::channel();
+        handle_op(&mut conn, SyncDbOp::SelectForProcessing(None, tx));
+        let selected = rx.try_recv().unwrap().unwrap();
+        assert_eq!(selected.len(), 3);
+
+        // The read batch for a1 landed; the starred batch did not.
+        let (tx, mut rx) = oneshot::channel();
+        handle_op(
+            &mut conn,
+            SyncDbOp::DeleteSelectedForProcessing(vec![("a1".into(), "read".into())], tx),
+        );
+        rx.try_recv().unwrap().unwrap();
+
+        // Re-arm everything and look at what is left queued.
+        let (tx, mut rx) = oneshot::channel();
+        handle_op(&mut conn, SyncDbOp::ResetAllSelectedForProcessing(tx));
+        rx.try_recv().unwrap().unwrap();
+
+        let (tx, mut rx) = oneshot::channel();
+        handle_op(&mut conn, SyncDbOp::SelectForProcessing(None, tx));
+        let queued = rx.try_recv().unwrap().unwrap();
+        let mut keys: Vec<(&str, &str)> = queued
+            .iter()
+            .map(|s| (s.article_id.as_str(), s.key.as_str()))
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![("a1", "starred"), ("a2", "read")],
+            "starred row for a1 must survive the read batch landing"
+        );
     }
 }

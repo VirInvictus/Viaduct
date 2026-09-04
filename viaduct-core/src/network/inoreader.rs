@@ -93,13 +93,33 @@ impl ReaderAPIEntry {
             .next_back()
             .unwrap_or(&self.article_id);
 
-        // Convert hex representation back to integer and then a string representation
+        // Convert hex representation back to integer and then a string
+        // representation. Parse unsigned, then reinterpret the bit
+        // pattern as signed (NNW `1df4cf7d3`): the hex form is the
+        // two's-complement encoding of a possibly-negative int64, and
+        // the signed decimal is the canonical uniqueID every other
+        // conversion starts from. A signed parse would return None on
+        // high-bit IDs and leak the whole tag string through as the ID.
         if let Ok(id_number) = u64::from_str_radix(id_part, 16) {
-            id_number.to_string()
+            (id_number as i64).to_string()
         } else {
             id_part.to_string()
         }
     }
+}
+
+/// Long-form item parameter for an articleID —
+/// `tag:google.com,2005:reader/item/000000000004c608`. The long form is
+/// zero-padded 16-digit hex, two's complement for negative IDs. Returns
+/// `None` for an articleID that can't be encoded, which callers skip
+/// (NNW's `itemIDParameter`, `0833627ee`: the old encoding was
+/// sign-blind and unpadded, sending negative IDs through raw).
+fn item_id_parameter(article_id: &str) -> Option<String> {
+    let id_value: i64 = article_id.parse().ok()?;
+    Some(format!(
+        "tag:google.com,2005:reader/item/{:016x}",
+        id_value.cast_unsigned()
+    ))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -621,16 +641,8 @@ impl ReaderAPICaller {
                 for id in article_ids {
                     // Inoreader (and others) often want hex IDs for some reason in these calls.
                     // NNW converts decimal IDs to hex.
-                    if let Ok(val) = id.parse::<u64>() {
-                        params.push((
-                            "i".to_string(),
-                            format!("tag:google.com,2005:reader/item/{:016x}", val),
-                        ));
-                    } else {
-                        params.push((
-                            "i".to_string(),
-                            format!("tag:google.com,2005:reader/item/{}", id),
-                        ));
+                    if let Some(param) = item_id_parameter(id) {
+                        params.push(("i".to_string(), param));
                     }
                 }
 
@@ -749,16 +761,8 @@ impl ReaderAPICaller {
                 ];
 
                 for id in article_ids {
-                    if let Ok(val) = id.parse::<u64>() {
-                        params.push((
-                            "i".to_string(),
-                            format!("tag:google.com,2005:reader/item/{:016x}", val),
-                        ));
-                    } else {
-                        params.push((
-                            "i".to_string(),
-                            format!("tag:google.com,2005:reader/item/{}", id),
-                        ));
+                    if let Some(param) = item_id_parameter(id) {
+                        params.push(("i".to_string(), param));
                     }
                 }
 
@@ -805,5 +809,84 @@ impl ReaderAPICaller {
             }));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_entry(article_id: &str) -> ReaderAPIEntry {
+        ReaderAPIEntry {
+            article_id: article_id.to_string(),
+            title: None,
+            author: None,
+            summary: ReaderAPIEntrySummary { content: None },
+            published_timestamp: None,
+            alternates: None,
+            categories: None,
+            origin: ReaderAPIEntryOrigin {
+                stream_id: None,
+                title: None,
+            },
+        }
+    }
+
+    #[test]
+    fn low_id_converts_to_decimal() {
+        let entry = make_entry("tag:google.com,2005:reader/item/00058b10ce338909");
+        assert_eq!(entry.unique_id(), "1560279178774793");
+    }
+
+    #[test]
+    fn high_bit_id_does_not_overflow() {
+        // The signed parse in NNW's original returned nil here, leaking
+        // the whole tag string through as the ID; ours parsed unsigned
+        // and stored a huge positive decimal where the canonical form
+        // is the signed reinterpretation.
+        let entry = make_entry("tag:google.com,2005:reader/item/ffffffffffffcdef");
+        assert_eq!(entry.unique_id(), "-12817");
+    }
+
+    #[test]
+    fn zero_id() {
+        let entry = make_entry("tag:google.com,2005:reader/item/0000000000000000");
+        assert_eq!(entry.unique_id(), "0");
+    }
+
+    #[test]
+    fn non_hex_id_returns_raw_part() {
+        let article_id = "tag:google.com,2005:reader/item/notavalidhexvalue";
+        let entry = make_entry(article_id);
+        assert_eq!(entry.unique_id(), "notavalidhexvalue");
+    }
+
+    #[test]
+    fn decimal_round_trips_to_original_hex() {
+        for hex in ["00058b10ce338909", "ffffffffffffcdef", "0000000000000000"] {
+            let entry = make_entry(&format!("tag:google.com,2005:reader/item/{hex}"));
+            let decimal = entry.unique_id();
+            let value: i64 = decimal.parse().unwrap();
+            assert_eq!(format!("{:016x}", value.cast_unsigned()), hex);
+        }
+    }
+
+    #[test]
+    fn item_id_parameter_zero_pads_and_handles_negatives() {
+        assert_eq!(
+            item_id_parameter("1560279178774793").unwrap(),
+            "tag:google.com,2005:reader/item/00058b10ce338909"
+        );
+        // NNW `0833627ee`: negative IDs encode as two's complement, not
+        // raw, and the form is always 16 digits.
+        assert_eq!(
+            item_id_parameter("-12817").unwrap(),
+            "tag:google.com,2005:reader/item/ffffffffffffcdef"
+        );
+        assert_eq!(
+            item_id_parameter("0").unwrap(),
+            "tag:google.com,2005:reader/item/0000000000000000"
+        );
+        assert_eq!(item_id_parameter("feed/not-a-number"), None);
     }
 }

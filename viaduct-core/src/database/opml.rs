@@ -267,20 +267,57 @@ pub fn merge_opml(existing: &OpmlFile, incoming: OpmlFile) -> (OpmlFile, Vec<Fee
     (merged, added)
 }
 
+/// Rebuild the OPML tree from the Inoreader subscription + tag lists,
+/// merged with the local tree (`existing`). The server is authoritative
+/// for which feeds exist and how they are grouped, but four things must
+/// survive the reconcile (ports of NNW `ReaderAPIAccountDelegate` fixes
+/// from the 2026-07/09 window):
+///
+/// * an existing feed keeps its `edited_name`, and an empty server
+///   title does not blank a name we already have (`9412559ad`);
+/// * a subscription whose category names a folder the tag list doesn't
+///   know lands at the top level instead of being dropped
+///   (`8e0007233`, `2b46ee65c`);
+/// * a just-created local folder survives the sync — the Reader API has
+///   no create-tag endpoint, so the server only learns a folder when a
+///   feed is tagged with it (`f50bcd4ff`). Feeds already inside such a
+///   folder stay there while the server doesn't group them; once the
+///   server groups them (or groups them elsewhere), the server wins.
 pub fn sync_inoreader_account(
-    _existing: &OpmlFile,
+    existing: &OpmlFile,
     subscriptions: Vec<crate::network::inoreader::ReaderAPISubscription>,
     tags: Vec<crate::network::inoreader::ReaderAPITag>,
 ) -> OpmlFile {
-    let mut folders = Vec::new();
-    let mut standalone_feeds = Vec::new();
-    let mut feed_map = std::collections::HashMap::new();
+    // Server-known folder names, from the tag list. `/state/` tags are
+    // read/starred states, not folders.
+    let server_folder_names: std::collections::HashSet<String> = tags
+        .iter()
+        .filter(|t| !t.id.contains("/state/"))
+        .filter_map(|t| t.id.split('/').next_back().map(str::to_string))
+        .collect();
 
-    // 1. Process tags into folders
-    for tag in tags {
-        // Inoreader folders have IDs like "user/123/label/FolderName"
+    // Kept local-only folders, in existing order. A folder deleted on
+    // the server while empty is indistinguishable from one that was
+    // never synced, and keeping it is the cheaper wrong answer: the
+    // user can delete it here, whereas a vanished new folder loses
+    // work in progress.
+    let mut folders: Vec<Folder> = Vec::new();
+    for folder in &existing.folders {
+        if !server_folder_names.contains(&folder.name) {
+            folders.push(folder.clone());
+        }
+    }
+    let local_only_folder_names: std::collections::HashSet<String> =
+        folders.iter().map(|f| f.name.clone()).collect();
+
+    // Server-known folders, in tag order. All of them, even if no feed
+    // lands inside — the tag exists server-side.
+    for tag in &tags {
+        if tag.id.contains("/state/") {
+            continue;
+        }
         if let Some(name) = tag.id.split('/').next_back()
-            && !tag.id.contains("/state/")
+            && !folders.iter().any(|f| f.name == name)
         {
             folders.push(Folder {
                 name: name.to_string(),
@@ -289,27 +326,103 @@ pub fn sync_inoreader_account(
         }
     }
 
-    // 2. Process subscriptions into feeds and assign to folders
+    // Existing feeds by id (fallback url), for name/edited_name carry-over.
+    let mut existing_by_id: std::collections::HashMap<&str, &Feed> =
+        std::collections::HashMap::new();
+    let mut existing_by_url: std::collections::HashMap<&str, &Feed> =
+        std::collections::HashMap::new();
+    for feed in existing
+        .standalone_feeds
+        .iter()
+        .chain(existing.folders.iter().flat_map(|f| f.feeds.iter()))
+    {
+        existing_by_id.insert(feed.id.as_str(), feed);
+        existing_by_url.insert(feed.url.as_str(), feed);
+    }
+
+    let mut standalone_feeds: Vec<Feed> = Vec::new();
+    let mut subscribed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for sub in subscriptions {
+        let prior = existing_by_id
+            .get(sub.feed_id.as_str())
+            .or_else(|| existing_by_url.get(sub.url.as_str()))
+            .copied();
+
+        // NNW `9412559ad`: only overwrite the name when the server
+        // provides a non-empty one, and never touch `edited_name`.
+        let name = if sub.title.is_empty() {
+            prior.and_then(|f| f.name.clone())
+        } else {
+            Some(sub.title.clone())
+        };
         let feed = Feed {
             id: sub.feed_id.clone(),
             url: sub.url.clone(),
-            name: Some(sub.title.clone()),
-            edited_name: None,
+            name,
+            edited_name: prior.and_then(|f| f.edited_name.clone()),
             home_page_url: sub.html_url.clone(),
         };
-        feed_map.insert(sub.feed_id.clone(), feed.clone());
+        subscribed_ids.insert(feed.id.clone());
 
-        if sub.categories.is_empty() {
-            standalone_feeds.push(feed);
-        } else {
-            for category in sub.categories {
-                if let Some(folder_name) = category.id.split('/').next_back()
-                    && let Some(folder) = folders.iter_mut().find(|f| f.name == folder_name)
-                {
-                    folder.feeds.push(feed.clone());
+        let category_names: Vec<&str> = sub
+            .categories
+            .iter()
+            .filter_map(|c| c.id.split('/').next_back())
+            .collect();
+
+        if category_names.is_empty() {
+            // Server doesn't group this feed. If it already lives in a
+            // local-only folder (created here, tag not on the server
+            // yet), keep it there — replacing the stale copy so a
+            // renamed feed doesn't duplicate; otherwise top level.
+            let target = folders.iter_mut().find(|f| {
+                local_only_folder_names.contains(&f.name)
+                    && f.feeds
+                        .iter()
+                        .any(|existing_feed| existing_feed.id == feed.id)
+            });
+            match target {
+                Some(folder) => {
+                    if let Some(slot) = folder.feeds.iter_mut().find(|f| f.id == feed.id) {
+                        *slot = feed;
+                    }
                 }
+                None => standalone_feeds.push(feed),
             }
+            continue;
+        }
+
+        // Server grouping wins. A category naming an unknown folder
+        // (tag list missed it) must not drop the feed — top level
+        // instead (`8e0007233`).
+        let mut placed = false;
+        let mut seen_folders = std::collections::HashSet::new();
+        for category_name in &category_names {
+            if server_folder_names.contains(*category_name)
+                && let Some(folder) = folders.iter_mut().find(|f| f.name == *category_name)
+                && seen_folders.insert(folder.name.clone())
+            {
+                folder.feeds.push(feed.clone());
+                placed = true;
+            }
+        }
+        // The server grouped this feed, so any stale copy in a kept
+        // local-only folder loses — it must not end up in two places.
+        for folder in folders.iter_mut() {
+            if local_only_folder_names.contains(&folder.name) {
+                folder.feeds.retain(|f| f.id != feed.id);
+            }
+        }
+        if !placed {
+            standalone_feeds.push(feed);
+        }
+    }
+
+    // A feed in a kept local-only folder that is no longer in the
+    // subscription list was unsubscribed — drop it there too.
+    for folder in folders.iter_mut() {
+        if local_only_folder_names.contains(&folder.name) {
+            folder.feeds.retain(|f| subscribed_ids.contains(&f.id));
         }
     }
 
@@ -416,6 +529,21 @@ fn feed_sort_key(feed: &Feed) -> String {
         .to_lowercase()
 }
 
+/// Characters illegal in XML 1.0: most control codes (tab, LF, CR are
+/// the legal ones) and the non-characters around the surrogate block.
+/// A Rust `char` is always a scalar, so surrogates can't occur here.
+/// quick-xml escapes the five predefined entities but writes these raw,
+/// and one raw control character in local.opml makes the whole file
+/// fail to parse on the next load. Port of NNW `858b65931`
+/// (escapingSpecialXMLCharacters dropping illegal scalars).
+fn is_legal_xml_character(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\r')
+        || ('\u{20}'..='\u{D7FF}').contains(&c)
+        || ('\u{E000}'..='\u{FFFD}').contains(&c)
+        || (c as u32 >= 0x10000)
+}
+
+/// `escape_xml` with the illegal-character drop.
 fn escape_xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -425,10 +553,20 @@ fn escape_xml(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
-            _ => out.push(c),
+            _ => {
+                if is_legal_xml_character(c) {
+                    out.push(c);
+                }
+            }
         }
     }
     out
+}
+
+/// Illegal-character filter for the serde-driven save path, where
+/// quick-xml does the entity escaping itself.
+fn xml_safe(s: &str) -> String {
+    s.chars().filter(|c| is_legal_xml_character(*c)).collect()
 }
 
 fn is_feed(outline: &Outline) -> bool {
@@ -474,18 +612,18 @@ pub fn serialize_opml(opml_file: &OpmlFile) -> Result<String> {
             .feeds
             .iter()
             .map(|f| Outline {
-                text: f.name.clone(),
-                title: f.name.clone(),
+                text: f.name.as_ref().map(|n| xml_safe(n)),
+                title: f.name.as_ref().map(|n| xml_safe(n)),
                 type_: Some("rss".to_string()),
-                xml_url: Some(f.url.clone()),
-                html_url: f.home_page_url.clone(),
+                xml_url: Some(xml_safe(&f.url)),
+                html_url: f.home_page_url.as_ref().map(|u| xml_safe(u)),
                 outlines: Vec::new(),
             })
             .collect();
 
         outlines.push(Outline {
-            text: Some(folder.name.clone()),
-            title: Some(folder.name.clone()),
+            text: Some(xml_safe(&folder.name)),
+            title: Some(xml_safe(&folder.name)),
             type_: None,
             xml_url: None,
             html_url: None,
@@ -495,11 +633,11 @@ pub fn serialize_opml(opml_file: &OpmlFile) -> Result<String> {
 
     for feed in &opml_file.standalone_feeds {
         outlines.push(Outline {
-            text: feed.name.clone(),
-            title: feed.name.clone(),
+            text: feed.name.as_ref().map(|n| xml_safe(n)),
+            title: feed.name.as_ref().map(|n| xml_safe(n)),
             type_: Some("rss".to_string()),
-            xml_url: Some(feed.url.clone()),
-            html_url: feed.home_page_url.clone(),
+            xml_url: Some(xml_safe(&feed.url)),
+            html_url: feed.home_page_url.as_ref().map(|u| xml_safe(u)),
             outlines: Vec::new(),
         });
     }
@@ -819,5 +957,178 @@ mod tests {
             "<outline text=\"Bee\" title=\"Bee\" description=\"\" type=\"rss\" version=\"RSS\" htmlUrl=\"\" xmlUrl=\"https://b\"/>"
         ));
         assert!(s.ends_with("</opml>"));
+    }
+
+    #[test]
+    fn escape_xml_and_serialize_drop_illegal_xml_characters() {
+        // NNW `858b65931`: control characters other than tab/LF/CR are
+        // illegal in XML 1.0. Written raw they poison local.opml — the
+        // next load fails to parse and the subscription list is lost.
+        let dirty = "a\u{0}b\u{1F}c\td\ne\rf\u{7}g";
+        assert_eq!(escape_xml(dirty), "abc\td\ne\rfg");
+        // Sanity: entity escaping is unchanged.
+        assert_eq!(escape_xml("a&b<c>"), "a&amp;b&lt;c&gt;");
+
+        // The serde save path (what actually writes local.opml) filters
+        // too: quick-xml escapes entities but passes control chars raw.
+        let file = OpmlFile {
+            folders: vec![Folder {
+                name: "f\u{2}lder".into(),
+                feeds: vec![Feed {
+                    id: "https://x".into(),
+                    url: "https://x\u{3}/feed".into(),
+                    name: Some("n\u{4}me".into()),
+                    edited_name: None,
+                    home_page_url: None,
+                }],
+            }],
+            standalone_feeds: vec![],
+        };
+        let xml = serialize_opml(&file).unwrap();
+        assert!(!xml.contains('\u{2}') && !xml.contains('\u{3}') && !xml.contains('\u{4}'));
+        // The file must round-trip through our own parser instead of
+        // failing the next load.
+        let reparsed = parse_opml(&xml).expect("poisoned OPML");
+        assert_eq!(reparsed.folders[0].name, "flder");
+        assert_eq!(reparsed.folders[0].feeds[0].name.as_deref(), Some("nme"));
+    }
+
+    // --- sync_inoreader_account ---
+
+    fn sub(
+        id: &str,
+        title: &str,
+        categories: &[&str],
+    ) -> crate::network::inoreader::ReaderAPISubscription {
+        crate::network::inoreader::ReaderAPISubscription {
+            feed_id: id.to_string(),
+            title: title.to_string(),
+            categories: categories
+                .iter()
+                .map(|c| crate::network::inoreader::ReaderAPITag {
+                    id: format!("user/-/label/{c}"),
+                    sortid: None,
+                })
+                .collect(),
+            url: format!("https://{id}/feed"),
+            html_url: Some(format!("https://{id}")),
+            icon_url: None,
+        }
+    }
+
+    fn server_tag(name: &str) -> crate::network::inoreader::ReaderAPITag {
+        crate::network::inoreader::ReaderAPITag {
+            id: format!("user/1234/label/{name}"),
+            sortid: None,
+        }
+    }
+
+    #[test]
+    fn sync_preserves_edited_name_and_skips_empty_title() {
+        // NNW `9412559ad`: the reconcile must not wipe edited_name, and
+        // an empty server title must not blank a name we already have.
+        let existing = OpmlFile {
+            folders: vec![],
+            standalone_feeds: vec![Feed {
+                id: "feed/1".into(),
+                url: "https://one/feed".into(),
+                name: Some("Old Name".into()),
+                edited_name: Some("My Name".into()),
+                home_page_url: None,
+            }],
+        };
+        let subs = vec![sub("feed/1", "", &[])];
+        let out = sync_inoreader_account(&existing, subs, vec![]);
+        assert_eq!(out.standalone_feeds.len(), 1);
+        assert_eq!(out.standalone_feeds[0].name.as_deref(), Some("Old Name"));
+        assert_eq!(
+            out.standalone_feeds[0].edited_name.as_deref(),
+            Some("My Name")
+        );
+
+        // Non-empty server title replaces `name`, edited_name still holds.
+        let subs = vec![sub("feed/1", "Server Name", &[])];
+        let out = sync_inoreader_account(&existing, subs, vec![]);
+        assert_eq!(out.standalone_feeds[0].name.as_deref(), Some("Server Name"));
+        assert_eq!(
+            out.standalone_feeds[0].edited_name.as_deref(),
+            Some("My Name")
+        );
+    }
+
+    #[test]
+    fn sync_feed_with_unknown_folder_goes_top_level_not_dropped() {
+        // NNW `8e0007233` / `2b46ee65c`: a subscription categorized into
+        // a folder the tag list doesn't know must survive the reconcile.
+        let existing = OpmlFile {
+            folders: vec![],
+            standalone_feeds: vec![],
+        };
+        let subs = vec![sub("feed/1", "One", &["Ghost Folder"])];
+        let out = sync_inoreader_account(&existing, subs, vec![server_tag("Other")]);
+        assert!(out.standalone_feeds.iter().any(|f| f.id == "feed/1"));
+        assert!(out.folders.iter().all(|f| f.name != "Ghost Folder"));
+    }
+
+    #[test]
+    fn sync_keeps_local_only_folder_and_its_feed() {
+        // NNW `f50bcd4ff`: a folder created locally has no tag on the
+        // server until a feed is tagged with it, so the sync must not
+        // drop it — and a feed already inside stays there while the
+        // server doesn't group it.
+        let existing = OpmlFile {
+            folders: vec![Folder {
+                name: "New Folder".into(),
+                feeds: vec![Feed {
+                    id: "feed/1".into(),
+                    url: "https://one/feed".into(),
+                    name: Some("One".into()),
+                    edited_name: None,
+                    home_page_url: None,
+                }],
+            }],
+            standalone_feeds: vec![],
+        };
+        let subs = vec![sub("feed/1", "One", &[])];
+        let out = sync_inoreader_account(&existing, subs, vec![]);
+        assert_eq!(out.folders.len(), 1);
+        assert_eq!(out.folders[0].name, "New Folder");
+        assert_eq!(out.folders[0].feeds.len(), 1);
+        assert_eq!(out.folders[0].feeds[0].id, "feed/1");
+        assert!(out.standalone_feeds.is_empty());
+
+        // Once the server groups the feed elsewhere, the server wins:
+        // the feed moves and the (now empty) local folder stays.
+        let subs = vec![sub("feed/1", "One", &["Server Folder"])];
+        let out = sync_inoreader_account(&existing, subs, vec![server_tag("Server Folder")]);
+        assert!(
+            out.folders
+                .iter()
+                .any(|f| f.name == "Server Folder" && f.feeds.iter().any(|f| f.id == "feed/1"))
+        );
+        let local = out.folders.iter().find(|f| f.name == "New Folder").unwrap();
+        assert!(local.feeds.is_empty());
+    }
+
+    #[test]
+    fn sync_drops_unsubscribed_feed_from_local_folder() {
+        let existing = OpmlFile {
+            folders: vec![Folder {
+                name: "Local".into(),
+                feeds: vec![Feed {
+                    id: "feed/1".into(),
+                    url: "https://one/feed".into(),
+                    name: Some("One".into()),
+                    edited_name: None,
+                    home_page_url: None,
+                }],
+            }],
+            standalone_feeds: vec![],
+        };
+        let subs = vec![sub("feed/2", "Two", &[])];
+        let out = sync_inoreader_account(&existing, subs, vec![]);
+        let local = out.folders.iter().find(|f| f.name == "Local").unwrap();
+        assert!(local.feeds.is_empty());
+        assert_eq!(out.standalone_feeds.len(), 1);
     }
 }

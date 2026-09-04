@@ -22,6 +22,7 @@
 //! plus the `WebViewController` it composes.
 
 use gtk::glib;
+use gtk::glib::object::ObjectExt;
 use gtk::subclass::prelude::*;
 use std::cell::OnceCell;
 use std::sync::Arc;
@@ -136,6 +137,28 @@ impl ArticleRenderer {
 
         let _ = imp.web_context.set(context);
         let _ = imp.web_view.set(web_view);
+    }
+
+    /// The web process died (crash, OOM killer). WebKitGTK respawns the
+    /// process on the next load, so the pane can simply re-render the
+    /// current article — without this hook a dead process leaves a
+    /// permanently blank article pane (NNW `e99f23d07` /
+    /// `71194c02a`). Must be called after `bootstrap`; the handler
+    /// lives as long as the view.
+    pub fn connect_web_process_terminated<F>(&self, f: F)
+    where
+        F: Fn(&Self, webkit6::WebProcessTerminationReason) + 'static,
+    {
+        let Some(view) = self.imp().web_view.get() else {
+            tracing::warn!("connect_web_process_terminated before bootstrap");
+            return;
+        };
+        let weak = self.downgrade();
+        view.connect_web_process_terminated(move |_, status| {
+            if let Some(renderer) = weak.upgrade() {
+                f(&renderer, status);
+            }
+        });
     }
 
     /// Render an article body through the NNW page-wrapper + theme

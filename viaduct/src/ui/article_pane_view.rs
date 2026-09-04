@@ -273,6 +273,19 @@ impl ArticlePaneView {
 
         imp.article_renderer.get().bootstrap(image_cache);
 
+        // Web process crash recovery: WebKitGTK respawns the process on
+        // the next load, so re-render whatever is on display instead of
+        // leaving a blank pane (NNW `e99f23d07`/`71194c02a`).
+        let weak_for_crash = self.downgrade();
+        imp.article_renderer
+            .get()
+            .connect_web_process_terminated(move |_, status| {
+                tracing::warn!(?status, "article web process terminated; re-rendering");
+                if let Some(view) = weak_for_crash.upgrade() {
+                    view.refresh_render();
+                }
+            });
+
         // Reader-button toggle → re-render with extracted or raw body.
         let weak_for_reader = self.downgrade();
         imp.reader_btn.connect_toggled(move |_| {

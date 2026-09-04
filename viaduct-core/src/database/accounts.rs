@@ -1011,13 +1011,17 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// Key-scoped delete of landed status rows (NNW `e5171cbb0`): the
+    /// caller passes the (articleID, key) pairs whose batch succeeded,
+    /// so clearing a read row can never drop the same article's queued
+    /// starred row.
     pub async fn delete_sync_statuses_selected_for_processing(
         &self,
-        ids: Vec<String>,
+        pairs: Vec<(String, String)>,
     ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.sync_tx
-            .send(SyncDbOp::DeleteSelectedForProcessing(ids, tx))
+            .send(SyncDbOp::DeleteSelectedForProcessing(pairs, tx))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
