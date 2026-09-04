@@ -594,7 +594,8 @@ async fn run_refresh_with_tally(
         }
         per_feed
     });
-    let mut refresher = crate::network::AccountRefresher::new(account, changes_tx, retention_days);
+    let mut refresher =
+        crate::network::AccountRefresher::new(account.clone(), changes_tx, retention_days);
     if let Some(p) = progress.as_ref() {
         refresher = refresher.with_completion_counter(p.completed.clone());
     }
@@ -631,6 +632,22 @@ async fn run_refresh_with_tally(
         feeds_attempted,
         "diag: refresh cycle post"
     );
+    // v3.6.0: drive the account delegate's sync after the feed refresh
+    // completes. The Phase 15 Inoreader engine (reconcile subscription/
+    // tag lists, send queued statuses, pull status deltas, fetch
+    // missing-article bodies) had no driver in the app until now: feeds
+    // refreshed, but read/star state never reconciled with the server.
+    // A local account is a no-op. Deliberately after the diag-post line
+    // so the memory diagnostic stays feed-cycle-pure, and deliberately
+    // non-fatal: the tally describes feed fetching, not account sync.
+    // Known limitation, recorded in the roadmap: NNW also sends statuses
+    // on an independent short timer (our upstream candidate 416); until
+    // that lands, status sync rides the refresh cadence.
+    if !account.is_local_account()
+        && let Err(e) = account.sync_with_remote().await
+    {
+        tracing::warn!(?e, "account sync failed; feeds refreshed regardless");
+    }
     RefreshTally {
         feeds_attempted,
         per_feed_new,

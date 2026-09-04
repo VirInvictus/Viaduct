@@ -78,6 +78,35 @@ pub const ACCEPT_IMAGE: &str =
 /// `Accept` header for HTML article pages (Reader View).
 pub const ACCEPT_HTML: &str = "text/html, application/xhtml+xml, application/xml;q=0.9, */*;q=0.8";
 
+/// The WebKit browser UA, resolved once by the UI at startup. Port of
+/// NNW `UserAgent.browserUserAgent`, resolved in
+/// `WebViewConfiguration.resolveBrowserUserAgent` (`75755af70`, #4868):
+/// some hosts 403 non-browser agents on images, so the media downloaders
+/// (favicons, images, video thumbs) and the favicon-discovery home-page
+/// fetch identify as the same browser the article pane uses. Feed
+/// fetches keep the viaduct UA. `None` until the UI resolves it (and on
+/// headless test runs), which makes every media request fall back to
+/// `user_agent()`.
+static BROWSER_USER_AGENT: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Record the browser UA the article pane's WebKit reports. Accepts the
+/// caller's judgment; upstream only forwards `Mozilla/`-prefixed values.
+pub fn set_browser_user_agent(ua: Option<String>) {
+    *BROWSER_USER_AGENT
+        .write()
+        .expect("browser UA lock poisoned") = ua;
+}
+
+/// UA for media and home-page downloads: the browser UA once resolved,
+/// else the viaduct UA.
+pub fn effective_media_user_agent() -> String {
+    BROWSER_USER_AGENT
+        .read()
+        .expect("browser UA lock poisoned")
+        .clone()
+        .unwrap_or_else(user_agent)
+}
+
 /// Builds the baseline client. Used by the feed fetcher; the cache and
 /// Reader View construct via similar paths in their own modules so they
 /// can apply per-subsystem timeouts.
@@ -107,4 +136,27 @@ pub fn client_builder() -> reqwest::ClientBuilder {
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// NNW `75755af70`: media downloads ride the browser UA once the UI
+    /// resolves it, falling back to the viaduct UA until then (headless
+    /// runs, tests, a WebKit that reports nothing).
+    #[test]
+    fn media_user_agent_falls_back_then_overrides() {
+        set_browser_user_agent(None);
+        assert!(
+            effective_media_user_agent().contains("Viaduct/"),
+            "unset global falls back to the viaduct UA"
+        );
+
+        set_browser_user_agent(Some("Mozilla/5.0 Test UA".to_string()));
+        assert_eq!(effective_media_user_agent(), "Mozilla/5.0 Test UA");
+
+        // Restore for any parallel test asserting on the fallback.
+        set_browser_user_agent(None);
+    }
 }

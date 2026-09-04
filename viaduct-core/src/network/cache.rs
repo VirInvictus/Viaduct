@@ -279,6 +279,10 @@ async fn download(client: &Client, url: &str, max_bytes: usize) -> Option<Vec<u8
     let mut resp = match client
         .get(url)
         .header(header::ACCEPT, crate::network::http::ACCEPT_IMAGE)
+        .header(
+            header::USER_AGENT,
+            crate::network::http::effective_media_user_agent(),
+        )
         .send()
         .await
     {

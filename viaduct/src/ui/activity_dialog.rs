@@ -187,6 +187,12 @@ fn display_subtitle(ev: &ActivityEvent) -> String {
             SkipReason::DisallowedHost => "Skipped · disallowed host".to_string(),
             SkipReason::CacheControl => "Skipped · still fresh per Cache-Control".to_string(),
             SkipReason::Throttled => "Skipped · refreshed within the last 9 minutes".to_string(),
+            SkipReason::RedditRateLimit => {
+                "Skipped · Reddit allows one feed per refresh".to_string()
+            }
+            SkipReason::OpenRssThrottle => {
+                "Skipped · openrss.org: one feed per client-hour".to_string()
+            }
         },
     }
 }
@@ -266,6 +272,14 @@ mod tests {
         assert!(
             display_subtitle(&ev(ActivityKind::Skipped(SkipReason::CacheControl)))
                 .contains("Cache-Control")
+        );
+        assert!(
+            display_subtitle(&ev(ActivityKind::Skipped(SkipReason::RedditRateLimit)))
+                .contains("Reddit")
+        );
+        assert!(
+            display_subtitle(&ev(ActivityKind::Skipped(SkipReason::OpenRssThrottle)))
+                .contains("openrss.org")
         );
     }
 

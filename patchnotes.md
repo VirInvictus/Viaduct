@@ -1,5 +1,14 @@
 # viaduct: Patch Notes
 
+## v3.6.0: the sync engine goes live (2026-09-04)
+
+One unblocking change and two throttle ports. 198 tests pass, up five; clippy `-D warnings` clean.
+
+- **The Inoreader sync engine finally runs.** v3.5.0's discovery, closed: the whole Phase 15 engine (reconcile subscription and tag lists, send queued read/star changes, pull status deltas back, fetch missing-article bodies) existed but nothing in the app ever called it. Every refresh cycle (manual, on-open, periodic) now drives the sync after the feed refresh completes; a local account skips it, and a failed sync logs a warning without failing the cycle. Known limitation, recorded in the roadmap: NetNewsWire also sends queued statuses on an independent short timer, so a star can land on the server within two minutes of starring; ours ride the refresh cadence until the idle-backoff timer ports (upstream candidate 416).
+- **Browser user agent for image downloads** (NNW `75755af70`, #4868). Some hosts 403 non-browser agents on images. The article pane's WebKit reports its user agent at startup (accepted only when `Mozilla/`-prefixed, like upstream), and the favicon, image, and video-thumb downloaders plus the favicon-discovery home-page fetch send it. Feed fetches keep the `Viaduct/x.y` agent.
+- **openrss.org: one feed per client-hour** (NNW `5355d805a`). Upstream lowered their own unintentional 10-hour throttle to one hour; we ported the mechanism we never had. One openrss.org feed per hour refreshes (the least-recently-checked one; upstream picks randomly, a recorded divergence), the rest skip with a new Activity Log reason, and the stamp lives in the articles database's `db_info` table.
+- **Reddit: one feed per refresh session** (NNW `80a090c5b`, `88aa60160`). Reddit rate-limits to one feed per minute, so each refresh now refreshes only the least-recently-checked Reddit feed; the rest skip with their own Activity Log reason.
+
 ## v3.5.0: Inoreader rate-limit machinery (2026-09-04)
 
 The Inoreader sync engine now carries the rate-limit handling NetNewsWire added upstream in August, ported commit-for-commit from their Reader API work. Eight new unit tests cover the header parsing, the quota threshold, the pause lifecycle, and the Retry-After default; 193 tests pass. One thing this release does not change, stated plainly: the sync engine itself still has no driver in the app (the four-phase delegate sync has never been invoked from anywhere), so this machinery is dormant until one is wired. That gap is now recorded in the roadmap instead of lurking.

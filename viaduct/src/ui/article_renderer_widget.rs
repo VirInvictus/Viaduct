@@ -130,6 +130,18 @@ impl ArticleRenderer {
             .build();
 
         article_renderer::apply_locked_down_settings(&web_view);
+
+        // v3.6.0 (NNW `75755af70`, #4868): hand WebKit's UA to the media
+        // downloaders so image/favicon/home-page fetches identify as the
+        // same browser as the article pane. Some hosts 403 non-browser
+        // agents on images. Upstream forwards only "Mozilla/"-prefixed
+        // strings; anything else keeps the viaduct UA.
+        if let Some(ua) = web_view.settings().and_then(|s| s.user_agent())
+            && ua.starts_with("Mozilla/")
+        {
+            crate::network::http::set_browser_user_agent(Some(ua.to_string()));
+        }
+
         article_renderer::install_link_interceptor(&web_view);
         article_renderer::install_hover_url_overlay(&web_view, &imp.url_overlay.get());
 

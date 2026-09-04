@@ -330,6 +330,23 @@ impl AccountRefresher {
         let total_input = feeds.len();
         let mut skipped = 0usize;
 
+        // Per-session throttle picks, computed before the loop consumes
+        // `feeds`. NNW `80a090c5b`: Reddit rate-limits to one feed per
+        // minute, so the session refreshes only the least-recently-checked
+        // Reddit feed. NNW `5355d805a`: openrss.org allows one feed per
+        // client per hour. Both gates ride the same per-feed skip path,
+        // so the activity log records every skipped feed and the GTK
+        // progress counter still reaches 100%. Force bypasses the skip
+        // checks entirely (below), so neither pick matters there.
+        let (reddit_url_to_refresh, openrss_url_to_refresh) = if force {
+            (None, None)
+        } else {
+            (
+                Self::lru_url_for_domain(&feeds, REDDIT_DOMAIN),
+                self.openrss_session_pick(&feeds).await,
+            )
+        };
+
         // v2.6.9: cap in-flight per-feed pipelines to keep peak RSS
         // bounded. The pre-v2.6.9 path `tokio::spawn`-ed every feed
         // simultaneously, so a 130-feed cycle held 130 HTTP bodies +
@@ -344,7 +361,13 @@ impl AccountRefresher {
         let mut futures = Vec::new();
         for (feed, settings) in feeds {
             if !force
-                && let Some(reason) = Self::skip_reason(&feed, &settings, special_case_cutoff_date)
+                && let Some(reason) = Self::skip_reason(
+                    &feed,
+                    &settings,
+                    special_case_cutoff_date,
+                    reddit_url_to_refresh.as_deref(),
+                    openrss_url_to_refresh.as_deref(),
+                )
             {
                 debug!("Skipping feed: {} ({:?})", feed.url, reason);
                 skipped += 1;
@@ -425,6 +448,8 @@ impl AccountRefresher {
         feed: &Feed,
         settings: &FeedSettings,
         special_case_cutoff_date: DateTime<Utc>,
+        reddit_url_to_refresh: Option<&str>,
+        openrss_url_to_refresh: Option<&str>,
     ) -> Option<crate::network::activity::SkipReason> {
         use crate::network::activity::SkipReason;
 
@@ -446,6 +471,25 @@ impl AccountRefresher {
             if elapsed < max_age {
                 return Some(SkipReason::CacheControl);
             }
+        }
+
+        // NNW `80a090c5b`: Reddit allows one feed per refresh session; the
+        // session's least-recently-checked pick runs, the rest skip. A
+        // missing pick (unreachable: the pick is computed from this same
+        // set) throttles every Reddit feed, the safe direction.
+        if url_host_matches_domain(&feed.url, &[REDDIT_DOMAIN])
+            && feed.url != reddit_url_to_refresh.unwrap_or_default()
+        {
+            return Some(SkipReason::RedditRateLimit);
+        }
+
+        // NNW `5355d805a`: openrss.org allows one feed per client-hour; a
+        // `None` pick means the hour hasn't elapsed (or nothing to pick),
+        // so every openrss feed skips.
+        if url_host_matches_domain(&feed.url, &[OPENRSS_DOMAIN])
+            && feed.url != openrss_url_to_refresh.unwrap_or_default()
+        {
+            return Some(SkipReason::OpenRssThrottle);
         }
 
         // NNW fd547da76: a feed that sends a Cache-Control header is governed
@@ -476,6 +520,68 @@ impl AccountRefresher {
 
         None
     }
+
+    /// The least-recently-checked URL among the feeds on `domain`, for
+    /// the one-feed-per-session throttles. Ties resolve to the first in
+    /// the input, keeping the pick deterministic. Feeds never checked
+    /// (`None` last_check_date) sort first, so a brand-new subscription
+    /// is the one that gets its chance.
+    fn lru_url_for_domain(feeds: &[(Feed, FeedSettings)], domain: &str) -> Option<String> {
+        feeds
+            .iter()
+            .filter(|(feed, _)| url_host_matches_domain(&feed.url, &[domain]))
+            .min_by_key(|(_, settings)| {
+                settings
+                    .last_check_date
+                    .map(|dt| dt.timestamp())
+                    .unwrap_or(i64::MIN)
+            })
+            .map(|(feed, _)| feed.url.clone())
+    }
+
+    /// The one openrss.org URL this session may fetch, stamping the
+    /// account-level last-openrss-check when the hour has elapsed; `None`
+    /// while openrss is still throttled or nothing subscribes to it. Port
+    /// of NNW's `filteredURLs` openrss gate (`5355d805a`; the 10-hour
+    /// interval was unintentional and is 1 hour upstream now). The stamp
+    /// rides the articles DB's `db_info` table where our account-level
+    /// markers live. One divergence: upstream picks a random feed; we
+    /// pick the least-recently-checked (same throttle, deterministic, no
+    /// RNG dependency).
+    async fn openrss_session_pick(&self, feeds: &[(Feed, FeedSettings)]) -> Option<String> {
+        if !feeds
+            .iter()
+            .any(|(feed, _)| url_host_matches_domain(&feed.url, &[OPENRSS_DOMAIN]))
+        {
+            return None;
+        }
+        let last_check = self
+            .account
+            .db_info_get(OPENRSS_LAST_CHECK_KEY)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok());
+        if !openrss_eligible(last_check, Utc::now().timestamp()) {
+            debug!("openrss.org still within its client-hour; skipping their feeds");
+            return None;
+        }
+        let pick = Self::lru_url_for_domain(feeds, OPENRSS_DOMAIN);
+        let _ = self
+            .account
+            .db_info_set(OPENRSS_LAST_CHECK_KEY, &Utc::now().timestamp().to_string())
+            .await;
+        pick
+    }
+}
+
+/// Pure gate behind `openrss_session_pick`: allowed when never stamped,
+/// or when at least `OPENRSS_MINIMUM_REFRESH_INTERVAL_SECS` have passed.
+fn openrss_eligible(last_check: Option<i64>, now_secs: i64) -> bool {
+    match last_check {
+        None => true,
+        Some(ts) => now_secs.saturating_sub(ts) >= OPENRSS_MINIMUM_REFRESH_INTERVAL_SECS,
+    }
 }
 
 /// Minimum minutes between checks for a feed without Cache-Control (NNW
@@ -489,7 +595,26 @@ const MINIMUM_TIME_BETWEEN_CHECKS_MINUTES: i64 = 9;
 /// These two well-behaved hosts publish high-frequency feeds and their
 /// conditional-GET is reliable. NNW's `SpecialCase.rachelByTheBayHostName` /
 /// `SpecialCase.openRSSOrgHostName`.
-const SPECIAL_CASE_DOMAINS: &[&str] = &["rachelbythebay.com", "openrss.org"];
+const SPECIAL_CASE_DOMAINS: &[&str] = &["rachelbythebay.com", OPENRSS_DOMAIN];
+
+/// Reddit's host for the one-feed-per-session throttle (NNW
+/// `SpecialCase.redditHostName`, `80a090c5b`). Matches subdomains via
+/// `url_host_matches_domain`.
+const REDDIT_DOMAIN: &str = "reddit.com";
+
+/// openrss.org's host. Doubles as the special-case entry above and the
+/// hourly session throttle below (NNW `openRSSOrgHostName` /
+/// `5355d805a`).
+const OPENRSS_DOMAIN: &str = "openrss.org";
+
+/// Minimum seconds between fetches of ANY openrss.org feed for this
+/// client (NNW `openRSSOrgMinimumRefreshInterval`, lowered 10 h -> 1 h
+/// in `5355d805a`; the 10 h interval was unintentional).
+const OPENRSS_MINIMUM_REFRESH_INTERVAL_SECS: i64 = 60 * 60;
+
+/// `db_info` key stamping the last openrss.org fetch (our stand-in for
+/// NNW's `lastOpenRSSOrgFeedRefresh` UserDefaults entry).
+const OPENRSS_LAST_CHECK_KEY: &str = "openrss-last-check";
 
 /// Hosts that skip the minimum-time clamp entirely (every refresh attempt
 /// hits them, modulo Cache-Control / 304). These are personal sites that
@@ -796,6 +921,7 @@ async fn refresh_one_feed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::activity::SkipReason;
 
     #[test]
     fn url_host_matches_domain_handles_www_and_case() {
@@ -886,5 +1012,150 @@ mod tests {
         );
         assert_eq!(retry_after_secs(Some("0")), DEFAULT_RETRY_AFTER_SECS);
         assert_eq!(retry_after_secs(Some("-5")), DEFAULT_RETRY_AFTER_SECS);
+    }
+
+    fn throttle_feed(url: &str) -> Feed {
+        Feed {
+            id: url.to_string(),
+            url: url.to_string(),
+            name: None,
+            edited_name: None,
+            home_page_url: None,
+        }
+    }
+
+    fn throttle_settings(last_check: Option<DateTime<Utc>>) -> FeedSettings {
+        FeedSettings {
+            feed_id: String::new(),
+            feed_url: String::new(),
+            home_page_url: None,
+            icon_url: None,
+            favicon_url: None,
+            edited_name: None,
+            content_hash: None,
+            last_modified: None,
+            etag: None,
+            date_created: None,
+            max_age: None,
+            authors_json: None,
+            folder_relationship_json: None,
+            last_check_date: last_check,
+            reader_view_always_enabled: false,
+            new_article_notifications_enabled: false,
+            last_response_code: None,
+        }
+    }
+
+    /// NNW `80a090c5b`: within one refresh session only the picked Reddit
+    /// feed runs; the rest skip with the Reddit reason.
+    #[test]
+    fn reddit_feeds_skip_except_the_session_pick() {
+        let feed = throttle_feed("https://old.reddit.com/r/rust/.rss");
+        let settings = throttle_settings(None);
+        let cutoff = Utc::now() - Duration::hours(1);
+
+        let reason = AccountRefresher::skip_reason(
+            &feed,
+            &settings,
+            cutoff,
+            Some("https://old.reddit.com/r/other/.rss"),
+            None,
+        );
+        assert_eq!(reason, Some(SkipReason::RedditRateLimit));
+
+        // The session's pick itself passes every check (never-checked
+        // feed: no timing throttle either).
+        let reason = AccountRefresher::skip_reason(
+            &feed,
+            &settings,
+            cutoff,
+            Some("https://old.reddit.com/r/rust/.rss"),
+            None,
+        );
+        assert_eq!(reason, None);
+
+        // Non-Reddit feeds never hit the gate.
+        let other = throttle_feed("https://example.com/feed.xml");
+        let reason = AccountRefresher::skip_reason(
+            &other,
+            &settings,
+            cutoff,
+            Some("https://old.reddit.com/r/other/.rss"),
+            None,
+        );
+        assert_eq!(reason, None);
+    }
+
+    /// NNW `5355d805a`: openrss.org feeds run one per client-hour; when
+    /// this session has no pick, they all skip.
+    #[test]
+    fn openrss_feeds_skip_unless_this_session_pick() {
+        let feed = throttle_feed("https://openrss.org/www.example.com");
+        let settings = throttle_settings(None);
+        let cutoff = Utc::now() - Duration::hours(1);
+
+        let reason = AccountRefresher::skip_reason(&feed, &settings, cutoff, None, None);
+        assert_eq!(reason, Some(SkipReason::OpenRssThrottle));
+
+        let reason = AccountRefresher::skip_reason(
+            &feed,
+            &settings,
+            cutoff,
+            None,
+            Some("https://openrss.org/www.example.com"),
+        );
+        assert_eq!(reason, None);
+    }
+
+    /// The one-per-session pick is the least-recently-checked feed on the
+    /// domain, and never a feed from another host.
+    #[test]
+    fn lru_pick_chooses_least_recently_checked_on_domain() {
+        let feeds = vec![
+            (
+                throttle_feed("https://old.reddit.com/r/a/.rss"),
+                throttle_settings(Some(Utc::now() - Duration::hours(3))),
+            ),
+            (
+                throttle_feed("https://old.reddit.com/r/b/.rss"),
+                throttle_settings(Some(Utc::now() - Duration::hours(9))),
+            ),
+            (
+                throttle_feed("https://example.com/feed.xml"),
+                throttle_settings(Some(Utc::now() - Duration::hours(100))),
+            ),
+            (
+                throttle_feed("https://old.reddit.com/r/c/.rss"),
+                throttle_settings(None),
+            ),
+        ];
+        let pick = AccountRefresher::lru_url_for_domain(&feeds, REDDIT_DOMAIN);
+        assert_eq!(
+            pick.as_deref(),
+            Some("https://old.reddit.com/r/c/.rss"),
+            "never-checked feeds sort first"
+        );
+
+        let empty: Vec<(Feed, FeedSettings)> = Vec::new();
+        assert_eq!(
+            AccountRefresher::lru_url_for_domain(&empty, REDDIT_DOMAIN),
+            None
+        );
+    }
+
+    /// NNW's openrss gate: an unstamped client may fetch; an hour must
+    /// pass between fetches (boundary inclusive).
+    #[test]
+    fn openrss_eligibility_is_one_hour_per_client() {
+        let now = 1_800_000_000;
+        assert!(openrss_eligible(None, now));
+        assert!(openrss_eligible(
+            Some(now - OPENRSS_MINIMUM_REFRESH_INTERVAL_SECS),
+            now
+        ));
+        assert!(!openrss_eligible(
+            Some(now - OPENRSS_MINIMUM_REFRESH_INTERVAL_SECS + 1),
+            now
+        ));
     }
 }

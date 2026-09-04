@@ -66,6 +66,10 @@ async fn fetch_html(client: &Client, url: &str) -> Option<Vec<u8>> {
     let resp = client
         .get(url)
         .header(header::ACCEPT, crate::network::http::ACCEPT_HTML)
+        .header(
+            header::USER_AGENT,
+            crate::network::http::effective_media_user_agent(),
+        )
         .send()
         .await
         .ok()?;
@@ -129,12 +133,26 @@ fn first_icon_link(html_bytes: &[u8], base_url: &str) -> Option<String> {
 /// reachability + reasonable-size signal so we don't persist a URL
 /// that 404s on every sidebar bind.
 async fn verify_favicon(client: &Client, url: &str) -> bool {
-    if let Ok(resp) = client.head(url).send().await
+    if let Ok(resp) = client
+        .head(url)
+        .header(
+            header::USER_AGENT,
+            crate::network::http::effective_media_user_agent(),
+        )
+        .send()
+        .await
         && resp.status().is_success()
     {
         return true;
     }
-    if let Ok(resp) = client.get(url).send().await
+    if let Ok(resp) = client
+        .get(url)
+        .header(
+            header::USER_AGENT,
+            crate::network::http::effective_media_user_agent(),
+        )
+        .send()
+        .await
         && resp.status().is_success()
         && let Ok(bytes) = resp.bytes().await
     {

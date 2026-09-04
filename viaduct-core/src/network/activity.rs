@@ -25,6 +25,11 @@ pub enum SkipReason {
     DisallowedHost,
     CacheControl,
     Throttled,
+    /// Reddit allows one feed per refresh session (NNW `80a090c5b`).
+    RedditRateLimit,
+    /// openrss.org allows one feed per client per hour (NNW
+    /// `5355d805a`).
+    OpenRssThrottle,
 }
 
 #[derive(Debug, Clone)]

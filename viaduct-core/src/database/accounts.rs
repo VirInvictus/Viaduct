@@ -962,6 +962,15 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// Drive the account delegate's sync: the Phase 15 Inoreader engine
+    /// (reconcile subscription/tag lists, send queued statuses, pull
+    /// status deltas, fetch missing-article bodies). No-op for the local
+    /// delegate. v3.6.0 wires this into the refresh pipeline — before
+    /// that the engine existed but nothing called it.
+    pub async fn sync_with_remote(self: &std::sync::Arc<Self>) -> Result<()> {
+        self.delegate.clone().refresh_all(self.clone()).await
+    }
+
     /// Read a generic `db_info` value from the articles DB. Account-level
     /// bookkeeping with no per-feed home; currently the Inoreader sync
     /// conditional-GET markers stored under `sync-cget-*` keys.

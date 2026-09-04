@@ -105,4 +105,14 @@ async fn test_account_update_feed_integration() {
         .expect("Failed to update feed again");
     assert_eq!(changes2.new_articles.len(), 0);
     assert_eq!(changes2.updated_articles.len(), 0);
+
+    // v3.6.0: the sync driver routes through the delegate and is a no-op
+    // for the local account. The Inoreader engine underneath it (lists,
+    // statuses, missing bodies) needs the network and stays unexercised
+    // here; the wiring and the local-path guarantee are what this pins.
+    let account = std::sync::Arc::new(account);
+    account
+        .sync_with_remote()
+        .await
+        .expect("sync_with_remote is a no-op Ok for a local account");
 }
