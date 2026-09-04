@@ -234,7 +234,7 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
 - [x] Flatpak manifest: `network` permission only; no `--filesystem=home`. OPML I/O entirely via `org.freedesktop.portal.FileChooser`.
 - [x] AppStream metadata (`appdata.xml`), icons at all required sizes, desktop entry.
 - [x] Reproducible build verified against the target Flathub runtime.
-- [x] **Background daemon via `xdg-desktop-portal` Background API**: full architecture in `docs/background-service-plan.md`. The `ashpd` request helper at `viaduct-core/src/network/background.rs` is now wired through the Preferences switch. Sub-items:
+- [x] **Background daemon via `xdg-desktop-portal` Background API**: the plan document once cited here (`docs/background-service-plan.md`) is gone; the surviving record is the shipped implementation (`viaduct-core/src/network/background.rs`, `hide_for_background` / `unhide_from_background` in `window.rs`, the re-summon in `main.rs`) plus the v1.10.0 patchnotes entry. The `ashpd` request helper at `viaduct-core/src/network/background.rs` is now wired through the Preferences switch. Sub-items:
   - [x] **Window-hide-on-close** in `ViaductWindow`: `connect_close_request` calls `hide_for_background` and returns `glib::Propagation::Stop` when the `run-in-background` GSetting is enabled; otherwise the original popover-cleanup + `Proceed` path runs.
   - [x] **`run-in-background` GSetting** (boolean, default false) added to `data/org.virinvictus.Viaduct.gschema.xml`. Switch row in Preferences → Sync (`run_in_background_row` in `ui/preferences_dialog.rs`).
   - [x] **Portal request wiring**: `connect_changed("run-in-background")` listener fires `viaduct_core::network::background::request_background_permission` via `crate::spawn_on_runtime` whenever the value flips to true. Result is delivered back via `tokio::sync::oneshot` + `glib::spawn_future_local`; on denial we set the GSetting back to false (the bind syncs the switch off) and `show_toast_public` explains why.
@@ -310,7 +310,7 @@ These don't belong inside any earlier phase; they're discoverability / polish wo
 
 ## Phase 18: v2.0 Architectural Refinement *(post-1.0)*
 
-Comparative review against `.newsflash` (the only other Linux RSS reader worth using) surfaced four candidate architectural changes. Two adopted, one deferred indefinitely, one rejected outright. Full evaluation in `two-plans.md`. The goal is to reduce `ViaductWindow`'s monolith and tighten the `WebKitWebView` lifecycle without breaking the **"Port. Don't invent."** rule that anchors `CLAUDE.md` §4. Sequenced for landing **after** the 1.0 Flathub tag; not before. None of these block 1.0; they're polish for the 2.0 banner.
+Comparative review against `.newsflash` (the only other Linux RSS reader worth using) surfaced four candidate architectural changes. Two adopted, one deferred indefinitely, one rejected outright. The written evaluation (`two-plans.md`) is no longer on disk; the adopted/deferred/rejected verdicts below are the surviving record. The goal is to reduce `ViaductWindow`'s monolith and tighten the `WebKitWebView` lifecycle without breaking the **"Port. Don't invent."** rule that anchors `CLAUDE.md` §4. Sequenced for landing **after** the 1.0 Flathub tag; not before. None of these block 1.0; they're polish for the 2.0 banner.
 
 ### Adopted
 
@@ -533,9 +533,9 @@ Portfolio direction change (Brandon, 2026-07-09): the goal moved from "runs poli
 Filed from `~/.gitrepos/AUDIT_THREE.md` §3 per its rule: a finding lands in the owning roadmap before the fix. These are the Stage 0 (version/CI/record repair) and Stage 4 (re-anchor) findings; each is fixed in this same docs release and ticked with a ship note. Code work from Stage 4 (the Inoreader rate-limit machinery and the upstream-sync windows) stays tracked in the phase sections above; this list only carries what the audit found that no roadmap recorded.
 
 - [ ] Version drift is 4-way: meson 3.2.1, metainfo newest release 3.2.1 (missing 3.3.1 and 3.4.0), spec header 3.0.0, roadmap header "Updated as of v2.7.0", while Cargo.toml and the v3.4.0 tag are current. Reconcile every carrier to one version.
-- [ ] Dead references: `docs/background-service-plan.md` is cited by README (Auto-sync row), CLAUDE.md (v1.8.0 prose), and the Phase 17 checklist below; README and the Phase 18 intro also cite `two-plans.md`. Neither file exists; both subjects shipped long ago.
-- [ ] CLAUDE.md's CI paragraph describes an Ubuntu runner with apt deps; `.github/workflows/ci.yml` has run a Fedora container since the first green run (v3.2.1) because Ubuntu runners ship GTK 4.14.
-- [ ] CLAUDE.md §UI says the owned application stylesheet (Phase 20d) "is still pending"; it shipped in v3.0.0 (`theme.rs::install_stylesheet`, USER+1 priority).
+- [x] Dead references: `docs/background-service-plan.md` is cited by README (Auto-sync row), CLAUDE.md (v1.8.0 prose), and the Phase 17 checklist below; README and the Phase 18 intro also cite `two-plans.md`. Neither file exists; both subjects shipped long ago. *(References replaced 2026-09-04 with pointers to what actually shipped.)*
+- [x] CLAUDE.md's CI paragraph describes an Ubuntu runner with apt deps; `.github/workflows/ci.yml` has run a Fedora container since the first green run (v3.2.1) because Ubuntu runners ship GTK 4.14. *(Paragraph rewritten 2026-09-04.)*
+- [x] CLAUDE.md §UI says the owned application stylesheet (Phase 20d) "is still pending"; it shipped in v3.0.0 (`theme.rs::install_stylesheet`, USER+1 priority). *(Line corrected 2026-09-04.)*
 - [ ] Test-count claims disagree: 142 (patchnotes v3.4.0), 162 (the Phase 18 SHELL DONE note, v3.0.0-era), 188 counted 2026-09-04 (180 `#[test]` + 8 `#[gtk::test]`). Record a counting-method baseline in CLAUDE.md; leave historical notes as written.
 - [ ] spec.md §8 requires `xdg-run/dconf` for the GSettings backend, but `org.virinvictus.Viaduct.json` finish-args omit it (and `--device=dconf`), so a sandboxed build's preference writes had nowhere to land. The manifest was wrong; fix it there.
 - [ ] `.ruff_cache/` (untracked Python-tool residue in a Rust repo): delete from disk.
