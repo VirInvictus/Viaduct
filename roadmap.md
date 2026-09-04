@@ -538,8 +538,8 @@ Filed from `~/.gitrepos/AUDIT_THREE.md` §3 per its rule: a finding lands in the
 - [x] CLAUDE.md §UI says the owned application stylesheet (Phase 20d) "is still pending"; it shipped in v3.0.0 (`theme.rs::install_stylesheet`, USER+1 priority). *(Line corrected 2026-09-04.)*
 - [ ] Test-count claims disagree: 142 (patchnotes v3.4.0), 162 (the Phase 18 SHELL DONE note, v3.0.0-era), 188 counted 2026-09-04 (180 `#[test]` + 8 `#[gtk::test]`). Record a counting-method baseline in CLAUDE.md; leave historical notes as written.
 - [x] spec.md §8 requires `xdg-run/dconf` for the GSettings backend, but `org.virinvictus.Viaduct.json` finish-args omit it (and `--device=dconf`), so a sandboxed build's preference writes had nowhere to land. The manifest was wrong; fix it there. *(Verdict 2026-09-04: spec §8 right, manifest wrong; `--filesystem=xdg-run/dconf` + `--device=dconf` granted in the manifest.)*
-- [ ] `.ruff_cache/` (untracked Python-tool residue in a Rust repo): delete from disk.
-- [ ] `to-test.md` (tracked; a frozen manual-QA checklist for the v2.6.22 → v2.7.0 arc): decide delete vs keep.
+- [x] `.ruff_cache/` (untracked Python-tool residue in a Rust repo): delete from disk. *(Deleted 2026-09-04; nothing tracked.)*
+- [x] `to-test.md` (tracked; a frozen manual-QA checklist for the v2.6.22 → v2.7.0 arc): decide delete vs keep. *(Deleted 2026-09-04: it was arc-scoped and four releases stale, recoverable from git history; the living manual-QA item is the 20f hands-on pass.)*
 - [ ] VERSION-file decision (audit Stage 0): add one or record why not.
 - [ ] Releases v3.2.1 and v3.3.1 exist only as patchnotes entries; no git tags. Tag-backfill policy is AUDIT_THREE §5.12 (workspace-wide, Brandon's call); recorded here so the gap is visible in-repo.
 - [ ] Re-anchor the Phase 19-deferred verification items (the 20f tail above) to the post-v3.0.0 shell: every citation names `AdwNavigationSplitView` / `AdwBreakpoint` / `adw::Dialog` / `AdwStyleManager` / `AdwHeaderBar`, all deleted in the de-adwaita migration, so the hands-on passes as written would audit ghosts.
