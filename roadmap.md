@@ -526,3 +526,21 @@ Portfolio direction change (Brandon, 2026-07-09): the goal moved from "runs poli
 - [ ] Confirm none of the three pane header bars (`viaduct/src/ui/sidebar_view.ui:55`, `viaduct/src/ui/timeline_view.ui:24`, `viaduct/src/ui/article_pane_view.ui:35`, all `AdwHeaderBar`) hard-code `show-title-buttons` or otherwise assume server-side decorations; today none of them set that property explicitly, which is correct (only the outermost pane's header bar should surface window buttons, and that's driven automatically by `AdwNavigationSplitView`/`AdwToolbarView`, not by anything this app sets). Verify interactively that setting `gtk-decoration-layout=""` (a common tiling-WM preference that hides close/minimize/maximize entirely) still leaves every pane's own controls (search, sync, primary menu, reader toggle, article appearance, share) fully reachable, and that closing the window remains possible via a keyboard accelerator or the WM's own bind rather than solely a titlebar close button.
 - [ ] Record as a verified invariant (not a fix) that no UI code path in this app depends on a compositor-drawn title bar; every pane is CSD via `AdwHeaderBar`/`AdwToolbarView` already, which is exactly the posture a tiling WM needs. This entry exists so a future audit has a documented baseline to regress-test against rather than re-deriving it from scratch.
 
+---
+
+## AUDIT_THREE findings, Viaduct lane (filed 2026-09-04)
+
+Filed from `~/.gitrepos/AUDIT_THREE.md` §3 per its rule: a finding lands in the owning roadmap before the fix. These are the Stage 0 (version/CI/record repair) and Stage 4 (re-anchor) findings; each is fixed in this same docs release and ticked with a ship note. Code work from Stage 4 (the Inoreader rate-limit machinery and the upstream-sync windows) stays tracked in the phase sections above; this list only carries what the audit found that no roadmap recorded.
+
+- [ ] Version drift is 4-way: meson 3.2.1, metainfo newest release 3.2.1 (missing 3.3.1 and 3.4.0), spec header 3.0.0, roadmap header "Updated as of v2.7.0", while Cargo.toml and the v3.4.0 tag are current. Reconcile every carrier to one version.
+- [ ] Dead references: `docs/background-service-plan.md` is cited by README (Auto-sync row), CLAUDE.md (v1.8.0 prose), and the Phase 17 checklist below; README and the Phase 18 intro also cite `two-plans.md`. Neither file exists; both subjects shipped long ago.
+- [ ] CLAUDE.md's CI paragraph describes an Ubuntu runner with apt deps; `.github/workflows/ci.yml` has run a Fedora container since the first green run (v3.2.1) because Ubuntu runners ship GTK 4.14.
+- [ ] CLAUDE.md §UI says the owned application stylesheet (Phase 20d) "is still pending"; it shipped in v3.0.0 (`theme.rs::install_stylesheet`, USER+1 priority).
+- [ ] Test-count claims disagree: 142 (patchnotes v3.4.0), 162 (the Phase 18 SHELL DONE note, v3.0.0-era), 188 counted 2026-09-04 (180 `#[test]` + 8 `#[gtk::test]`). Record a counting-method baseline in CLAUDE.md; leave historical notes as written.
+- [ ] spec.md §8 requires `xdg-run/dconf` for the GSettings backend, but `org.virinvictus.Viaduct.json` finish-args omit it (and `--device=dconf`), so a sandboxed build's preference writes had nowhere to land. The manifest was wrong; fix it there.
+- [ ] `.ruff_cache/` (untracked Python-tool residue in a Rust repo): delete from disk.
+- [ ] `to-test.md` (tracked; a frozen manual-QA checklist for the v2.6.22 → v2.7.0 arc): decide delete vs keep.
+- [ ] VERSION-file decision (audit Stage 0): add one or record why not.
+- [ ] Releases v3.2.1 and v3.3.1 exist only as patchnotes entries; no git tags. Tag-backfill policy is AUDIT_THREE §5.12 (workspace-wide, Brandon's call); recorded here so the gap is visible in-repo.
+- [ ] Re-anchor the Phase 19-deferred verification items (the 20f tail above) to the post-v3.0.0 shell: every citation names `AdwNavigationSplitView` / `AdwBreakpoint` / `adw::Dialog` / `AdwStyleManager` / `AdwHeaderBar`, all deleted in the de-adwaita migration, so the hands-on passes as written would audit ghosts.
+
