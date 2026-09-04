@@ -76,6 +76,13 @@ pub enum NetworkError {
     #[error("rate limited; retry after {retry_after_secs}s")]
     RateLimited { retry_after_secs: u64 },
 
+    /// Any other non-success HTTP status from a Reader API call, carrying
+    /// the status code. Exists alongside `RateLimited` so the sync
+    /// delegate can tell a real 429 (which arms the sync pause) apart
+    /// from every other failure the server can return.
+    #[error("http status {0}")]
+    HttpStatus(u16),
+
     /// `feed_discovery::discover_feed` exhausted both passes (URL
     /// didn't parse as a feed, no `<link rel="alternate">` in the HTML).
     #[error("no feed found at the supplied URL")]

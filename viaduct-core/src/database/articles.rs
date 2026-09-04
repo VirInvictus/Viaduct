@@ -158,6 +158,20 @@ pub enum ArticlesDbOp {
     /// Read `db_info.last_vacuum_date` (unix seconds), `None` if never
     /// stamped. Lets `cleanup_at_startup` throttle the full VACUUM.
     LastVacuumDate(oneshot::Sender<Result<Option<i64>>>),
+    /// Read a generic `db_info` value by key. Account-level bookkeeping
+    /// with no per-feed home; currently the Inoreader sync
+    /// conditional-GET markers (`sync-cget-*` keys, delegate.rs).
+    GetDbInfo {
+        key: String,
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
+    /// Upsert a generic `db_info` value by key. An empty value is the
+    /// "absent" encoding for readers (matches LastVacuumDate's parse).
+    SetDbInfo {
+        key: String,
+        value: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -439,6 +453,14 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
         ArticlesDbOp::LastVacuumDate(tx) => {
             let res = last_vacuum_date(conn);
             let _ = tx.send(res);
+        }
+        ArticlesDbOp::GetDbInfo { key, reply } => {
+            let res = db_info_get(conn, &key);
+            let _ = reply.send(res);
+        }
+        ArticlesDbOp::SetDbInfo { key, value, reply } => {
+            let res = db_info_set(conn, &key, &value);
+            let _ = reply.send(res);
         }
     }
 }
@@ -1221,6 +1243,28 @@ fn last_vacuum_date(conn: &Connection) -> Result<Option<i64>> {
     Ok(value.and_then(|v| v.parse::<i64>().ok()))
 }
 
+/// Read a generic `db_info` value. `None` when the row is absent.
+fn db_info_get(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM db_info WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(value)
+}
+
+/// Upsert a generic `db_info` value.
+fn db_info_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO db_info (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
 /// `PRAGMA wal_checkpoint(TRUNCATE)` without the `VACUUM`. Flushes the WAL
 /// into the main database and truncates the WAL file. Run every startup so
 /// the WAL stays bounded even on launches that prune nothing (the full
@@ -1315,6 +1359,30 @@ mod tests {
         let b = article_id_for("https://example.com/feed", "guid-1");
         assert_eq!(a, b);
         assert_eq!(a.len(), 32);
+    }
+
+    /// The generic `db_info` accessor the Inoreader sync conditional-GET
+    /// markers ride on: set-then-get round-trips, a missing key reads as
+    /// `None`, and an upsert overwrites.
+    #[test]
+    fn db_info_get_set_round_trip() {
+        let conn = in_memory();
+        assert_eq!(db_info_get(&conn, "sync-cget-tags-etag").unwrap(), None);
+        db_info_set(&conn, "sync-cget-tags-etag", "\"abc\"").unwrap();
+        assert_eq!(
+            db_info_get(&conn, "sync-cget-tags-etag").unwrap(),
+            Some("\"abc\"".to_string())
+        );
+        db_info_set(&conn, "sync-cget-tags-etag", "\"def\"").unwrap();
+        assert_eq!(
+            db_info_get(&conn, "sync-cget-tags-etag").unwrap(),
+            Some("\"def\"".to_string())
+        );
+        // Distinct keys don't interfere (each list carries its own pair).
+        assert_eq!(
+            db_info_get(&conn, "sync-cget-tags-last-modified").unwrap(),
+            None
+        );
     }
 
     /// v2.6.2 regression: orphan status rows (status row exists, no

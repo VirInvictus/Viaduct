@@ -1,5 +1,16 @@
 # viaduct: Patch Notes
 
+## v3.5.0: Inoreader rate-limit machinery (2026-09-04)
+
+The Inoreader sync engine now carries the rate-limit handling NetNewsWire added upstream in August, ported commit-for-commit from their Reader API work. Eight new unit tests cover the header parsing, the quota threshold, the pause lifecycle, and the Retry-After default; 193 tests pass. One thing this release does not change, stated plainly: the sync engine itself still has no driver in the app (the four-phase delegate sync has never been invoked from anywhere), so this machinery is dormant until one is wired. That gap is now recorded in the roadmap instead of lurking.
+
+- **A 429 pauses syncing instead of burning quota** (NNW `fe285e217`, `fafd5bd80`). Inoreader's per-application quota is shared by everyone's sync; hammering it after a Too Many Requests only makes things worse. A real 429 now arms a pause honoring `Retry-After`, defaulting to one hour when the header is absent (upstream's sync-side default, deliberately longer than the feed fetcher's 10-minute per-feed cooldown). While the pause is in force, the whole sync cycle skips; an expired pause clears itself.
+- **Status downloads stop near the daily limit** (NNW `2cd0e1781`, `e69cb835a`). Inoreader reports per-zone usage on its responses (`X-Reader-Zone1-Usage` / `-Limit` / `-Limits-Reset-After`). At 90 percent of the Zone 1 (read) limit, the unread and starred item-ID downloads skip until the limits reset, and they skip as a pair so the mark-as-read reconcile can never run without its correcting half.
+- **Sends still go** (NNW `ca5c22098`, #4476). Queued read/star changes send every cycle even when downloads are quota-skipped, because a send is one cheap request while waiting loses stars. A 429 during a send arms the same pause and stops further batches for the cycle.
+- **The subscription and tag lists ride conditional GET** (NNW `e69cb835a`). Both lists now carry etag/last-modified markers stored account-level in the articles database's `db_info` table; a 304 skips the reconcile rather than reconciling against a half-present server picture, and the markers commit only after the reconcile lands, so an interrupted cycle can't 304 away its own retry (the same ordering rule v3.4.0 brought to per-feed conditional GET).
+- **429s are now distinguishable from everything else.** The Reader API caller previously collapsed every non-success status into a placeholder "rate limited" error; arming a pause on that would have stalled an account for an hour over any random 404. A real 429 carries its parsed Retry-After; every other status is a new `HttpStatus` error, and only the genuine article can arm the pause.
+- **One recorded divergence:** upstream logs the rate-limited skip to its Activity Log (`52e78b29c`); viaduct's activity log is window-owned and unreachable from the sync delegate, so the skip and the pause log through `tracing` instead.
+
 ## v3.4.1: the documentation audit (2026-09-04)
 
 A docs-only release out of AUDIT_THREE, the workspace-wide audit: every version carrier disagreed with every other one, and the prose had drifted behind the v3.0.0 de-adwaita shell. No code changes; one packaging fix.

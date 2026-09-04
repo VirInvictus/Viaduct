@@ -962,6 +962,39 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// Read a generic `db_info` value from the articles DB. Account-level
+    /// bookkeeping with no per-feed home; currently the Inoreader sync
+    /// conditional-GET markers stored under `sync-cget-*` keys.
+    pub async fn db_info_get(&self, key: &str) -> Result<Option<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::GetDbInfo {
+                key: key.to_string(),
+                reply: tx,
+            }))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// Upsert a generic `db_info` value in the articles DB. An empty
+    /// string is the "absent" encoding for the sync conditional-GET
+    /// markers.
+    pub async fn db_info_set(&self, key: &str, value: &str) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Articles(ArticlesDbOp::SetDbInfo {
+                key: key.to_string(),
+                value: value.to_string(),
+                reply: tx,
+            }))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
     /// `PRAGMA wal_checkpoint(TRUNCATE)` on both SQLite files. Cheap relative
     /// to `vacuum_databases` (no file rewrite); run every startup so the WAL
     /// stays bounded even when nothing was pruned.

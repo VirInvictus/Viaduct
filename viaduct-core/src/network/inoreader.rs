@@ -187,10 +187,162 @@ pub enum ItemIDType {
     AllForFeed,
 }
 
+/// Inoreader's per-zone API usage, reported on most responses. Zone 1 is
+/// reads. Port of NNW `ReaderAPIUsageLimits` (`2cd0e1781`).
+/// <https://www.inoreader.com/developers/rate-limiting>
+#[derive(Debug, Clone)]
+pub struct ReaderAPIUsageLimits {
+    pub zone1_usage: i64,
+    pub zone1_limit: i64,
+    /// When the daily limits reset: now + `X-Reader-Limits-Reset-After`
+    /// (defaulting to 24 h when the header is absent, like upstream).
+    pub reset_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Etag / Last-Modified pair sent as the account-level conditional GET on
+/// the subscription and tag lists (the shape of NNW
+/// `HTTPConditionalGetInfo`, keyed "subscriptions" / "tags" there; we
+/// persist both under `db_info` keys).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConditionalGetHeaders {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+/// Result of a conditional-GET list call. `items: None` means 304 Not
+/// Modified: the caller must skip the reconcile rather than treat the
+/// list as empty, exactly why NNW's caller returns nil there.
+pub struct ReaderAPIListResult<T> {
+    pub items: Option<Vec<T>>,
+    /// Headers to store for the next conditional GET. Unpopulated after
+    /// a 304.
+    pub conditional_get: ConditionalGetHeaders,
+}
+
+/// Inoreader's rate-limit response headers.
+mod usage_limit_header {
+    pub const ZONE1_USAGE: &str = "X-Reader-Zone1-Usage";
+    pub const ZONE1_LIMIT: &str = "X-Reader-Zone1-Limit";
+    pub const RESET_AFTER: &str = "X-Reader-Limits-Reset-After";
+}
+
+/// Upstream's fallback when `X-Reader-Limits-Reset-After` is absent
+/// (NNW `defaultUsageLimitsResetAfter`): one day, the limits' natural
+/// reset cadence.
+const DEFAULT_USAGE_LIMITS_RESET_AFTER_SECS: i64 = 60 * 60 * 24;
+
+fn header_string(
+    headers: &reqwest::header::HeaderMap,
+    name: impl reqwest::header::AsHeaderName,
+) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn header_i64(
+    headers: &reqwest::header::HeaderMap,
+    name: impl reqwest::header::AsHeaderName,
+) -> Option<i64> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<i64>().ok())
+}
+
+/// Pure parse of the usage-limit header triple; `None` unless both usage
+/// and a positive limit are present (upstream guards `limit > 0` too).
+fn parse_usage_limits(
+    headers: &reqwest::header::HeaderMap,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<ReaderAPIUsageLimits> {
+    let zone1_usage = header_i64(headers, usage_limit_header::ZONE1_USAGE)?;
+    let zone1_limit = header_i64(headers, usage_limit_header::ZONE1_LIMIT)?;
+    if zone1_limit <= 0 {
+        return None;
+    }
+    let reset_after = header_i64(headers, usage_limit_header::RESET_AFTER)
+        .unwrap_or(DEFAULT_USAGE_LIMITS_RESET_AFTER_SECS)
+        .max(0);
+    Some(ReaderAPIUsageLimits {
+        zone1_usage,
+        zone1_limit,
+        reset_at: now + chrono::Duration::seconds(reset_after),
+    })
+}
+
+/// The sync pause's fallback when a 429 omits (or sends an unusable)
+/// `Retry-After`: one hour, NNW `SyncRateLimiter.defaultRetryAfter`
+/// (`fafd5bd80`). Deliberately longer than the feed fetcher's 10-minute
+/// 429 cooldown (`c9bd65b1f`): this quota is shared per application, not
+/// per feed, so backing off harder is the point.
+pub(crate) const SYNC_DEFAULT_RETRY_AFTER_SECS: i64 = 60 * 60;
+
+/// Parsed `Retry-After` for the sync pause; the 1-hour default applies
+/// when the header is absent, unparseable, or non-positive. (An HTTP-date
+/// form is legal but not parsed, matching the feed fetcher's handling.)
+fn sync_retry_after_secs(headers: &reqwest::header::HeaderMap) -> u64 {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(SYNC_DEFAULT_RETRY_AFTER_SECS) as u64
+}
+
+/// Map a non-success response onto the error type, preserving a real 429's
+/// identity and parsed Retry-After so the sync delegate can arm its pause.
+/// Every other status becomes `HttpStatus`. The placeholder
+/// `RateLimited { retry_after_secs: 0 }` values older call sites return
+/// for unrelated failures are distinguishable by convention: this parser
+/// always yields a positive number, so only a genuine 429 ever arms the
+/// pause.
+fn status_error(resp: &reqwest::Response) -> ViaductError {
+    let status = resp.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        ViaductError::Network(NetworkError::RateLimited {
+            retry_after_secs: sync_retry_after_secs(resp.headers()),
+        })
+    } else {
+        ViaductError::Network(NetworkError::HttpStatus(status.as_u16()))
+    }
+}
+
+/// Attach stored conditional-GET markers to a list request.
+fn apply_conditional_get(
+    request: reqwest::RequestBuilder,
+    conditional_get: &ConditionalGetHeaders,
+) -> reqwest::RequestBuilder {
+    let request = match &conditional_get.etag {
+        Some(etag) => request.header(reqwest::header::IF_NONE_MATCH, etag),
+        None => request,
+    };
+    match &conditional_get.last_modified {
+        Some(last_modified) => request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified),
+        None => request,
+    }
+}
+
+/// Extract the next round's markers from a list response. Missing headers
+/// become `None`, which sends nothing next time (a full GET, like
+/// upstream's `HTTPConditionalGetInfo` with absent values).
+fn conditional_get_from_response(headers: &reqwest::header::HeaderMap) -> ConditionalGetHeaders {
+    ConditionalGetHeaders {
+        etag: header_string(headers, reqwest::header::ETAG),
+        last_modified: header_string(headers, reqwest::header::LAST_MODIFIED),
+    }
+}
+
 pub struct ReaderAPICaller {
     client: reqwest::Client,
     variant: ReaderAPIVariant,
     access_token: tokio::sync::RwLock<Option<String>>,
+    /// Most recent Zone 1 usage report, refreshed from the rate-limit
+    /// headers on every sync-path response. `None` for services that
+    /// don't send them.
+    usage_limits: tokio::sync::RwLock<Option<ReaderAPIUsageLimits>>,
 }
 
 impl ReaderAPICaller {
@@ -199,7 +351,23 @@ impl ReaderAPICaller {
             client: reqwest::Client::new(),
             variant,
             access_token: tokio::sync::RwLock::new(None),
+            usage_limits: tokio::sync::RwLock::new(None),
         }
+    }
+
+    /// Record the usage-limit headers of a response, if present. Mirrors
+    /// NNW `noteUsageLimits(from:)`.
+    fn note_usage_limits(&self, headers: &reqwest::header::HeaderMap) {
+        if let Some(limits) = parse_usage_limits(headers, chrono::Utc::now())
+            && let Ok(mut slot) = self.usage_limits.try_write()
+        {
+            *slot = Some(limits);
+        }
+    }
+
+    /// The latest usage report, if any.
+    pub async fn usage_limits(&self) -> Option<ReaderAPIUsageLimits> {
+        self.usage_limits.read().await.clone()
     }
 
     fn api_base_url(&self) -> Url {
@@ -342,58 +510,99 @@ impl ReaderAPICaller {
     pub async fn retrieve_subscriptions(
         &self,
         auth_token: &str,
-    ) -> Result<Vec<ReaderAPISubscription>> {
+        conditional_get: &ConditionalGetHeaders,
+    ) -> Result<ReaderAPIListResult<ReaderAPISubscription>> {
         let url = self
             .api_base_url()
             .join(ReaderAPIEndpoints::SubscriptionList.path())
             .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
-        let mut request = self
+        let request = self
             .client
             .get(url)
             .query(&[("output", "json")])
             .header("Authorization", format!("GoogleLogin auth={}", auth_token));
 
-        request = self.add_variant_headers(request);
+        let request = apply_conditional_get(request, conditional_get);
+        let request = self.add_variant_headers(request);
 
         let resp = request
             .send()
             .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
+
+        // A 304 comes back with an empty body: report it as no list so the
+        // caller skips the reconcile (NNW returns nil for the same reason).
+        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return Ok(ReaderAPIListResult {
+                items: None,
+                conditional_get: ConditionalGetHeaders::default(),
+            });
+        }
+        if !resp.status().is_success() {
+            return Err(status_error(&resp));
+        }
+        self.note_usage_limits(resp.headers());
+        let next_conditional_get = conditional_get_from_response(resp.headers());
 
         let container: ReaderAPISubscriptionContainer = resp
             .json()
             .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        Ok(container.subscriptions)
+        Ok(ReaderAPIListResult {
+            items: Some(container.subscriptions),
+            conditional_get: next_conditional_get,
+        })
     }
 
-    pub async fn retrieve_tags(&self, auth_token: &str) -> Result<Vec<ReaderAPITag>> {
+    pub async fn retrieve_tags(
+        &self,
+        auth_token: &str,
+        conditional_get: &ConditionalGetHeaders,
+    ) -> Result<ReaderAPIListResult<ReaderAPITag>> {
         let url = self
             .api_base_url()
             .join(ReaderAPIEndpoints::TagList.path())
             .map_err(|e| ViaductError::Network(NetworkError::InvalidUrl(e)))?;
-        let mut request = self
+        let request = self
             .client
             .get(url)
             .query(&[("output", "json")])
             .header("Authorization", format!("GoogleLogin auth={}", auth_token));
 
-        if self.variant == ReaderAPIVariant::Inoreader {
-            request = request.query(&[("types", "1")]);
-        }
+        let request = if self.variant == ReaderAPIVariant::Inoreader {
+            request.query(&[("types", "1")])
+        } else {
+            request
+        };
 
-        request = self.add_variant_headers(request);
+        let request = apply_conditional_get(request, conditional_get);
+        let request = self.add_variant_headers(request);
 
         let resp = request
             .send()
             .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
+        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return Ok(ReaderAPIListResult {
+                items: None,
+                conditional_get: ConditionalGetHeaders::default(),
+            });
+        }
+        if !resp.status().is_success() {
+            return Err(status_error(&resp));
+        }
+        self.note_usage_limits(resp.headers());
+        let next_conditional_get = conditional_get_from_response(resp.headers());
+
         let container: ReaderAPITagContainer = resp
             .json()
             .await
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
-        Ok(container.tags)
+        Ok(ReaderAPIListResult {
+            items: Some(container.tags),
+            conditional_get: next_conditional_get,
+        })
     }
 
     pub async fn create_subscription(
@@ -428,7 +637,11 @@ impl ReaderAPICaller {
             })); // Simplified error
         }
 
-        let subscriptions = self.retrieve_subscriptions(auth_token).await?;
+        let subscriptions = self
+            .retrieve_subscriptions(auth_token, &ConditionalGetHeaders::default())
+            .await?
+            .items
+            .unwrap_or_default();
         subscriptions
             .into_iter()
             .find(|s| s.feed_id == result.stream_id)
@@ -655,6 +868,11 @@ impl ReaderAPICaller {
             })
             .await?;
 
+        if !resp.status().is_success() {
+            return Err(status_error(&resp));
+        }
+        self.note_usage_limits(resp.headers());
+
         let wrapper: ReaderAPIEntryWrapper = resp
             .json()
             .await
@@ -717,6 +935,11 @@ impl ReaderAPICaller {
                 .await
                 .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
+            if !resp.status().is_success() {
+                return Err(status_error(&resp));
+            }
+            self.note_usage_limits(resp.headers());
+
             let wrapper: ReaderAPIReferenceWrapper = resp
                 .json()
                 .await
@@ -776,10 +999,9 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            }));
+            return Err(status_error(&resp));
         }
+        self.note_usage_limits(resp.headers());
         Ok(())
     }
 
@@ -888,5 +1110,153 @@ mod tests {
             "tag:google.com,2005:reader/item/0000000000000000"
         );
         assert_eq!(item_id_parameter("feed/not-a-number"), None);
+    }
+
+    fn headers_from(pairs: &[(&str, &str)]) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (name, value) in pairs {
+            headers.insert(
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).expect("valid name"),
+                reqwest::header::HeaderValue::from_str(value).expect("valid value"),
+            );
+        }
+        headers
+    }
+
+    /// NNW `fafd5bd80`: a 429 without a usable `Retry-After` still arms
+    /// the pause, for one hour, not the feed fetcher's 10 minutes.
+    #[test]
+    fn sync_retry_after_defaults_to_one_hour_when_unusable() {
+        assert_eq!(
+            sync_retry_after_secs(&headers_from(&[("Retry-After", "120")])),
+            120
+        );
+        assert_eq!(
+            sync_retry_after_secs(&headers_from(&[])),
+            SYNC_DEFAULT_RETRY_AFTER_SECS as u64
+        );
+        assert_eq!(
+            sync_retry_after_secs(&headers_from(&[("Retry-After", "-5")])),
+            SYNC_DEFAULT_RETRY_AFTER_SECS as u64
+        );
+        assert_eq!(
+            sync_retry_after_secs(&headers_from(&[("Retry-After", " 90 ")])),
+            90
+        );
+    }
+
+    /// NNW `2cd0e1781`: the Zone 1 triple parses into the usage struct,
+    /// with upstream's 24-hour default when the reset header is absent.
+    #[test]
+    fn usage_limits_parse_from_inoreader_headers() {
+        let now = chrono::Utc::now();
+        let full = parse_usage_limits(
+            &headers_from(&[
+                (usage_limit_header::ZONE1_USAGE, "950"),
+                (usage_limit_header::ZONE1_LIMIT, "1000"),
+                (usage_limit_header::RESET_AFTER, "3600"),
+            ]),
+            now,
+        )
+        .expect("parses");
+        assert_eq!(full.zone1_usage, 950);
+        assert_eq!(full.zone1_limit, 1000);
+        assert_eq!(
+            (full.reset_at - now).num_minutes(),
+            60,
+            "reset-after header wins over the default"
+        );
+
+        let defaulted = parse_usage_limits(
+            &headers_from(&[
+                (usage_limit_header::ZONE1_USAGE, "10"),
+                (usage_limit_header::ZONE1_LIMIT, "200"),
+            ]),
+            now,
+        )
+        .expect("parses");
+        assert!(
+            (defaulted.reset_at - now).num_seconds() - DEFAULT_USAGE_LIMITS_RESET_AFTER_SECS <= 1,
+            "absent reset header falls back to 24 h"
+        );
+    }
+
+    /// Upstream guards `limit > 0` and requires both usage headers;
+    /// a partial or degenerate triple reports nothing rather than a
+    /// bogus limit.
+    #[test]
+    fn usage_limits_require_both_headers_and_positive_limit() {
+        let now = chrono::Utc::now();
+        assert!(parse_usage_limits(&headers_from(&[]), now).is_none());
+        assert!(
+            parse_usage_limits(
+                &headers_from(&[(usage_limit_header::ZONE1_LIMIT, "100")]),
+                now
+            )
+            .is_none()
+        );
+        assert!(
+            parse_usage_limits(
+                &headers_from(&[
+                    (usage_limit_header::ZONE1_USAGE, "1"),
+                    (usage_limit_header::ZONE1_LIMIT, "0"),
+                ]),
+                now
+            )
+            .is_none()
+        );
+        assert!(
+            parse_usage_limits(
+                &headers_from(&[
+                    (usage_limit_header::ZONE1_USAGE, "1"),
+                    (usage_limit_header::ZONE1_LIMIT, "not-a-number"),
+                ]),
+                now
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn conditional_get_round_trips_through_headers() {
+        let source = headers_from(&[
+            (reqwest::header::ETAG.as_str(), "\"abc-123\""),
+            (
+                reqwest::header::LAST_MODIFIED.as_str(),
+                "Mon, 24 Aug 2026 12:00:00 GMT",
+            ),
+        ]);
+        let extracted = conditional_get_from_response(&source);
+        assert_eq!(extracted.etag.as_deref(), Some("\"abc-123\""));
+        assert_eq!(
+            extracted.last_modified.as_deref(),
+            Some("Mon, 24 Aug 2026 12:00:00 GMT")
+        );
+
+        // The markers ride the next request as the conditional-GET pair.
+        let built = apply_conditional_get(
+            reqwest::Client::new().get("http://localhost/reader/api/0/tag/list"),
+            &extracted,
+        )
+        .build()
+        .expect("builds");
+        let sent = built.headers();
+        assert_eq!(
+            sent.get(reqwest::header::IF_NONE_MATCH).unwrap(),
+            "\"abc-123\""
+        );
+        assert_eq!(
+            sent.get(reqwest::header::IF_MODIFIED_SINCE).unwrap(),
+            "Mon, 24 Aug 2026 12:00:00 GMT"
+        );
+
+        // No stored markers = no conditional headers = a full GET.
+        let bare = apply_conditional_get(
+            reqwest::Client::new().get("http://localhost/reader/api/0/tag/list"),
+            &ConditionalGetHeaders::default(),
+        )
+        .build()
+        .expect("builds");
+        assert!(bare.headers().get(reqwest::header::IF_NONE_MATCH).is_none());
     }
 }
