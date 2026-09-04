@@ -4,6 +4,7 @@
 
 pub mod date;
 pub mod html;
+pub mod html_url_resolver;
 pub mod json;
 pub mod xml;
 

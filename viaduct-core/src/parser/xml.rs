@@ -5,6 +5,7 @@
 use crate::error::{ParseError, Result};
 use crate::models::{Attachment, Author, ParsedFeed, ParsedItem};
 use crate::parser::date::parse_date_bytes;
+use crate::parser::html_url_resolver::resolving_relative_urls;
 use md5::{Digest, Md5};
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -602,6 +603,8 @@ struct AtomLinkCtx<'a> {
     in_item: bool,
     in_author: bool,
     in_source: bool,
+    /// The xml:base in effect for this link element, if any.
+    xml_base: Option<&'a url::Url>,
     home_page_url: &'a mut Option<String>,
     current_item_permalink: &'a mut Option<String>,
     current_item_link: &'a mut Option<String>,
@@ -647,7 +650,11 @@ fn handle_atom_link_attributes(e: &quick_xml::events::BytesStart, ctx: &mut Atom
             _ => {}
         }
     }
-    let Some(h) = href else { return };
+    // An empty href must not resolve to the base or home URL — upstream's
+    // #5088 suite pins that (WordPress's wp-atom.php feeds carry them).
+    let Some(h) = href.filter(|h| !h.is_empty()) else {
+        return;
+    };
 
     if ctx.in_author {
         // <link> inside <author> is non-standard, but if encountered, treat
@@ -655,12 +662,19 @@ fn handle_atom_link_attributes(e: &quick_xml::events::BytesStart, ctx: &mut Atom
         if let Some(author) = ctx.current_author.as_mut()
             && author.url.is_none()
         {
-            author.url = Some(resolve_url(&h, ctx.home_page_url.as_deref()));
+            author.url = Some(match ctx.xml_base {
+                Some(base) => resolved_url_string(h, Some(base)),
+                None => resolve_url(&h, ctx.home_page_url.as_deref()),
+            });
         }
         return;
     }
 
-    let resolved = resolve_url(&h, ctx.home_page_url.as_deref());
+    // xml:base applies before the home-page fallback (NNW `1d54877be`).
+    let resolved = match ctx.xml_base {
+        Some(base) => resolved_url_string(h, Some(base)),
+        None => resolve_url(&h, ctx.home_page_url.as_deref()),
+    };
     if ctx.in_item {
         match rel {
             AtomLinkRel::Alternate if ctx.current_item_permalink.is_none() => {
@@ -779,6 +793,8 @@ fn atom_handle_text_or_cdata(
     in_author: bool,
     in_source: bool,
     current_tag: &[u8],
+    xml_base: Option<url::Url>,
+    content_type: Option<&str>,
     current_author: &mut Option<MutableAuthor>,
     current_item_title: &mut Option<String>,
     current_item_body: &mut Option<String>,
@@ -795,7 +811,9 @@ fn atom_handle_text_or_cdata(
         match current_tag {
             b"name" => author.name = Some(text_str),
             b"email" => author.email = Some(text_str),
-            b"uri" => author.url = Some(text_str),
+            // xml:base applies to <uri> like any URL field
+            // (NNW `1d54877be`).
+            b"uri" => author.url = Some(resolved_url_string(text_str, xml_base.as_ref())),
             _ => {}
         }
         return;
@@ -811,7 +829,11 @@ fn atom_handle_text_or_cdata(
                 *current_item_title = Some(text_str);
             }
             b"content" if current_item_body.is_none() => {
-                *current_item_body = Some(text_str);
+                *current_item_body = Some(resolved_html_body(
+                    text_str,
+                    content_type,
+                    xml_base.as_ref(),
+                ));
             }
             // NNW d6eb8df7d: <summary> goes into a SEPARATE summary field;
             // it does NOT promote into body when content is missing. The
@@ -819,7 +841,11 @@ fn atom_handle_text_or_cdata(
             // content_html → content_text → summary, so summary-only feeds
             // still render correctly without the parser conflating fields.
             b"summary" if current_item_summary.is_none() => {
-                *current_item_summary = Some(text_str);
+                *current_item_summary = Some(resolved_html_body(
+                    text_str,
+                    content_type,
+                    xml_base.as_ref(),
+                ));
             }
             b"id" if current_item_guid.is_none() => {
                 *current_item_guid = Some(text_str);
@@ -835,10 +861,79 @@ fn atom_handle_text_or_cdata(
     } else {
         match current_tag {
             b"title" if title.is_none() => *title = Some(text_str),
-            b"icon" if icon_url.is_none() => *icon_url = Some(text_str),
-            b"logo" if logo_url.is_none() => *logo_url = Some(text_str),
+            // Feed-level icon / logo resolve against the base in effect
+            // at their element (NNW `1d54877be`); the end-of-parse
+            // home-page fallback below still applies when no base does.
+            b"icon" if icon_url.is_none() => {
+                *icon_url = Some(resolved_url_string(text_str, xml_base.as_ref()))
+            }
+            b"logo" if logo_url.is_none() => {
+                *logo_url = Some(resolved_url_string(text_str, xml_base.as_ref()))
+            }
             _ => {}
         }
+    }
+}
+
+/// RFC 4287 / XML Base: the effective base for an element is its
+/// `xml:base` resolved against the nearest enclosing base — the
+/// document (feed) URL when there is none. A garbage or non-http base
+/// (`tag:`, `urn:`) would poison resolution, so it inherits instead.
+/// Port of NNW `AtomDelegate.pushBaseURL` (`1d54877be`).
+fn effective_base_url(
+    inherited: Option<url::Url>,
+    attrs: &quick_xml::events::BytesStart,
+    document_base: Option<&url::Url>,
+) -> Option<url::Url> {
+    let xml_base = attrs.attributes().filter_map(|a| a.ok()).find_map(|a| {
+        if a.key.as_ref() == b"xml:base" {
+            a.unescape_value().ok().map(|v| v.to_string())
+        } else {
+            None
+        }
+    });
+    let Some(xml_base) = xml_base.filter(|v| !v.is_empty()) else {
+        return inherited;
+    };
+    let outer = inherited.as_ref().or(document_base)?;
+    match outer.join(&xml_base) {
+        Ok(resolved) if matches!(resolved.scheme(), "http" | "https") => Some(resolved),
+        _ => inherited,
+    }
+}
+
+/// Resolves `s` against an `xml:base` when one is in effect and the
+/// value isn't already absolute. Port of NNW `resolvedURLString`: an
+/// absolute (http/https) value passes through, then the base applies,
+/// and the original string survives any failure so the pre-existing
+/// home-page/feed fallbacks downstream stay intact.
+fn resolved_url_string(s: String, xml_base: Option<&url::Url>) -> String {
+    if s.to_ascii_lowercase().starts_with("http") {
+        return s;
+    }
+    if let Some(base) = xml_base
+        && let Ok(resolved) = base.join(&s)
+    {
+        return resolved.to_string();
+    }
+    s
+}
+
+/// Rewrites relative URLs in an escaped-HTML body when an `xml:base` is
+/// in effect. RFC 4287 allows a MIME type as well as the "html"
+/// keyword; `type="text"` (and the absent type, which means text) is
+/// never rewritten. Port of NNW `resolvedHTMLBody`.
+fn resolved_html_body(
+    html: String,
+    content_type: Option<&str>,
+    xml_base: Option<&url::Url>,
+) -> String {
+    let Some(base) = xml_base else {
+        return html;
+    };
+    match content_type {
+        Some(t) if t == "html" || t == "text/html" => resolving_relative_urls(&html, base),
+        _ => html,
     }
 }
 
@@ -878,9 +973,26 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
 
     let mut current_tag: Vec<u8> = Vec::new();
 
+    // Atom xml:base (NNW `1d54877be`, #5088): the effective base per open
+    // element, pushed at every Start and popped at every End so the two
+    // stay exactly in balance. `None` entries mean "inherit only".
+    let document_base: Option<url::Url> = url::Url::parse(feed_url).ok();
+    let mut base_stack: Vec<Option<url::Url>> = Vec::new();
+    // The `type` attribute of the open content/summary element, for the
+    // escaped-HTML resolution gate (html / text/html only).
+    let mut current_content_type: Option<String> = None;
+
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
+                // Every element pushes one entry (the inherited base when
+                // it carries no usable xml:base), so the End arm can pop
+                // unconditionally. Skipped namespaced-subtree elements
+                // push their inherited base too: nothing inside them is
+                // consumed, but the balance is what matters.
+                let inherited = base_stack.last().cloned().flatten();
+                base_stack.push(effective_base_url(inherited, e, document_base.as_ref()));
+
                 if namespace_element_depth > 0 {
                     namespace_element_depth += 1;
                     current_tag.clear();
@@ -917,6 +1029,7 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 if name_ref == b"entry" {
                     in_item = true;
                     in_source = false;
+                    current_content_type = None;
                     current_item_guid = None;
                     current_item_title = None;
                     current_item_body = None;
@@ -932,31 +1045,65 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 } else if in_item
                     && !in_source
                     && (name_ref == b"content" || name_ref == b"summary")
-                    && atom_type_is_xhtml(e)
                 {
-                    // type="xhtml" payloads contain inline XML (per RFC 4287,
-                    // wrapped in a single <div xmlns="...">). Capture the raw
-                    // inner XML and feed it to the renderer as HTML. Without
-                    // this branch quick-xml hands us only the bare text nodes,
-                    // which loses every tag. Per NNW d6eb8df7d: content goes
-                    // to body, summary goes to summary — they don't share a
-                    // slot anymore.
-                    if let Some(inner) = capture_atom_xhtml_inner(&mut reader) {
-                        if name_ref == b"content" && current_item_body.is_none() {
-                            current_item_body = Some(inner);
-                        } else if name_ref == b"summary" && current_item_summary.is_none() {
-                            current_item_summary = Some(inner);
+                    // The element's own `type` attribute gates how the text
+                    // is interpreted, recorded for the Text/CData handlers
+                    // (html / text/html bodies resolve relative URLs; text
+                    // and xhtml take different paths).
+                    current_content_type = e.attributes().filter_map(|a| a.ok()).find_map(|a| {
+                        if a.key.as_ref() == b"type" {
+                            a.unescape_value().ok().map(|v| v.to_string())
+                        } else {
+                            None
                         }
+                    });
+
+                    if atom_type_is_xhtml(e) {
+                        // type="xhtml" payloads contain inline XML (per RFC 4287,
+                        // wrapped in a single <div xmlns="...">). Capture the raw
+                        // inner XML and feed it to the renderer as HTML. Without
+                        // this branch quick-xml hands us only the bare text nodes,
+                        // which loses every tag. Per NNW d6eb8df7d: content goes
+                        // to body, summary goes to summary — they don't share a
+                        // slot anymore.
+                        //
+                        // The element's own base is on the stack (pushed above),
+                        // matching upstream: "the content element is still on the
+                        // stacks here". An xml:base on an element inside the
+                        // captured content is invisible (pass-through emits no
+                        // events) and unsupported, same as upstream. The capture
+                        // consumes the element's End event, so pop its base entry
+                        // here instead of at the End arm.
+                        let inner = capture_atom_xhtml_inner(&mut reader);
+                        let own_base = base_stack.pop().flatten();
+                        current_content_type = None;
+                        if let Some(inner) = inner {
+                            let inner = match own_base.as_ref() {
+                                Some(base) => resolving_relative_urls(&inner, base),
+                                None => inner,
+                            };
+                            if name_ref == b"content" && current_item_body.is_none() {
+                                current_item_body = Some(inner);
+                            } else if name_ref == b"summary" && current_item_summary.is_none() {
+                                current_item_summary = Some(inner);
+                            }
+                        }
+                        current_tag.clear();
                     }
-                    current_tag.clear();
                 } else if name_ref == b"author" {
                     in_author = true;
                     current_author = Some(MutableAuthor::default());
                 } else if name_ref == b"link" {
+                    // The element's own base is already on the stack (pushed
+                    // at arm entry) — reading the stack is the whole job
+                    // here. Re-applying effective_base_url would join a
+                    // relative xml:base onto itself.
+                    let own_base = base_stack.last().cloned().flatten();
                     let mut ctx = AtomLinkCtx {
                         in_item,
                         in_author,
                         in_source,
+                        xml_base: own_base.as_ref(),
                         home_page_url: &mut home_page_url,
                         current_item_permalink: &mut current_item_permalink,
                         current_item_link: &mut current_item_link,
@@ -977,10 +1124,18 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 }
                 let name = e.local_name();
                 if name.as_ref() == b"link" {
+                    // Empty elements never push the stack (self-contained),
+                    // but their OWN xml:base applies to their attributes.
+                    let own_base = effective_base_url(
+                        base_stack.last().cloned().flatten(),
+                        e,
+                        document_base.as_ref(),
+                    );
                     let mut ctx = AtomLinkCtx {
                         in_item,
                         in_author,
                         in_source,
+                        xml_base: own_base.as_ref(),
                         home_page_url: &mut home_page_url,
                         current_item_permalink: &mut current_item_permalink,
                         current_item_link: &mut current_item_link,
@@ -1003,6 +1158,8 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                     in_author,
                     in_source,
                     &current_tag,
+                    base_stack.last().cloned().flatten(),
+                    current_content_type.as_deref(),
                     &mut current_author,
                     &mut current_item_title,
                     &mut current_item_body,
@@ -1033,6 +1190,8 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                     in_author,
                     in_source,
                     &current_tag,
+                    base_stack.last().cloned().flatten(),
+                    current_content_type.as_deref(),
                     &mut current_author,
                     &mut current_item_title,
                     &mut current_item_body,
@@ -1046,6 +1205,9 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 );
             }
             Ok(Event::End(ref e)) => {
+                // Every Start pushed one base entry; pop it before any
+                // branch so the skip / feed-break paths stay balanced.
+                base_stack.pop();
                 if namespace_element_depth > 0 {
                     namespace_element_depth -= 1;
                     current_tag.clear();
@@ -1055,6 +1217,10 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                 let name = e.local_name();
                 let name_ref = name.as_ref();
                 current_tag.clear();
+
+                if name_ref == b"content" || name_ref == b"summary" {
+                    current_content_type = None;
+                }
 
                 // NNW endFeedFound — stop scanning at </feed>.
                 if name_ref == b"feed" {
@@ -1764,5 +1930,221 @@ mod tests {
         let feed = parse_rss(xml.as_bytes(), "https://example.com/feed", false).unwrap();
         assert_eq!(feed.items[0].title.as_deref(), Some("a\u{200D}b"));
         assert_eq!(feed.items[0].content_html.as_deref(), Some("c\u{200C}d"));
+    }
+
+    // MARK: - Atom xml:base (NNW `1d54877be`, #5088)
+
+    /// Pappacoda-shape: a feed-level xml:base resolves the feed icon, the
+    /// entry's alternate link, and the URLs inside xhtml content (src and
+    /// srcset), while the <id> stays verbatim and the xhtml wrapper div
+    /// survives.
+    #[test]
+    fn xml_base_resolves_xhtml_content_and_links() {
+        let xml = r##"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://andrea.pappacoda.it/blog/">
+  <title>pappacoda</title><id>tag:andrea.pappacoda.it,2023</id>
+  <icon>../assets/debian-button.gif</icon>
+  <logo>/andrea_pappacoda.jpg</logo>
+  <entry>
+    <id>tag:andrea.pappacoda.it,2023-06-09:c_su_windows</id>
+    <title>C su Windows</title>
+    <updated>2023-06-09T00:00:00Z</updated>
+    <link rel="alternate" href="c_su_windows/"/>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">
+      <img src="c_su_windows/c_su_windows_visual_studio_componenti.png"
+           srcset="c_su_windows/c_su_windows_visual_studio_componenti_light.png 1x"/>
+    </div></content>
+  </entry>
+</feed>"##;
+        let feed =
+            parse_atom(xml.as_bytes(), "https://andrea.pappacoda.it/blog/feed.atom").unwrap();
+
+        // Root-relative icon resolves against the feed-level base; the
+        // logo (root-relative with a slash) resolves to the site root.
+        assert_eq!(
+            feed.icon_url.as_deref(),
+            Some("https://andrea.pappacoda.it/assets/debian-button.gif")
+        );
+
+        let item = feed.items.first().expect("entry");
+        assert_eq!(
+            item.url.as_deref(),
+            Some("https://andrea.pappacoda.it/blog/c_su_windows/")
+        );
+        // <id> is never resolved, even though it looks nothing like the base.
+        assert_eq!(item.id, "tag:andrea.pappacoda.it,2023-06-09:c_su_windows");
+
+        let html = item.content_html.as_deref().expect("xhtml content");
+        assert!(html.contains(r#"src="https://andrea.pappacoda.it/blog/c_su_windows/c_su_windows_visual_studio_componenti.png""#));
+        assert!(html.contains(r#"srcset="https://andrea.pappacoda.it/blog/c_su_windows/c_su_windows_visual_studio_componenti_light.png 1x""#));
+        // The xhtml wrapper still comes through verbatim.
+        assert!(html.contains(r#"xmlns="http://www.w3.org/1999/xhtml""#));
+    }
+
+    /// A feed-level base and a relative content-level base compose, a
+    /// relative entry link resolves against xml:base rather than the
+    /// homepage fallback, and an xml:base on the link element itself
+    /// wins (upstream nestedRelativeXMLBase, 1:1).
+    #[test]
+    fn nested_relative_xml_base_composes() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://example.com/blog/">
+  <title>t</title><id>urn:t</id>
+  <link rel="alternate" href="https://homepage.example.org/"/>
+  <entry>
+    <id>urn:t:1</id>
+    <title>nested base</title>
+    <updated>2020-05-01T00:00:00Z</updated>
+    <link rel="alternate" href="post1/"/>
+    <link rel="related" xml:base="https://elsewhere.example.net/dir/" href="related.html"/>
+    <content type="html" xml:base="post1/">&lt;a href="pic.png"&gt;pic&lt;/a&gt;</content>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml.as_bytes(), "https://example.com/blog/feed.atom").unwrap();
+        let item = feed.items.first().expect("entry");
+
+        assert_eq!(item.url.as_deref(), Some("https://example.com/blog/post1/"));
+        assert_eq!(
+            item.external_url.as_deref(),
+            Some("https://elsewhere.example.net/dir/related.html")
+        );
+        let html = item.content_html.as_deref().expect("content");
+        assert!(html.contains(r#"href="https://example.com/blog/post1/pic.png""#));
+    }
+
+    /// RFC 4287 allows type="text/html" as well as type="html"; a
+    /// relative xml:base with no enclosing base resolves against the
+    /// document (feed) URL; a type="text" body is never rewritten; and a
+    /// garbage (non-http) xml:base inherits instead of poisoning.
+    #[test]
+    fn content_type_gates_and_base_fallbacks() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>t</title><id>urn:t</id>
+  <entry>
+    <id>urn:t:1</id>
+    <title>mime type html</title>
+    <updated>2020-05-01T00:00:00Z</updated>
+    <content type="text/html" xml:base="https://example.com/post/">&lt;img src="pic.png"&gt;</content>
+  </entry>
+  <entry>
+    <id>/2024/04/23/qemu-9-0-0</id>
+    <title>release</title>
+    <updated>2024-04-23T23:02:00Z</updated>
+    <content type="html" xml:base="/2024/04/23/qemu-9-0-0/">&lt;a href="changelog.html"&gt;changelog&lt;/a&gt;</content>
+  </entry>
+  <entry>
+    <id>urn:t:3</id>
+    <title>text content</title>
+    <updated>2020-05-01T00:00:00Z</updated>
+    <content type="text" xml:base="https://example.com/post/">See src="pic.png" for details.</content>
+  </entry>
+  <entry>
+    <id>urn:t:4</id>
+    <title>garbage base inherits</title>
+    <updated>2020-05-01T00:00:00Z</updated>
+    <link rel="alternate" xml:base="urn:whatever" href="elsewhere/"/>
+    <content type="html">&lt;img src="raw.png"&gt;</content>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml.as_bytes(), "https://www.qemu.org/feed.xml").unwrap();
+
+        // type="text/html" resolves.
+        let html = feed.items[0].content_html.as_deref().unwrap();
+        assert!(html.contains(r#"src="https://example.com/post/pic.png""#));
+
+        // A relative-looking <id> stays verbatim; the relative content-level
+        // xml:base composed against the feed URL resolves the body.
+        assert_eq!(feed.items[1].id, "/2024/04/23/qemu-9-0-0");
+        let html = feed.items[1].content_html.as_deref().unwrap();
+        assert!(
+            html.contains(r#"href="https://www.qemu.org/2024/04/23/qemu-9-0-0/changelog.html""#)
+        );
+
+        // type="text" is never rewritten.
+        let html = feed.items[2].content_html.as_deref().unwrap();
+        assert!(html.contains(r#"src="pic.png""#));
+
+        // The urn: xml:base is not usable, so the entry inherits: the link
+        // falls back to the home-page-less path and stays relative, and the
+        // body resolves against nothing.
+        let item = &feed.items[3];
+        assert_eq!(item.url.as_deref(), Some("elsewhere/"));
+        let html = item.content_html.as_deref().unwrap();
+        assert!(html.contains(r#"src="raw.png""#));
+    }
+
+    /// Fragment-only hrefs in bodies stay fragment-only (the footnote
+    /// links depend on it), and an empty link href must not resolve to
+    /// the base or home URL (upstream's OneFootTsunami assertions).
+    #[test]
+    fn fragment_and_empty_hrefs_survive_xml_base() {
+        let xml = r##"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://example.com/blog/">
+  <title>t</title><id>urn:t</id>
+  <entry>
+    <id>urn:t:1</id>
+    <title>footnotes</title>
+    <updated>2020-05-01T00:00:00Z</updated>
+    <link rel="alternate" href=""/>
+    <content type="html">&lt;a href="#fn1"&gt;1&lt;/a&gt; &lt;img src="pic.png"&gt;</content>
+  </entry>
+</feed>"##;
+        let feed = parse_atom(xml.as_bytes(), "https://example.com/blog/feed.atom").unwrap();
+        let item = feed.items.first().expect("entry");
+
+        // Empty href: the link is skipped entirely rather than resolving
+        // to the base.
+        assert_eq!(item.url, None);
+
+        let html = item.content_html.as_deref().unwrap();
+        assert!(
+            html.contains(r##"href="#fn1""##),
+            "fragment-only hrefs must stay fragment-only"
+        );
+        assert!(html.contains(r#"src="https://example.com/blog/pic.png""#));
+    }
+
+    /// A summary with its own xml:base resolves at parse time. Ours keeps
+    /// the summary in its own field (the render fallback chain prefers
+    /// content, then summary), so this asserts on `summary`.
+    #[test]
+    fn summary_with_xml_base_resolves() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>t</title><id>urn:t</id>
+  <entry>
+    <id>urn:t:1</id>
+    <title>summary only</title>
+    <updated>2020-05-01T00:00:00Z</updated>
+    <summary type="html" xml:base="https://example.com/post/">&lt;img src="pic.png"&gt;</summary>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml.as_bytes(), "https://example.com/feed.atom").unwrap();
+        let item = feed.items.first().expect("entry");
+        let html = item.summary.as_deref().expect("summary");
+        assert!(html.contains(r#"src="https://example.com/post/pic.png""#));
+    }
+
+    /// A relative author <uri> resolves against the base in effect.
+    #[test]
+    fn relative_author_uri_resolves_against_xml_base() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://example.com/blog/">
+  <title>t</title><id>urn:t</id>
+  <entry>
+    <id>urn:t:1</id>
+    <title>relative author uri</title>
+    <updated>2020-05-01T00:00:00Z</updated>
+    <author><name>Alice</name><uri>about/</uri></author>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml.as_bytes(), "https://example.com/blog/feed.atom").unwrap();
+        let item = feed.items.first().expect("entry");
+        let author = item.authors.first().expect("author");
+        assert_eq!(
+            author.url.as_deref(),
+            Some("https://example.com/blog/about/")
+        );
     }
 }

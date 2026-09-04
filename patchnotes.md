@@ -1,5 +1,13 @@
 # viaduct: Patch Notes
 
+## v3.7.0: Atom xml:base (2026-09-04)
+
+The last port off the September upstream window: Atom feeds that declare `xml:base` now resolve their relative URLs the way NetNewsWire does upstream (#5088). Sixteen new tests (a byte-scanner suite plus parser fixtures); 214 pass.
+
+- **What it fixes.** A feed whose entries declare `xml:base` pointing somewhere other than the feed URL used to render every relative link, image, and enclosure broken, because rendering applied a `<base href>` of the article's own URL. The parser now tracks the xml:base stack (feed, entry, and any element in between; each relative base composes against its enclosing one) and resolves the entry's links, author URIs, and the feed's icon/logo at parse time, while relative URLs inside `type="html"`, `type="text/html"`, and `type="xhtml"` bodies are rewritten by a byte-level port of upstream's `HTMLRelativeURLResolver`: href/src/poster resolve, srcset candidates resolve individually, script and style bodies are skipped, comments and CDATA pass through unscanned, fragment-only (`#fn1`) and already-schemed values stay untouched, and unquoted values end at whitespace or `>` per the HTML rules.
+- **Guardrails that ride the port.** `type="text"` (and no type at all) is never rewritten; a garbage or non-http `xml:base` (`urn:`, `tag:`) is ignored in favor of the enclosing base rather than poisoning resolution; and an empty link href is now skipped entirely instead of resolving to the home page, which is what upstream's suite pins and what viaduct previously did.
+- **Recorded divergences.** URL normalization and strictness differ in detail between Foundation and the `url` crate (the crate percent-encodes values Foundation would reject); a rewritten value can differ in encoding detail while resolving to the same URL.
+
 ## v3.6.0: the sync engine goes live (2026-09-04)
 
 One unblocking change and two throttle ports. 198 tests pass, up five; clippy `-D warnings` clean.
