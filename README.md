@@ -78,6 +78,10 @@ Viaduct targets **GTK 4.16+ / WebKitGTK 6.0** on Wayland (Hyprland, GNOME, or an
 | SQLite (bundled) | — | — | — |
 | TLS | rustls (vendored) | — | — |
 
+### Runtime requirements
+
+Preferences live in GSettings, which needs only a D-Bus session bus and a running `dconf` service: both present on any mainstream Wayland session, Hyprland included. There is no GNOME Shell dependency; notifications go through whichever freedesktop notification daemon you run, and the tray icon follows the StatusNotifier spec.
+
 WebKitGTK 6.0 powers the article reading pane. It runs in a heavily-neutered configuration (JavaScript disabled, no plugins, no local storage, strict CSP), used purely for CSS typography fidelity. See `spec.md` §2.2 for the threat-model writeup.
 
 ```bash

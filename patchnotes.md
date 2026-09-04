@@ -1,5 +1,15 @@
 # viaduct: Patch Notes
 
+## v3.7.2: the inspectable half of the verification tail (2026-09-04)
+
+Three of the Phase 20f verification items turned out to be closable without launching anything, and are now closed with their method recorded:
+
+- The **app-id invariant** (20f): the GTK4 `application_id` and the `.desktop` basename match exactly, the desktop file carries no `StartupWMClass` line, and none should ever be added — the id and the basename are one string by design.
+- The **CSD invariant** (20f): the window's titlebar child is an invisible `GtkHeaderBar` and every functional control lives in per-pane header bars; no code path depends on a compositor-drawn title bar.
+- The **dconf documentation** (20f): README gains a Runtime requirements section (a D-Bus session bus and a running dconf service; no GNOME Shell dependency), and the path was verified headlessly on the Hyprland session — schema compiled to a temp dir, `gsettings get/set/reset` round-tripped through dconf without GNOME Shell running.
+
+Also documented: README now states the runtime requirements explicitly. No code changes.
+
 ## v3.7.1: hardened against the real feed (2026-09-04)
 
 Test-only release. Upstream validated its xml:base work against `pappacoda.atom`, Andrea Pappacoda's actual blog feed and the live case behind #5088; that file now ships in viaduct's test resources byte-for-byte, and upstream's `xmlBaseResolvesRelativeURLsInXHTMLContent` is ported 1:1 as an integration test through the public `parse` API (assertions mapped to viaduct's field shapes: one icon_url with icon preferred, and Atom ids kept verbatim). 215 tests pass. No code changes.
