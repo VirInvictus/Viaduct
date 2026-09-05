@@ -3536,8 +3536,8 @@ dependencies = [
 
 [[package]]
 name = "vir-gtk"
-version = "1.0.2"
-source = "git+https://github.com/VirInvictus/vir-gtk.git#1ac027a46c2e4f0a37399041132eb0f597e3fc1a"
+version = "1.0.3"
+source = "git+https://github.com/VirInvictus/vir-gtk.git#58e6aca5fa0183a690bd65def71709bbe073da0b"
 dependencies = [
  "gtk4",
  "tracing",
