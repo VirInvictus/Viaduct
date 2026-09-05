@@ -12,7 +12,7 @@
 
 viaduct is a fast, native Linux RSS reader (GTK4, no libadwaita as of v3.0.0) achieving full feature-parity with NetNewsWire's **local and Inoreader accounts**. It is a direct translation of the NetNewsWire architectural philosophy (strict background threading, aggressive SQLite caching, and native text rendering) into the Linux ecosystem via Rust and GTK4. It runs on GNOME, Hyprland, or any Wayland desktop.
 
-Design philosophy: **Speed and Data Sovereignty.** viaduct handles massive subscription lists without locking the UI thread. It targets idle RAM of **100–300 MB** and a hard peak ceiling of **500 MB**, trading ultra-minimalist asceticism for rock-solid performance and offline image caching. Other remote sync engines are out of scope; the app supports local accounts and Inoreader sync.
+Design philosophy: **Speed and Data Sovereignty.** viaduct handles massive subscription lists without locking the UI thread. It targets the memory envelope set in §10: idle in the 400–500 MB band with realistic peak under 600 MB (the original "idle 100–300 MB, peak 500 MB" target proved unreachable under the toolkit; §11 is the post-mortem), trading ultra-minimalist asceticism for rock-solid performance and offline image caching. Other remote sync engines are out of scope; the app supports local accounts and Inoreader sync.
 
 ---
 
@@ -142,10 +142,10 @@ Virtual feeds generated dynamically via SQLite queries, automatically updating a
 * **All Unread:** Global unread aggregate.
 * **Starred/Saved:** User-flagged articles retained indefinitely.
 
-### 4.2 Local Account (Only Account in v1.0)
-viaduct ships a single account type in v1.0: **Local**. OPML intake, direct RSS/Atom/JSON Feed fetching, all state stored on disk under `$XDG_DATA_HOME/viaduct/`.
+### 4.2 Accounts (Local Shipped in v1.0; Inoreader Shipped Post-1.0)
+viaduct shipped a single account type in v1.0: **Local**. OPML intake, direct RSS/Atom/JSON Feed fetching, all state stored on disk under `$XDG_DATA_HOME/viaduct/`.
 
-Remote sync engines (Feedbin, Miniflux, FreshRSS, CloudKit, NewsBlur, Inoreader) are explicitly out of scope for v1.0. They may be added post-1.0, but only if they can be implemented without compromising the local-first architecture or the RAM budget.
+Inoreader sync shipped post-1.0 (v3.6.0) and is a first-class account type alongside Local, driven once per refresh cycle. The remaining remote sync engines (Feedbin, Miniflux, FreshRSS, CloudKit, NewsBlur) are explicitly out of scope. They may be added someday, but only if they can be implemented without compromising the local-first architecture or the RAM budget (§10).
 
 ### 4.3 Reader View (Optional, RAM-Gated)
 A local Readability-style extractor for truncated feeds. Runs on-demand only (hotkey or toolbar), never eagerly, and is gated by the 500 MB peak-RAM ceiling. If the extractor can't hit that budget running in-process, it either runs in a short-lived subprocess or is cut from v1.0. NetNewsWire's Reader View calls a remote Mercury service, which is not an option here.
