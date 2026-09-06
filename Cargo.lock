@@ -3536,11 +3536,10 @@ dependencies = [
 
 [[package]]
 name = "vir-gtk"
-version = "1.0.3"
-source = "git+https://github.com/VirInvictus/vir-gtk.git#58e6aca5fa0183a690bd65def71709bbe073da0b"
+version = "1.0.4"
+source = "git+https://github.com/VirInvictus/vir-gtk.git#864fe822a07950df4394f900e1062ef04bf60bc3"
 dependencies = [
  "gtk4",
- "tracing",
 ]
 
 [[package]]

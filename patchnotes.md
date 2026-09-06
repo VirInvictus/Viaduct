@@ -1,5 +1,9 @@
 # viaduct: Patch Notes
 
+## Unreleased
+
+- **Changed:** vir-gtk adopted at 1.0.4 (the consumer wave): the shared portal's listener broadcast no longer panics when a listener re-enters mid-broadcast. No Viaduct code changes required. Also recording the earlier 1.0.3 adoption (thread-safe portal state, non-blocking init, provider replacement), whose lock moved at commit 9e5d646 without the patchnotes line it owed.
+
 ## v3.7.3: feed discovery on ranchero.com-style pages (2026-09-04)
 
 A fix that was a long-standing blind spot: pages writing their `<link>` tags with unquoted attribute values — valid HTML5, and the house style at ranchero.com — produced zero feed-link and zero favicon candidates in viaduct. The old scan handed the page to an XML attribute parser, which rejects `href=https://…` outright; every attribute of every tag failed, so neither Add Feed's website path nor favicon discovery could see such a site at all. This is the viaduct twin of NetNewsWire's `d1eaf7676` (their scanner had the inverse bug: `/` terminated unquoted values, truncating `href=https://…` mid-URL).
