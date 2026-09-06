@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Changed:** vir-gtk adopted at 1.1.0: the shared base stylesheet (`base_css`) now carries the unanimous flat/square widget core at the crate tier (USER + 1) alongside the `--c-*` properties block, and theme.rs shrinks to Viaduct's own overrides and classes on `install_app_stylesheet` (USER + 2). The hand-rolled provider swap in theme.rs is gone, subsumed by the crate's per-tier tracking. Viaduct keeps its var()-based sheet and its deliberate divergences (transparent lists, solid selection, card-toned entries, destructive text on window background).
 - **Changed:** vir-gtk adopted at 1.0.4 (the consumer wave): the shared portal's listener broadcast no longer panics when a listener re-enters mid-broadcast. No Viaduct code changes required. Also recording the earlier 1.0.3 adoption (thread-safe portal state, non-blocking init, provider replacement), whose lock moved at commit 9e5d646 without the patchnotes line it owed.
 
 ## v3.7.3: feed discovery on ranchero.com-style pages (2026-09-04)
