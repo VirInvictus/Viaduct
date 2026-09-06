@@ -333,11 +333,15 @@ Two rules bind throughout, unchanged: **no regression for a GNOME user** (behavi
 
 Take the pilot's **weak-ref redraw registry** with it: the migration there exposed a real leak where per-widget `connect_dark_notify` closures accumulated on the singleton and were never disconnected.
 
+**Since the vir-gtk adoption (2026-09-06):** this machinery lives in the shared `vir_gtk::portal` crate; viaduct's `theme.rs` is a delegating shim (`init` passes the `color-scheme` key and `default_dark = false`, keeping the recorded light default). The behavior contract above is unchanged.
+
 **The eight NNW article themes are byte-for-byte cargo and do not change.** Their resolution path did: `select_for_dark_mode` (`article_renderer.rs`) and the Adwaita theme's `prefers-color-scheme` handling now read `theme::is_dark()` (portal) instead of `AdwStyleManager`. **Resolved in v3.0.0:** the Adwaita article theme's `accent_hex: None` used to inherit the libadwaita system accent; with libadwaita gone it contributes no accent override at all (the theme's own stylesheet colours apply), and the whole GTK chrome is Kanagawa via the owned sheet rather than following the article theme.
 
 ### 12.4 The owned stylesheet
 
 A single `theme.rs`: one `const STRUCTURE: &str` plus a `format!` interpolating the palette into `:root` `--c-*` custom properties. No `.css` file, no build script, no codegen. Flat, square, hard borders, no shadows, denser spacing. Existing adwaita class *names* are kept (`heading`, `dim-label`, `card`, `boxed-list`, `suggested-action`, `flat`) with owned definitions, so `.ui` churn is zero. Coverage must include the GTK-default gaps that read as foreign once adwaita's sheet is gone: menu popovers, tooltips, scrollbars, text selection, focus outline.
+
+**Since the vir-gtk 1.1.0 adoption (2026-09-06):** the flat/square base sheet and the palette interpolation are shared (`vir_gtk::theme::base_css` plus the `--c-*` properties block, crate tier USER + 1); `theme.rs` keeps `APP_SHEET`, Viaduct's own overrides and classes over those vars, at USER + 2. The contract below is unchanged in substance; it is now split across the two tiers.
 
 Two non-negotiables, both inherited as lessons rather than preferences:
 
