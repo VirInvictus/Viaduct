@@ -1,6 +1,6 @@
 # viaduct: Application Specification
 
-**Version:** 3.7.4  
+**Version:** 3.7.5  
 **Target:** GTK4 ≥ 4.16, WebKitGTK 6.0, Wayland (Hyprland or GNOME). *(libadwaita dropped in v3.0.0; §12 is the post-libadwaita design contract.)*  
 **Language:** Rust (2024 Edition)  
 **Build System:** Cargo workspace (`viaduct-core` + `viaduct`) / Meson wrapper for Flatpak packaging  
@@ -223,7 +223,7 @@ viaduct is packaged as a Flatpak-first application.
 
 * **Permissions:** Strictly locked down.
     * `network`: Required for feed fetching.
-    * `xdg-run/dconf` + `device=dconf`: Required for the GSettings/dconf backend (present on any Wayland session, not GNOME-specific). The manifest omitted both until v3.4.1, which meant sandboxed preference writes (article theme, refresh cadence, run-in-background) had nowhere to land; the finish-args now grant the standard GSettings-app pair.
+    * `xdg-run/dconf`: Required for the GSettings/dconf backend (present on any Wayland session, not GNOME-specific). The manifest omitted it until v3.4.1, which meant sandboxed preference writes (article theme, refresh cadence, run-in-background) had nowhere to land. v3.4.1 also granted a `device=dconf` permission, which flatpak itself rejects (`Unknown device type dconf`; valid device types are dri, all, kvm, shm, input, usb); the spurious grant was removed in v3.7.5 when the first full build-verify caught it, and the filesystem socket grant is the whole requirement.
     * No arbitrary home directory access. OPML import/export handled entirely via `org.freedesktop.portal.FileChooser`.
 * **Background Daemon:** App is configured to support background execution permissions via portals, allowing it to sync on a cron schedule even when the UI is closed.
 

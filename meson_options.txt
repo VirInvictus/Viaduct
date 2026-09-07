@@ -1,0 +1,19 @@
+# The SVG app icons (scalable + symbolic) install by default so from-source
+# and distro builds ship the crisp vector and the monochrome glyph. The
+# Flatpak build disables them (`-Dsvg-icons=false` in
+# org.virinvictus.Viaduct.json): both appstreamcli compose (through
+# GdkPixbuf) and the export-stage icon validation load every icon file, and
+# the GNOME 50 stacks have no working SVG loader in that path at all, so any
+# SVG in the Flatpak payload aborts the build ("Unrecognized image file
+# format"). The 256x256 and 512x512 PNG rasters cover the Flatpak; Flathub
+# asks for rasters anyway.
+option('svg-icons', type: 'boolean', value: true,
+  description: 'Install the scalable and symbolic SVG app icons in addition to the PNG rasters')
+
+# Exec line for the D-Bus activation service file. Empty (the default)
+# points at bindir/viaduct, correct for from-source and distro installs.
+# The Flatpak passes the flatpak-run wrapper, because the service file is
+# read by the host session bus, where neither the bare binary nor the
+# sandboxed /app prefix exists.
+option('dbus-service-exec', type: 'string', value: '',
+  description: 'Exec line for the D-Bus activation service file (empty: bindir/viaduct)')

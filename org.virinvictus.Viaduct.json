@@ -12,7 +12,6 @@
         "--socket=fallback-x11",
         "--socket=wayland",
         "--device=dri",
-        "--device=dconf",
         "--share=network",
         "--filesystem=xdg-run/dconf",
         "--talk-name=org.freedesktop.secrets",
@@ -20,6 +19,9 @@
     ],
     "build-options": {
         "append-path": "/usr/lib/sdk/rust-stable/bin",
+        "build-args": [
+            "--share=network"
+        ],
         "env": {
             "CARGO_HOME": "/run/build/viaduct/cargo"
         }
@@ -30,7 +32,9 @@
             "buildsystem": "meson",
             "config-opts": [
                 "--prefix=/app",
-                "--buildtype=release"
+                "--buildtype=release",
+                "-Dsvg-icons=false",
+                "-Ddbus-service-exec=/usr/bin/flatpak run --command=viaduct org.virinvictus.Viaduct"
             ],
             "sources": [
                 {

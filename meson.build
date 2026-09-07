@@ -18,7 +18,7 @@
 project(
   'viaduct',
   'rust',
-  version: '3.7.4',
+  version: '3.7.5',
   meson_version: '>= 0.59.0',
   license: 'MIT',
 )
@@ -91,18 +91,51 @@ install_data(
   rename: application_id + '.metainfo.xml',
 )
 
-# Application icon. Scalable SVG covers every desktop-environment size; the
-# symbolic SVG is for places GTK draws monochrome glyphs (sidebars, menus,
-# tray indicators). hicolor is the freedesktop fallback theme that every
-# real icon theme inherits from, so installing here makes the icon available
-# regardless of the user's active theme.
+# D-Bus activation service file. The desktop file sets DBusActivatable=true,
+# and flatpak's export stage hard-requires the matching service file. From
+# source, Exec points at the installed binary; the Flatpak overrides it with
+# the flatpak-run wrapper (-Ddbus-service-exec in the manifest), because the
+# service file is read by the HOST session bus, where the bare binary is not
+# on PATH.
+service_exec = get_option('dbus-service-exec')
+if service_exec == ''
+  service_exec = bindir / 'viaduct'
+endif
+service_conf = configuration_data()
+service_conf.set('APPLICATION_ID', application_id)
+service_conf.set('SERVICE_EXEC', service_exec)
+configure_file(
+  input: 'data/' + application_id + '.service.in',
+  output: application_id + '.service',
+  configuration: service_conf,
+  install: true,
+  install_dir: datadir / 'dbus-1' / 'services',
+)
+
+# Application icon. The PNG rasters exist because appstreamcli compose and
+# the export-stage icon validation read icons through GdkPixbuf, and the
+# GNOME 50 stacks have no working SVG loader in that path (see
+# meson_options.txt); Flathub also asks for rasters. The scalable and
+# symbolic SVGs are the default everywhere else. hicolor is the freedesktop
+# fallback theme that every real icon theme inherits from, so installing
+# here makes the icon available regardless of the user's active theme.
+if get_option('svg-icons')
+  install_data(
+    'data/icons/hicolor/scalable/apps/' + application_id + '.svg',
+    install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'apps',
+  )
+  install_data(
+    'data/icons/hicolor/symbolic/apps/' + application_id + '-symbolic.svg',
+    install_dir: datadir / 'icons' / 'hicolor' / 'symbolic' / 'apps',
+  )
+endif
 install_data(
-  'data/icons/hicolor/scalable/apps/' + application_id + '.svg',
-  install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'apps',
+  'data/icons/hicolor/256x256/apps/' + application_id + '.png',
+  install_dir: datadir / 'icons' / 'hicolor' / '256x256' / 'apps',
 )
 install_data(
-  'data/icons/hicolor/symbolic/apps/' + application_id + '-symbolic.svg',
-  install_dir: datadir / 'icons' / 'hicolor' / 'symbolic' / 'apps',
+  'data/icons/hicolor/512x512/apps/' + application_id + '.png',
+  install_dir: datadir / 'icons' / 'hicolor' / '512x512' / 'apps',
 )
 
 summary({

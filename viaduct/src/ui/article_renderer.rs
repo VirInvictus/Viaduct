@@ -64,6 +64,14 @@ html, body {\n\
   overflow: auto !important;\n\
   height: auto !important;\n\
 }\n\
+/* v3.7.5 (NNW `808403b00`): reserve the scrollbar gutter on `html` so\n\
+ * the article's leading edge stays put when the scrollbar appears or\n\
+ * disappears between a long article and a short one, instead of\n\
+ * reflowing every line. On a WebKit build without the property the\n\
+ * declaration simply drops out. */\n\
+html {\n\
+  scrollbar-gutter: stable;\n\
+}\n\
 /* v2.0.0-pre6: thinner scrollbar driven by `currentColor` so the\n\
  * thumb adopts the page's text color (which respects\n\
  * `prefers-color-scheme` already) — closer to libadwaita's overlay\n\
@@ -1056,6 +1064,21 @@ mod tests {
         assert!(!is_openable_url("viaduct-img://i/https%3A%2F%2Fx"));
         assert!(!is_openable_url("unknown-scheme:thing"));
         assert!(!is_openable_url("/relative/path"));
+    }
+
+    // --- scrollbar-gutter: stable (NNW `808403b00`) ---
+
+    #[test]
+    fn pane_override_css_reserves_the_scrollbar_gutter() {
+        // The rule rides on `html`, the scroll container, exactly as
+        // upstream's core.css has it. Note: the `\`-continuations in the
+        // const strip each line's source indentation, so the runtime
+        // bytes carry none.
+        assert!(VIADUCT_PANE_OVERRIDE_CSS.contains("html {\nscrollbar-gutter: stable;\n}"));
+        // The gutter reservation must not come with losing the overflow
+        // override: `hidden` here would clip long articles again (the
+        // v1.1.0-pre1.6 bug that motivated this sheet).
+        assert!(VIADUCT_PANE_OVERRIDE_CSS.contains("overflow: auto !important;"));
     }
 
     // --- extract_body_fragment (NNW `85e527b0a`, #3008) ---
