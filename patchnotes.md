@@ -1,5 +1,9 @@
 # viaduct: Patch Notes
 
+## Unreleased
+
+- **Changed:** vir-gtk adopted at 1.2.0 (the consumer wave): the StyleManager lifecycle API and the StyleScope/ThemeChoice per-window overrides are opt-in additions; Viaduct's theme shim and its `default_dark = false` light default are unchanged. Lock-only wave, no code changes required; suite green on the moved lock.
+
 ## v3.7.5: stable scrollbar gutter and the Flatpak builds again (2026-09-06)
 
 One port off the deferred list, and the packaging gate that has been open since the runtime bump finally closed.
