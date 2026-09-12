@@ -560,3 +560,46 @@ Findings 1-6 from the 2026-09-06 blitz audit (`audit/Viaduct/full-roadmap.md`), 
 - [x] The dark/light hands-on item's theme.rs prose (Phase 20 GNOME-independence section) described the pre-vir-gtk implementation: the in-file portal read, the `re_resolve` funnel, the weak-owner registry. It now describes the shim over `vir_gtk::portal` with `default_dark = false`; the hands-on pass itself stays valid. The same drift in CLAUDE.md's theme.rs entry and spec §12.3/§12.4's mechanism notes got the same refresh. *(Corrected 2026-09-06.)*
 - [x] The Phase 17 Flathub box said "v1.6.0 is the existing stable tag"; nine annotated tags now exist (v1.6.0 through v3.7.3). Refreshed to cite v3.7.3. *(Refreshed 2026-09-06.)*
 
+
+## New findings 2026-09-12 (six-lens full audit; detail: audit/FULL-AUDIT-2026-09-12.md, Wave 3)
+
+- [ ] **Unbounded-download family (the memory ceilings are not enforced
+      on the most exposed input):** feed bodies buffer with no size cap
+      (fetcher.rs:202); favicon discovery downloads whole pages then
+      truncates (favicon_discovery.rs:79); Reader View enforces its 5MB
+      cap after the download (reader_view.rs:118); add-feed discovery
+      unbounded. Fix: one shared streamed capped-get.
+- [ ] **Security polish in the neutered-WebKit story:** feed-controlled
+      URLs are substituted into href attributes unescaped
+      (article_renderer.rs:937 + parser pass-through) - attribute
+      breakout today, XSS if JS-off is ever relaxed. Escape both fields
+      and/or URL-validate at resolve_url. Also: sanitized_title(for_html)
+      preserves attributes on allowlisted tags (documented NNW parity).
+- [ ] **Spec says Inoreader OAuth; the code is ClientLogin storing the
+      account password via oo7, and the INOREADER_APP_ID/KEY build env
+      vars are undocumented.** Fix the spec line + document the env vars
+      (an actual OAuth migration is a separate product decision).
+- [ ] **Tray spawn block_on inside the GTK main loop** (tray.rs:219,
+      violates lib.rs's own contract); GUI never runs startup roll-forward
+      recovery of in_progress sync jobs; mid-body network failures become
+      empty 200s; timeline SELECT * retains full bodies unbounded; dead
+      FetchRequestQueue; v1.3 placeholders; fc-cache on the main thread.
+- [ ] **Docs sweep (2 high):** Flathub box's tag target two releases
+      stale; CLAUDE.md Quick Reference + roadmap Success Criteria still
+      carry the retired 100-300MB budget; spec 3.1/4.3/5 adwaita-era or
+      wrong (Today definition, memory gate, shortcut omissions);
+      ATTRIBUTIONS lists dropped libadwaita and omits five real deps;
+      debugging.md stale; the app-id decision exists in one place only.
+- [ ] **Blitz candidates:** execute the io.github.* migration (~15 sites
+      + dconf note + flatpak re-verify); metainfo Flathub-readiness
+      (release descriptions, stale screenshot); persist feed health so
+      DNS/TLS-dead feeds stop looking healthy; Group D single exception:
+      favicon permanent-failure caching; a11y name/role pass; sync events
+      into the Activity Log. Version wrinkle for Brandon: the submission
+      target says 1.0.0 while tags run to v3.7.5 - re-anchor to the next
+      real release (v3.8.0 carrying the rename)?
+- [ ] **GitHub presentation (workspace batch):** description still quotes
+      retired memory numbers; topics add linux/sqlite/newsreader/wayland/
+      inoreader/flatpak; create Releases (12 tags, none published);
+      homepage URL is orphaned (Pages 404 here); wiki tab 404s; discussions
+      off. Awaiting Brandon's go.
