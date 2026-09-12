@@ -245,6 +245,7 @@ User-facing OPML exchange. The internal `parse_opml` / `serialize_opml` path alr
   - [x] **`mem_check` background-cycle checkpoint**: fourth checkpoint added that calls `ImageCache::clear_memory_now()` after the warmup + reader-view phases and reports the RSS delta. The full GUI-side hide cycle (WebView idle, ListStore compact) needs interactive QA; those widgets can't be constructed from a headless bin. Headless run shows the LRU clear releases ~4 MB on the synthetic 500-favicon + 50-image corpus.
   - ~~System tray indicator deferred~~; **shipped in v2.5.0** (`viaduct/src/tray.rs`). Demand arrived: closing the window with run-in-background on used to make the app vanish invisibly. Now a `ksni` StatusNotifierItem appears whenever the GSetting is on, with "Show / Quit" menu items. Works on KDE / XFCE / Cinnamon / MATE natively; on GNOME via the AppIndicator extension.
 - [ ] Tag `1.0.0` and submit to Flathub *(blocked on the user; needs Flathub onboarding credentials, not code. The stable-tag mention here predates the whole release series: nine annotated tags now exist, v1.6.0 through v3.7.3; v3.7.3 is the point a submission would target.)*
+  *(DECIDED 2026-09-12 (Brandon): the workspace app-id split resolved to io.github.virinvictus.*; the manifest migrates from org.virinvictus.Viaduct, and a submission targets the current tag series once your Flathub onboarding is in hand.)*
 
 ## Shipped since v1.6.0 (the stable mark)
 
