@@ -217,10 +217,10 @@ pub fn present(parent: &ViaductWindow) {
     outer.set_margin_start(18);
     outer.set_margin_end(18);
 
-    let (name_group, name_list) = rows::group(None, None);
-    let (name_row, name_entry) = rows::entry_row("Name", None, None);
-    name_list.append(&name_row);
-    outer.append(&name_group);
+    let name_group = rows::group(None, None);
+    let (name_row, name_entry) = rows::entry_row(Some("Name"), None, None, None);
+    name_group.add(&name_row);
+    outer.append(name_group.widget());
 
     // The Conditions section is not a boxed-list; it holds a vertical stack
     // of custom horizontal rule editors, so it is a plain heading +

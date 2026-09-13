@@ -49,7 +49,7 @@ fn build_appearance_popover() -> gtk::Popover {
     // Phase 20c: plain-GTK rows. The GSettings bind targets `value` on a
     // `gtk::SpinButton`, the same property name `adw::SpinRow` exposed, so
     // the binding is unchanged.
-    let (group, list) = rows::group(Some("Article Appearance"), None);
+    let group = rows::group(Some("Article Appearance"), None);
 
     let (font_row, font_spin) = rows::spin_row(
         "Text Size",
@@ -83,8 +83,8 @@ fn build_appearance_popover() -> gtk::Popover {
             .build();
     }
 
-    list.append(&font_row);
-    list.append(&line_row);
+    group.add(&font_row);
+    group.add(&line_row);
 
     let reset_btn = gtk::Button::builder()
         .icon_name("edit-undo-symbolic")
@@ -100,7 +100,7 @@ fn build_appearance_popover() -> gtk::Popover {
         line_for_reset.set_value(150.0);
     });
 
-    list.append(&reset_row);
+    group.add(&reset_row);
 
     let outer = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -109,7 +109,7 @@ fn build_appearance_popover() -> gtk::Popover {
         .margin_start(6)
         .margin_end(6)
         .build();
-    outer.append(&group);
+    outer.append(group.widget());
     popover.set_child(Some(&outer));
 
     popover

@@ -34,13 +34,13 @@ pub fn present(parent: &ViaductWindow) {
     let header = gtk::HeaderBar::new();
     header.pack_end(&add_btn);
 
-    let (group, list) = rows::group(
+    let group = rows::group(
         None,
         Some("Paste a feed URL or a website URL. Viaduct will look up the feed automatically."),
     );
 
-    let (url_row, url_entry) = rows::entry_row("Feed or website URL", None, None);
-    let (name_row, name_entry) = rows::entry_row("Name (optional)", None, None);
+    let (url_row, url_entry) = rows::entry_row(Some("Feed or website URL"), None, None, None);
+    let (name_row, name_entry) = rows::entry_row(Some("Name (optional)"), None, None, None);
 
     let folder_names = list_folder_names(parent);
     let mut combo_labels: Vec<String> = vec!["None".to_string()];
@@ -60,10 +60,10 @@ pub fn present(parent: &ViaductWindow) {
         Some("Open every article from this feed in extracted-text mode."),
     );
 
-    list.append(&url_row);
-    list.append(&name_row);
-    list.append(&folder_row);
-    list.append(&reader_row);
+    group.add(&url_row);
+    group.add(&name_row);
+    group.add(&folder_row);
+    group.add(&reader_row);
 
     // Status row at the bottom — shows discovery progress + error
     // messages without taking the user out of the dialog. Uses
@@ -79,7 +79,7 @@ pub fn present(parent: &ViaductWindow) {
     content.set_margin_bottom(18);
     content.set_margin_start(18);
     content.set_margin_end(18);
-    content.append(&group);
+    content.append(group.widget());
     content.append(&status_label);
 
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);

@@ -455,7 +455,7 @@ pub fn install_link_interceptor(view: &webkit6::WebView) {
         let Some(nav) = decision.downcast_ref::<webkit6::NavigationPolicyDecision>() else {
             return false;
         };
-        let Some(mut action) = nav.navigation_action() else {
+        let Some(action) = nav.navigation_action() else {
             return false;
         };
         let nav_type = action.navigation_type();

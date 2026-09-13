@@ -34,5 +34,5 @@ lru = "0.17.0"
 readability = "0.3.0"
 oo7 = "0.6.0"
 ashpd = "0.10"
-gtk = { version = "0.9", package = "gtk4", features = ["v4_16"] }
-webkit6 = "0.4"
+gtk = { version = "0.11", package = "gtk4", features = ["v4_16"] }
+webkit6 = "0.6"

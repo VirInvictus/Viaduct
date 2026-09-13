@@ -12,6 +12,7 @@ use crate::network::ImageCache;
 use crate::paths::{favicon_cache_dir, image_cache_dir, video_thumb_cache_dir};
 use crate::ui::sidebar::{SidebarItem, selected_sidebar_item};
 use crate::ui::timeline::ArticleNode;
+use vir_gtk::widgets::{Alert, Appearance};
 
 pub(crate) mod imp {
     use super::*;
@@ -174,7 +175,8 @@ const SIDEBAR_AUTOHIDE_WIDTH: i32 = 600;
 glib::wrapper! {
     pub struct ViaductWindow(ObjectSubclass<imp::ViaductWindow>)
         @extends gtk::Widget, gtk::Window, gtk::ApplicationWindow,
-        @implements gio::ActionGroup, gio::ActionMap;
+        @implements gio::ActionGroup, gio::ActionMap, gtk::Accessible, gtk::Buildable,
+        gtk::ConstraintTarget, gtk::Native, gtk::Root, gtk::ShortcutManager;
 }
 
 impl ViaductWindow {
@@ -1366,8 +1368,7 @@ impl ViaductWindow {
         };
         let display_name = display_name_for_feed(&feed);
 
-        let alert = crate::ui::alert::Alert::new(
-            self,
+        let alert = Alert::new(
             Some(&format!("Remove “{display_name}”?")),
             Some(
                 "Articles already saved from this feed will be cleaned up the next time \
@@ -1375,17 +1376,14 @@ impl ViaductWindow {
                  cannot be undone.",
             ),
         );
-        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
-        alert.add_response(
-            "delete",
-            "Delete",
-            crate::ui::alert::ResponseStyle::Destructive,
-        );
-        alert.set_default_response("cancel");
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("delete", "Delete");
+        alert.set_response_appearance("delete", Appearance::Destructive);
+        alert.set_default_response(Some("cancel"));
 
         let window_weak = self.downgrade();
         let feed_url = feed.url.clone();
-        alert.present(move |response| {
+        alert.connect_response(move |response| {
             if response != "delete" {
                 return;
             }
@@ -1427,6 +1425,7 @@ impl ViaductWindow {
                 }
             });
         });
+        alert.present(Some(self));
     }
 
     /// v2.1.0: rename a feed via the right-click menu. Shows an
@@ -1440,21 +1439,21 @@ impl ViaductWindow {
         };
         let current_name = display_name_for_feed(&feed);
 
-        let alert = crate::ui::alert::Alert::new(
-            self,
+        let alert = Alert::new(
             Some("Rename feed"),
             Some("Choose a display name for this feed in the sidebar."),
         );
-        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
-        alert.add_response("save", "Save", crate::ui::alert::ResponseStyle::Suggested);
-        alert.set_default_response("save");
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("save", "Save");
+        alert.set_response_appearance("save", Appearance::Suggested);
+        alert.set_default_response(Some("save"));
 
         let entry = gtk::Entry::builder()
             .text(&current_name)
             .activates_default(true)
             .build();
         entry.select_region(0, -1);
-        alert.set_extra_child(&entry);
+        alert.set_extra_child(Some(&entry));
 
         let window_weak = self.downgrade();
         let feed_url = feed.url.clone();
@@ -1467,7 +1466,7 @@ impl ViaductWindow {
             entry_for_focus.grab_focus();
         });
 
-        alert.present(move |response| {
+        alert.connect_response(move |response| {
             if response != "save" {
                 return;
             }
@@ -1500,30 +1499,27 @@ impl ViaductWindow {
                 }
             });
         });
+        alert.present(Some(self));
     }
 
     /// v2.1.0: prompt for a folder name and create it via
     /// `Account::create_folder`. The folder appears in the sidebar
     /// (empty until the user moves feeds into it via "Move to Folder…").
     pub(crate) fn act_new_folder(&self) {
-        let alert = crate::ui::alert::Alert::new(
-            self,
+        let alert = Alert::new(
             Some("New folder"),
             Some("Folders group related feeds in the sidebar."),
         );
-        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
-        alert.add_response(
-            "create",
-            "Create",
-            crate::ui::alert::ResponseStyle::Suggested,
-        );
-        alert.set_default_response("create");
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("create", "Create");
+        alert.set_response_appearance("create", Appearance::Suggested);
+        alert.set_default_response(Some("create"));
 
         let entry = gtk::Entry::builder()
             .placeholder_text("Folder name")
             .activates_default(true)
             .build();
-        alert.set_extra_child(&entry);
+        alert.set_extra_child(Some(&entry));
 
         let window_weak = self.downgrade();
         let entry_for_response = entry.clone();
@@ -1533,7 +1529,7 @@ impl ViaductWindow {
             entry_for_focus.grab_focus();
         });
 
-        alert.present(move |response| {
+        alert.connect_response(move |response| {
             if response != "create" {
                 return;
             }
@@ -1572,6 +1568,7 @@ impl ViaductWindow {
                 }
             });
         });
+        alert.present(Some(self));
     }
 
     /// v2.1.0: move the right-clicked feed to a different folder (or to
@@ -1628,21 +1625,21 @@ impl ViaductWindow {
             }
         }
 
-        let alert = crate::ui::alert::Alert::new(
-            self,
+        let alert = Alert::new(
             Some("Move feed"),
             Some("Choose where this feed should appear in the sidebar."),
         );
-        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
-        alert.add_response("move", "Move", crate::ui::alert::ResponseStyle::Suggested);
-        alert.set_default_response("move");
-        alert.set_extra_child(&dropdown);
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("move", "Move");
+        alert.set_response_appearance("move", Appearance::Suggested);
+        alert.set_default_response(Some("move"));
+        alert.set_extra_child(Some(&dropdown));
 
         let window_weak = self.downgrade();
         let feed_url = feed.url.clone();
         let dropdown_for_response = dropdown.clone();
         let folders_for_response = folders.clone();
-        alert.present(move |response| {
+        alert.connect_response(move |response| {
             if response != "move" {
                 return;
             }
@@ -1682,6 +1679,7 @@ impl ViaductWindow {
                 }
             });
         });
+        alert.present(Some(self));
     }
 
     /// v2.4.0: open the Feed Settings dialog for the right-clicked feed.
@@ -1698,16 +1696,13 @@ impl ViaductWindow {
         };
         let display_name = display_name_for_feed(&feed);
 
-        let alert = crate::ui::alert::Alert::new(
-            self,
-            Some(&format!("Settings for “{display_name}”")),
-            None,
-        );
-        alert.add_response("cancel", "Cancel", crate::ui::alert::ResponseStyle::Normal);
-        alert.add_response("save", "Save", crate::ui::alert::ResponseStyle::Suggested);
-        alert.set_default_response("save");
+        let alert = Alert::new(Some(&format!("Settings for “{display_name}”")), None);
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("save", "Save");
+        alert.set_response_appearance("save", Appearance::Suggested);
+        alert.set_default_response(Some("save"));
 
-        let (group, group_list) = crate::ui::rows::group(None, None);
+        let group = crate::ui::rows::group(None, None);
         let (notif_row, notif_switch) = crate::ui::rows::switch_row(
             "New article notifications",
             Some("Show a desktop notification when this feed has new articles."),
@@ -1716,9 +1711,9 @@ impl ViaductWindow {
             "Always use Reader View",
             Some("Open every article from this feed in extracted-text mode."),
         );
-        group_list.append(&notif_row);
-        group_list.append(&reader_row);
-        alert.set_extra_child(&group);
+        group.add(&notif_row);
+        group.add(&reader_row);
+        alert.set_extra_child(Some(group.widget()));
 
         // Pre-load current values so the switches reflect the existing
         // state before the user touches them.
@@ -1741,7 +1736,7 @@ impl ViaductWindow {
         let feed_for_response = feed.clone();
         let notif_for_response = notif_switch.clone();
         let reader_for_response = reader_switch.clone();
-        alert.present(move |response| {
+        alert.connect_response(move |response| {
             if response != "save" {
                 return;
             }
@@ -1786,6 +1781,7 @@ impl ViaductWindow {
                 }
             });
         });
+        alert.present(Some(self));
     }
 
     pub(crate) fn act_mark_clicked_feed_read(&self) {
@@ -1939,7 +1935,7 @@ impl ViaductWindow {
             return;
         }
         if !show
-            && let Some(focus) = self.focus()
+            && let Some(focus) = gtk::prelude::GtkWindowExt::focus(self)
             && focus.is_ancestor(&sidebar)
         {
             let _ = imp.timeline_view.get().list_view().grab_focus();

@@ -40,7 +40,7 @@ pub fn present(parent: &ViaductWindow) {
     scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
     scroller.set_vexpand(true);
 
-    let (group, list_box) = rows::group(
+    let group = rows::group(
         Some("Recent feed activity"),
         Some("Newest first. Most recent 500 events are kept; clear to start fresh."),
     );
@@ -49,7 +49,7 @@ pub fn present(parent: &ViaductWindow) {
     outer.set_margin_bottom(18);
     outer.set_margin_start(18);
     outer.set_margin_end(18);
-    outer.append(&group);
+    outer.append(group.widget());
     scroller.set_child(Some(&outer));
 
     let empty = status_page(
@@ -61,15 +61,15 @@ pub fn present(parent: &ViaductWindow) {
     stack.add_named(&scroller, Some("content"));
     stack.add_named(&empty, Some("empty"));
 
-    populate(&list_box, &stack, &log);
+    populate(&group, &stack, &log);
 
     let log_for_clear = log.clone();
-    let list_for_clear = list_box.downgrade();
+    let group_for_clear = group.clone();
     let stack_for_clear = stack.downgrade();
     clear_btn.connect_clicked(move |_| {
         log_for_clear.clear();
-        if let (Some(list), Some(stack)) = (list_for_clear.upgrade(), stack_for_clear.upgrade()) {
-            populate(&list, &stack, &log_for_clear);
+        if let Some(stack) = stack_for_clear.upgrade() {
+            populate(&group_for_clear, &stack, &log_for_clear);
         }
     });
 
@@ -125,10 +125,8 @@ fn status_page(icon: &str, title: &str, description: &str) -> gtk::Box {
     outer
 }
 
-fn populate(list: &gtk::ListBox, stack: &gtk::Stack, log: &Arc<ActivityLog>) {
-    while let Some(child) = list.first_child() {
-        list.remove(&child);
-    }
+fn populate(group: &vir_gtk::widgets::Group, stack: &gtk::Stack, log: &Arc<ActivityLog>) {
+    group.clear();
     let snapshot = log.snapshot();
     if snapshot.is_empty() {
         stack.set_visible_child_name("empty");
@@ -136,7 +134,7 @@ fn populate(list: &gtk::ListBox, stack: &gtk::Stack, log: &Arc<ActivityLog>) {
     }
     stack.set_visible_child_name("content");
     for ev in snapshot {
-        list.append(&row_for(&ev));
+        group.add(&row_for(&ev));
     }
 }
 

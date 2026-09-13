@@ -26,50 +26,50 @@ use crate::ui::window::ViaductWindow;
 /// (dev environment without `glib-compile-schemas` having run), the dialog
 /// renders a single explanatory row and the toggles remain inert.
 pub fn present(parent: &ViaductWindow) {
-    let (appearance, appearance_list) = rows::group(Some("Appearance"), None);
-    let (typography, typography_list) = rows::group(
+    let appearance = rows::group(Some("Appearance"), None);
+    let typography = rows::group(
         Some("Typography"),
         Some(
             "Override the font family for each surface. Empty = use system default. Type a family name (e.g. \"Atkinson Hyperlegible\") exactly as installed.",
         ),
     );
-    let (sync, sync_list) = rows::group(
+    let sync = rows::group(
         Some("Sync"),
         Some(
             "Automatic refresh on startup, on a periodic schedule, and optionally while the window is closed.",
         ),
     );
-    let (notifications, notifications_list) = rows::group(Some("Notifications"), None);
-    let (playback, playback_list) = rows::group(Some("Video playback"), None);
+    let notifications = rows::group(Some("Notifications"), None);
+    let playback = rows::group(Some("Video playback"), None);
 
     if let Some(settings) = crate::preferences::settings() {
-        appearance_list.append(&color_scheme_row(&settings));
-        appearance_list.append(&article_theme_row(&settings));
-        typography_list.append(&font_row(
+        appearance.add(&color_scheme_row(&settings));
+        appearance.add(&article_theme_row(&settings));
+        typography.add(&font_row(
             &settings,
             keys::FONT_UI,
             "App font",
             "Sidebar, timeline, header bars, dialogs.",
         ));
-        typography_list.append(&font_row(
+        typography.add(&font_row(
             &settings,
             keys::FONT_SERIF,
             "Reading font",
             "Article body in the reading pane. Layered after the article theme.",
         ));
-        typography_list.append(&font_row(
+        typography.add(&font_row(
             &settings,
             keys::FONT_MONOSPACE,
             "Monospace font",
             "Code and pre blocks (article pane + chrome).",
         ));
-        sync_list.append(&refresh_on_startup_row(&settings));
-        sync_list.append(&refresh_interval_row(&settings));
-        sync_list.append(&run_in_background_row(&settings, parent));
-        notifications_list.append(&notifications_row(&settings));
-        playback_list.append(&video_playback_row(&settings));
+        sync.add(&refresh_on_startup_row(&settings));
+        sync.add(&refresh_interval_row(&settings));
+        sync.add(&run_in_background_row(&settings, parent));
+        notifications.add(&notifications_row(&settings));
+        playback.add(&video_playback_row(&settings));
     } else {
-        appearance_list.append(&rows::row(
+        appearance.add(&rows::row(
             "Settings unavailable",
             Some("GSettings schema isn’t installed. Run `glib-compile-schemas data/` and retry."),
             None,
@@ -88,7 +88,7 @@ pub fn present(parent: &ViaductWindow) {
         .margin_end(24)
         .build();
     for group in [&appearance, &typography, &sync, &notifications, &playback] {
-        content.append(group);
+        content.append(group.widget());
     }
 
     let scroller = gtk::ScrolledWindow::builder()
@@ -307,7 +307,7 @@ fn font_row(
 ) -> gtk::ListBoxRow {
     // `adw::EntryRow` floated the title inside the entry; a plain entry
     // cannot, so the title sits left and the subtitle stays a subtitle.
-    let (row, entry) = rows::entry_row(title, Some(subtitle), Some("empty = default"));
+    let (row, entry) = rows::entry_row(Some(title), Some(subtitle), None, Some("empty = default"));
     settings.bind(key, &entry, "text").build();
     row
 }
