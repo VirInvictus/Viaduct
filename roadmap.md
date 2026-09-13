@@ -603,3 +603,7 @@ Findings 1-6 from the 2026-09-06 blitz audit (`audit/Viaduct/full-roadmap.md`), 
       inoreader/flatpak; create Releases (12 tags, none published);
       homepage URL is orphaned (Pages 404 here); wiki tab 404s; discussions
       off. Awaiting Brandon's go.
+
+- [ ] **DECIDED 2026-09-13: the Flathub submission target is v3.8.0**
+      (carrying the io.github.* rename) - superseding the "tag 1.0.0"
+      wording here (decision 64).
