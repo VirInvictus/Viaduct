@@ -1801,16 +1801,17 @@ impl ViaductWindow {
                     return;
                 }
             };
-            let now = chrono::Utc::now();
-            let statuses: Vec<crate::models::ArticleStatus> = articles
-                .into_iter()
-                .map(|a| crate::models::ArticleStatus {
-                    article_id: a.article_id,
-                    read: true,
-                    starred: false,
-                    date_arrived: now,
-                })
-                .collect();
+            // Pull the current statuses so stars survive: upsert_statuses
+            // overwrites every column on conflict.
+            let ids: Vec<String> = articles.iter().map(|a| a.article_id.clone()).collect();
+            let current = match account.fetch_statuses_by_ids(ids).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(?e, "mark-feed-read: fetch_statuses_by_ids failed");
+                    return;
+                }
+            };
+            let statuses = crate::database::articles::mark_read_statuses(articles, &current);
             if statuses.is_empty() {
                 return;
             }
@@ -1832,26 +1833,27 @@ impl ViaductWindow {
         let account = self.account();
         let window_weak = self.downgrade();
         glib::spawn_future_local(async move {
-            let now = chrono::Utc::now();
             let sort = crate::database::articles::SortOrder::default();
-            let mut statuses: Vec<crate::models::ArticleStatus> = Vec::new();
+            let mut articles: Vec<crate::models::Article> = Vec::new();
             for feed in &folder.feeds {
                 match account.fetch_articles_by_feed(feed.id.clone(), sort).await {
-                    Ok(arts) => {
-                        for a in arts {
-                            statuses.push(crate::models::ArticleStatus {
-                                article_id: a.article_id,
-                                read: true,
-                                starred: false,
-                                date_arrived: now,
-                            });
-                        }
-                    }
+                    Ok(arts) => articles.extend(arts),
                     Err(e) => {
                         tracing::warn!(?e, feed_id = %feed.id, "mark-folder-read: feed fetch failed")
                     }
                 }
             }
+            // Pull the current statuses so stars survive: upsert_statuses
+            // overwrites every column on conflict.
+            let ids: Vec<String> = articles.iter().map(|a| a.article_id.clone()).collect();
+            let current = match account.fetch_statuses_by_ids(ids).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(?e, "mark-folder-read: fetch_statuses_by_ids failed");
+                    return;
+                }
+            };
+            let statuses = crate::database::articles::mark_read_statuses(articles, &current);
             if statuses.is_empty() {
                 return;
             }

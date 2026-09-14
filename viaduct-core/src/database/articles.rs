@@ -556,6 +556,33 @@ fn upsert_statuses(conn: &mut Connection, statuses: Vec<ArticleStatus>) -> Resul
     Ok(())
 }
 
+/// Mark-as-read rows for `articles` that carry each article's existing
+/// star over from `current` (a missing row means never starred). Needed
+/// because `upsert_statuses` overwrites every column on conflict: a
+/// mark-read built with a hardcoded `starred: false` silently unstars
+/// the feed.
+pub fn mark_read_statuses(
+    articles: Vec<Article>,
+    current: &HashMap<String, (bool, bool)>,
+) -> Vec<ArticleStatus> {
+    let now = Utc::now();
+    articles
+        .into_iter()
+        .map(|a| {
+            let starred = current
+                .get(&a.article_id)
+                .map(|(_, starred)| *starred)
+                .unwrap_or(false);
+            ArticleStatus {
+                article_id: a.article_id,
+                read: true,
+                starred,
+                date_arrived: now,
+            }
+        })
+        .collect()
+}
+
 fn row_to_article(row: &rusqlite::Row) -> rusqlite::Result<Article> {
     let authors_json: Option<String> = row.get("authors")?;
     let authors: Vec<Author> = if let Some(j) = authors_json {
@@ -1451,6 +1478,66 @@ mod tests {
             counts.starred_unread, 0,
             "starred_unread must INNER JOIN articles too"
         );
+    }
+
+    /// v3.9.0 regression: "Mark Feed/Folder as Read" used to build its
+    /// status rows with `starred: false` hardcoded, and since
+    /// `upsert_statuses` overwrites the column on conflict, marking a
+    /// feed or folder read silently unstarred every starred article in
+    /// it. `mark_read_statuses` must carry the existing star through,
+    /// and articles with no status row yet star as false.
+    #[test]
+    fn mark_read_statuses_preserves_existing_stars() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![item("a", "First", "body1"), item("b", "Second", "body2")],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .expect("update_feed");
+
+        // The user starred article "b" sometime in the past; "a" was
+        // never touched, so it has no status row.
+        let articles = fetch_by_feed(&mut conn, feed_id, SortOrder::default()).expect("fetch");
+        let starred_id = articles
+            .iter()
+            .find(|a| a.title.as_deref() == Some("Second"))
+            .map(|a| a.article_id.clone())
+            .expect("article b");
+        let ids: Vec<String> = articles.iter().map(|a| a.article_id.clone()).collect();
+        upsert_statuses(
+            &mut conn,
+            vec![ArticleStatus {
+                article_id: starred_id.clone(),
+                read: false,
+                starred: true,
+                date_arrived: Utc::now(),
+            }],
+        )
+        .expect("star article b");
+
+        // The mark-read path: gather current statuses, build rows, write.
+        let current = fetch_statuses_by_ids(&mut conn, &ids).expect("statuses");
+        let articles = fetch_by_feed(&mut conn, feed_id, SortOrder::default()).expect("fetch");
+        let rows = mark_read_statuses(articles, &current);
+        assert_eq!(rows.len(), 2);
+        upsert_statuses(&mut conn, rows).expect("upsert mark-read");
+
+        for id in &ids {
+            let (read, starred) = conn
+                .query_row(
+                    "SELECT read, starred FROM statuses WHERE article_id = ?",
+                    params![id],
+                    |r| Ok((r.get::<_, i64>(0)? != 0, r.get::<_, i64>(1)? != 0)),
+                )
+                .expect("status row after mark-read");
+            assert!(read, "article must end read");
+            let expected_star = *id == starred_id;
+            assert_eq!(starred, expected_star, "star state must survive mark-read");
+        }
     }
 
     #[test]
