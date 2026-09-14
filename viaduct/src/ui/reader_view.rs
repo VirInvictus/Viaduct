@@ -21,7 +21,7 @@
 //!
 //! Memory gate: the input HTML is capped at `INPUT_SIZE_CAP` before
 //! extraction. Readability allocates multiple DOM representations; feeding
-//! it a 20 MB tracker-blob page blows the 500 MB ceiling. If we need to
+//! it a 20 MB tracker-blob page blows the 600 MB envelope. If we need to
 //! raise this cap, re-run `mem_check` first.
 
 use std::io::Cursor;

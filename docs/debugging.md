@@ -128,7 +128,8 @@ that 187 ms of worker time was wasted.
 A separate harness exists under `cargo run --release --bin mem_check`
 that synthesizes 500 feeds × 10 articles, warms the image cache, runs
 the Reader View extractor, and prints `VmHWM` checkpoints. Use it after
-DB / network changes to confirm the 500 MB peak budget still holds.
+DB / network changes to confirm the spec §10/§11 envelope still holds
+(600 MB peak regression bar).
 
 For live runtime tracking, `--debug` enables a periodic ticker that
 logs RSS + peak every 8–25 seconds. Filter for it:

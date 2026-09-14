@@ -10,7 +10,7 @@
 //!
 //! Linux has no reliable low-memory broadcast (NNW relies on iOS / macOS pressure
 //! signals), so each in-memory LRU is **byte-bounded** (`ByteLru`, per-kind
-//! ceilings) to keep the cache's share of the 500 MB peak-RSS budget hard-capped
+//! ceilings) to keep the cache's share of the 600 MB peak-RSS envelope hard-capped
 //! regardless of entry-size mix; per-download size caps stop any single body from
 //! blowing it. Decode-to-`gdk::Texture` happens on the GTK main thread at the call
 //! site — we deliberately store `Vec<u8>` here so the LRU is `Send` and lives on
@@ -31,7 +31,7 @@ use tracing::{debug, warn};
 /// v2.8.0: per-download response-size caps. A single body can't exceed
 /// these no matter what a server streams. Article `<img>` loads route
 /// through here via the `viaduct-img://` scheme handler, so without a cap a
-/// pathological image could blow the "supreme" 500 MB peak budget on its
+/// pathological image could blow the "supreme" 600 MB peak envelope on its
 /// own. Generous enough that no real favicon / inline image / thumbnail
 /// hits them.
 const FAVICON_MAX_BYTES: usize = 1024 * 1024; // 1 MB
@@ -42,8 +42,8 @@ const VIDEO_THUMB_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MB
 /// LRU. The stock `lru::LruCache` bounds entry count, not size, so a run of
 /// large images could pile up past the cache's share of the budget even
 /// with a count cap. `ByteLru` evicts least-recently-used entries until the
-/// total is back under these. Combined worst case ~96 MB, comfortably
-/// inside the 100–300 MB idle target.
+/// total is back under these. Combined worst case ~96 MB, a small slice of
+/// the 400–500 MB idle band (spec §10).
 const FAVICON_CACHE_BYTES: usize = 16 * 1024 * 1024; // 16 MB
 const IMAGE_CACHE_BYTES: usize = 64 * 1024 * 1024; // 64 MB
 const VIDEO_THUMB_CACHE_BYTES: usize = 16 * 1024 * 1024; // 16 MB

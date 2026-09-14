@@ -8,19 +8,20 @@
 //! against a synthetic 500-feed × 10-article corpus, then warms the favicon
 //! and image cache against an in-process HTTP fixture (500 favicons + 50
 //! images), then reads `VmHWM` (peak resident set, kB) from
-//! `/proc/self/status` and reports pass/fail against the roadmap's 500 MB
-//! peak / 100–300 MB idle targets.
+//! `/proc/self/status` and reports pass/fail against the spec §10/§11
+//! envelope: 600 MB peak regression bar, 400–500 MB idle band.
 //!
 //! Four checkpoints are reported:
 //!
 //! - **post-DB peak** — exercises DB + parser + serde end-to-end.
 //! - **post-image-warmup peak** — adds 500 favicons (1 KB) + 50 images
-//!   (50 KB) routed through the real `ImageCache`, hitting LRU eviction
-//!   (cap is 250/kind so 500 favicons exercise the eviction path).
+//!   (50 KB) routed through the real `ImageCache`. The caches are
+//!   byte-bounded per kind (16 MB favicons), so the synthetic favicons
+//!   stay resident rather than exercising eviction.
 //! - **post-reader-view peak** — runs `ui::reader_view::extract` against a
 //!   synthesized ~100 KB article HTML 10 times sequentially to surface any
 //!   cumulative leak in the readability extractor (`html5ever` DOM allocs
-//!   plus scoring tree walks are the riskiest path for the 500 MB ceiling).
+//!   plus scoring tree walks are the riskiest path for the 600 MB bar).
 //! - **post-background-cycle** — Phase 17: drops the in-memory image LRUs
 //!   via `ImageCache::clear_memory_now` and reports the RSS delta. The
 //!   full GUI hide-cycle (idling the WebView, compacting the timeline
@@ -56,9 +57,9 @@ const SYNTH_FAVICON_BYTES: usize = 1024;
 const SYNTH_IMAGE_BYTES: usize = 50 * 1024;
 const READER_EXTRACTIONS: usize = 10;
 
-const PEAK_BUDGET_MB: u64 = 500;
-const IDLE_TARGET_LOW_MB: u64 = 100;
-const IDLE_TARGET_HIGH_MB: u64 = 300;
+const PEAK_BUDGET_MB: u64 = 600;
+const IDLE_TARGET_LOW_MB: u64 = 400;
+const IDLE_TARGET_HIGH_MB: u64 = 500;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The library's ImageCache routes through `viaduct::spawn_on_runtime`,

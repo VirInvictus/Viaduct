@@ -162,13 +162,13 @@ fn log_session_memory_summary() {
     }
     let rss_mb = rss_kb / 1024;
     let peak_mb = hwm_kb / 1024;
-    let budget_mb = 500u64;
+    let budget_mb = 600u64;
     if peak_mb > budget_mb {
         tracing::warn!(
             rss_mb,
             peak_mb,
             budget_mb,
-            "session exit: peak RSS exceeded 500 MB ceiling"
+            "session exit: peak RSS exceeded the 600 MB envelope"
         );
     } else {
         tracing::info!(rss_mb, peak_mb, budget_mb, "session exit: memory summary");

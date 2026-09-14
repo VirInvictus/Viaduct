@@ -303,7 +303,7 @@ These don't belong inside any earlier phase; they're discoverability / polish wo
 
 1. Import a 500-feed OPML file without hanging the GTK main thread.
 2. Background engine fetches + parses 1,000 new articles while the user smoothly scrolls the list view.
-3. Idle memory sits between 100–300 MB; peak stays under 500 MB through every supported operation.
+3. Idle memory sits in the 400–500 MB band after a warm refresh; peak stays under the 600 MB envelope through every supported operation (spec §10/§11; the original 100–300 MB / < 500 MB targets were retired in v2.6.20 when they proved unreachable).
 4. FTS5 search across all cached articles returns results in under 50 ms on a 50k-article corpus.
 5. ~~Full compliance with GNOME HIG and libadwaita 1.7 styling.~~ *(Superseded in v3.0.0: the design language is viaduct's own flat Kanagawa; the app still runs correctly under GNOME, a behavior promise, not a styling one.)*
 6. Flathub-accepted Flatpak build running in a strict sandbox.

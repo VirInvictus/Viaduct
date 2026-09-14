@@ -64,7 +64,7 @@ pub fn spawn_debug_memory_ticker() {
             tracing::info!(
                 rss_mb,
                 peak_mb = hwm_mb,
-                budget_mb = 500,
+                budget_mb = 600,
                 "debug: memory tick"
             );
         }
