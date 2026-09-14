@@ -245,6 +245,7 @@ pub fn present(parent: &ViaductWindow) {
                                         reader_view_always_enabled: false,
                                         new_article_notifications_enabled: false,
                                         last_response_code: None,
+                                        favicon_discovery_at: None,
                                     });
                                 s.reader_view_always_enabled = true;
                                 let result = account.upsert_feed_settings(s).await;

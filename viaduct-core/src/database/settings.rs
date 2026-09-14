@@ -77,6 +77,10 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
     );
     // Idempotent ALTER for `last_response_code` (NNW `4c85c907f`).
     let _ = conn.execute_batch("ALTER TABLE feed_settings ADD COLUMN last_response_code INTEGER;");
+    // Idempotent ALTER for the favicon-discovery attempt stamp (the
+    // `SingleFaviconDownloader` retry-interval port).
+    let _ =
+        conn.execute_batch("ALTER TABLE feed_settings ADD COLUMN favicon_discovery_at INTEGER;");
     Ok(())
 }
 
@@ -167,6 +171,9 @@ fn settings_from_row(row: &rusqlite::Row) -> rusqlite::Result<FeedSettings> {
             .get::<_, i64>("new_article_notifications_enabled")?
             != 0,
         last_response_code: row.get("last_response_code")?,
+        favicon_discovery_at: row
+            .get::<_, Option<i64>>("favicon_discovery_at")?
+            .and_then(|t| Utc.timestamp_opt(t, 0).single()),
     })
 }
 
@@ -205,8 +212,9 @@ fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {
             edited_name, content_hash, last_modified, etag,
             date_created, max_age, authors_json, folder_relationship_json,
             last_check_date, reader_view_always_enabled,
-            new_article_notifications_enabled, last_response_code
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            new_article_notifications_enabled, last_response_code,
+            favicon_discovery_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(feed_id) DO UPDATE SET
             feed_url=excluded.feed_url,
             home_page_url=excluded.home_page_url,
@@ -223,7 +231,8 @@ fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {
             last_check_date=excluded.last_check_date,
             reader_view_always_enabled=excluded.reader_view_always_enabled,
             new_article_notifications_enabled=excluded.new_article_notifications_enabled,
-            last_response_code=excluded.last_response_code",
+            last_response_code=excluded.last_response_code,
+            favicon_discovery_at=excluded.favicon_discovery_at",
         params![
             s.feed_id,
             s.feed_url,
@@ -242,6 +251,7 @@ fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {
             s.reader_view_always_enabled as i64,
             s.new_article_notifications_enabled as i64,
             s.last_response_code,
+            s.favicon_discovery_at.map(|d| d.timestamp()),
         ],
     )?;
     Ok(())
@@ -318,10 +328,43 @@ mod tests {
             reader_view_always_enabled: false,
             new_article_notifications_enabled: false,
             last_response_code: Some(503),
+            favicon_discovery_at: None,
         };
         upsert(&mut conn, s).unwrap();
         let back = fetch(&mut conn, "fid").unwrap().unwrap();
         assert_eq!(back.last_response_code, Some(503));
+    }
+
+    /// The favicon-discovery retry stamp (the SingleFaviconDownloader
+    /// 30-minute-interval port) round-trips through the column.
+    #[test]
+    fn favicon_discovery_at_round_trips() {
+        use chrono::TimeZone;
+        let mut conn = in_memory();
+        let stamp = Utc.timestamp_opt(1_757_000_000, 0).single().unwrap();
+        let s = FeedSettings {
+            feed_id: "fid-fav".into(),
+            feed_url: "https://example.com/feed".into(),
+            home_page_url: None,
+            icon_url: None,
+            favicon_url: None,
+            edited_name: None,
+            content_hash: None,
+            last_modified: None,
+            etag: None,
+            date_created: None,
+            max_age: None,
+            authors_json: None,
+            folder_relationship_json: None,
+            last_check_date: None,
+            reader_view_always_enabled: false,
+            new_article_notifications_enabled: false,
+            last_response_code: None,
+            favicon_discovery_at: Some(stamp),
+        };
+        upsert(&mut conn, s).unwrap();
+        let back = fetch(&mut conn, "fid-fav").unwrap().unwrap();
+        assert_eq!(back.favicon_discovery_at, Some(stamp));
     }
 
     #[test]

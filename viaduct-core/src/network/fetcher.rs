@@ -47,6 +47,23 @@ const REFRESH_PARALLELISM: usize = 8;
 /// RAM. Generous: no real feed approaches 10 MB.
 pub const FEED_BODY_MAX_BYTES: usize = 10 * 1024 * 1024;
 
+/// Minimum spacing between favicon-discovery attempts per feed, ported
+/// from NNW `SingleFaviconDownloader.downloadFaviconIfNeeded` (30
+/// minutes). Successful discovery also persists `favicon_url`, which
+/// ends the probes; this interval is what keeps *failing* probes (dead
+/// home pages, 404 favicons) from re-running on every refresh cycle.
+const FAVICON_DISCOVERY_RETRY_INTERVAL: Duration = Duration::minutes(30);
+
+/// Whether a feed is due for a discovery attempt: never attempted, or
+/// the interval since the last attempt has elapsed. (Upstream checks
+/// `iconImage == nil` first; our analogue is the caller's
+/// `favicon_url.is_none()` gate, kept at the call site.)
+fn favicon_discovery_due(last_attempt: Option<DateTime<Utc>>) -> bool {
+    last_attempt
+        .map(|at| Utc::now() - at >= FAVICON_DISCOVERY_RETRY_INTERVAL)
+        .unwrap_or(true)
+}
+
 /// Per-host 429 cooldowns are process-lifetime, not per-cycle: the
 /// refresher (and so the `Fetcher`) is built fresh for every refresh
 /// cycle, so cycle-scoped cooldowns evaporated at cycle end and a host
@@ -875,22 +892,24 @@ async fn refresh_one_feed(
                     }
                     // v2.6.4: most personal blogs don't ship a feed-level
                     // `<image>` / `<icon>`, so `parsed.icon_url` stays
-                    // None and the sidebar shows the AdwAvatar fallback.
+                    // None and the sidebar shows the avatar fallback.
                     // Probe the home page HTML head for `<link rel="icon">`
-                    // and fall back to `<origin>/favicon.ico`. Only runs
-                    // when we don't already have a favicon — successful
-                    // discoveries persist into `favicon_url`, so the
-                    // probe is at most once per feed across the lifetime
-                    // of the install.
-                    if new_settings.favicon_url.is_none()
-                        && let Some(home) = new_settings.home_page_url.as_deref()
-                        && let Some(found) = crate::network::favicon_discovery::discover_favicon(
-                            &fetcher.client,
-                            home,
-                        )
-                        .await
-                    {
-                        new_settings.favicon_url = Some(found);
+                    // and fall back to `<origin>/favicon.ico`. Gated by
+                    // the retry interval (below): dead hosts used to
+                    // re-probe on every cycle forever.
+                    if favicon_discovery_due(new_settings.favicon_discovery_at) {
+                        new_settings.favicon_discovery_at = Some(Utc::now());
+                        if new_settings.favicon_url.is_none()
+                            && let Some(home) = new_settings.home_page_url.as_deref()
+                            && let Some(found) =
+                                crate::network::favicon_discovery::discover_favicon(
+                                    &fetcher.client,
+                                    home,
+                                )
+                                .await
+                        {
+                            new_settings.favicon_url = Some(found);
+                        }
                     }
                     match account
                         .update_feed(feed.id.clone(), parsed.items, true, retention_days)
@@ -965,6 +984,22 @@ async fn refresh_one_feed(
 mod tests {
     use super::*;
     use crate::network::activity::SkipReason;
+
+    /// The SingleFaviconDownloader retry-interval port: a feed with no
+    /// recorded attempt is due; a feed probed inside the interval is
+    /// not; a feed probed more than 30 minutes ago is due again. This
+    /// is what keeps dead-favicon hosts from re-probing every cycle.
+    #[test]
+    fn favicon_discovery_honours_the_retry_interval() {
+        assert!(favicon_discovery_due(None));
+        assert!(!favicon_discovery_due(Some(
+            Utc::now() - Duration::minutes(29)
+        )));
+        assert!(!favicon_discovery_due(Some(Utc::now())));
+        assert!(favicon_discovery_due(Some(
+            Utc::now() - Duration::minutes(31)
+        )));
+    }
 
     #[test]
     fn url_host_matches_domain_handles_www_and_case() {
@@ -1086,6 +1121,7 @@ mod tests {
             reader_view_always_enabled: false,
             new_article_notifications_enabled: false,
             last_response_code: None,
+            favicon_discovery_at: None,
         }
     }
 

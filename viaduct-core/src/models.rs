@@ -35,6 +35,13 @@ pub struct FeedSettings {
     /// the feed has been fetched at least once over HTTP; a network
     /// error that never reached the server leaves the prior value.
     pub last_response_code: Option<i64>,
+    /// When favicon discovery last ran for this feed, successful or not
+    /// (the upstream analogue is `SingleFaviconDownloader`'s
+    /// `lastDownloadAttemptDate` + 30-minute retry interval). A dead
+    /// host retries no faster than the interval instead of on every
+    /// refresh cycle; a success also sets `favicon_url`, ending the
+    /// probes entirely.
+    pub favicon_discovery_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

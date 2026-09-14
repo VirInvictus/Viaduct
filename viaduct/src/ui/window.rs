@@ -1776,6 +1776,7 @@ impl ViaductWindow {
                     reader_view_always_enabled: false,
                     new_article_notifications_enabled: false,
                     last_response_code: None,
+                    favicon_discovery_at: None,
                 });
                 s.new_article_notifications_enabled = notif_on;
                 s.reader_view_always_enabled = reader_on;
