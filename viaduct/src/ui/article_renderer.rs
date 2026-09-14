@@ -5,7 +5,11 @@
 //! Neutered WebKit article renderer (Phase 6).
 //!
 //! Single `WebKitWebView` instance drives all article rendering. The settings
-//! lockdown below is the ENTIRE security/memory story for the reader pane:
+//! lockdown below is the core of the reader pane's security/memory posture,
+//! but not the whole story: the CSP + `viaduct-img://` network sandbox
+//! (below), the ammonia body sanitization on every render, and the
+//! escaping/validation of every interpolated template field are each
+//! load-bearing too (see `safe_article_url` for the URL fields).
 //!
 //! - JavaScript: off (both runtime and HTML5 inline `<script>` markup).
 //! - WebGL / WebRTC / plugins / DevTools: off.
@@ -277,9 +281,11 @@ pub fn select_for_dark_mode(is_dark: bool) -> Theme {
     }
 }
 
-/// Article fields needed to render the NNW-shape inner template. All
-/// strings are HTML-escaped by the caller before insertion (except `body`,
-/// which is already-rendered HTML).
+/// Article fields needed to render the NNW-shape inner template. Text
+/// fields are HTML-escaped by the caller before insertion; the URL fields
+/// (`preferred_link`, `feed_link`, `external_link`) go through
+/// `safe_article_url`, which scheme-validates and attribute-escapes. Only
+/// `body` is inserted as already-rendered HTML.
 #[derive(Default, Debug, Clone)]
 pub struct ArticleSubstitutions {
     pub title: String,
@@ -396,8 +402,8 @@ fn find_double_bracket_close(buf: &[u8]) -> Option<usize> {
 }
 
 /// HTML-escape a string for use in macro substitution values. Used for
-/// every field except `body` (which is already-rendered HTML) and URI
-/// fields where attribute-context escaping is sufficient.
+/// the text fields; `body` is already-rendered HTML and the URL fields
+/// go through `safe_article_url`.
 pub fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -411,6 +417,22 @@ pub fn escape_html(s: &str) -> String {
         }
     }
     out
+}
+
+/// Prepare a feed-controlled URL field for substitution into a quoted
+/// HTML attribute (`href="[[preferred_link]]"`, `<base
+/// href="[[baseURL]]">`). Two gates: the URL must parse with an
+/// http/https scheme (the web subset of `is_openable_url`'s allowlist),
+/// and the survivor is HTML-escaped so a crafted URL can't break out of
+/// the attribute. Anything else renders as an empty value. `&` in a
+/// query string escaping to `&amp;` is correct attribute HTML; it
+/// decodes back to `&`.
+pub(crate) fn safe_article_url(url: &str) -> String {
+    let trimmed = url.trim();
+    match url::Url::parse(trimmed) {
+        Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => escape_html(trimmed),
+        _ => String::new(),
+    }
 }
 
 /// Scheme allowlist for handing a URL to the OS handler (NNW
@@ -1028,10 +1050,7 @@ pub fn render_themed(
         ),
     };
     outer_subs.insert("style", style);
-    outer_subs.insert(
-        "baseURL",
-        base_uri.map(|s| s.to_string()).unwrap_or_default(),
-    );
+    outer_subs.insert("baseURL", safe_article_url(base_uri.unwrap_or_default()));
     outer_subs.insert("body", inner_html);
     let final_html = render_with_macros(PAGE_HTML, &outer_subs);
 
@@ -1064,6 +1083,42 @@ mod tests {
         assert!(!is_openable_url("viaduct-img://i/https%3A%2F%2Fx"));
         assert!(!is_openable_url("unknown-scheme:thing"));
         assert!(!is_openable_url("/relative/path"));
+    }
+
+    // --- safe_article_url: feed-controlled URL fields into attributes ---
+
+    #[test]
+    fn safe_article_url_allows_web_urls_and_escapes_attribute_breakout() {
+        // Web URLs pass through, with `&` correctly escaped for an
+        // attribute context (decodes back to `&`).
+        assert_eq!(
+            safe_article_url("https://example.com/post?a=1&b=2"),
+            "https://example.com/post?a=1&amp;b=2"
+        );
+        assert_eq!(
+            safe_article_url("http://example.com/"),
+            "http://example.com/"
+        );
+
+        // The breakout case: a crafted article URL on a web scheme can't
+        // close the attribute and inject markup into the head; the
+        // escaper neutralizes the quotes and angle brackets.
+        let breakout = safe_article_url("https://x.com/a\"><script src=…>");
+        assert!(!breakout.contains('"'));
+        assert!(!breakout.contains('<'));
+        assert!(!breakout.contains('>'));
+
+        // Non-web schemes and garbage render as empty (empty is safe in
+        // both href and <base href> contexts).
+        assert_eq!(safe_article_url("javascript:alert(1)"), "");
+        assert_eq!(safe_article_url("file:///etc/passwd"), "");
+        assert_eq!(safe_article_url("mailto:x@y.z"), "");
+        assert_eq!(safe_article_url("not a url"), "");
+        assert_eq!(safe_article_url(""), "");
+        assert_eq!(
+            safe_article_url("   https://example.com/spaced  "),
+            "https://example.com/spaced"
+        );
     }
 
     // --- scrollbar-gutter: stable (NNW `808403b00`) ---

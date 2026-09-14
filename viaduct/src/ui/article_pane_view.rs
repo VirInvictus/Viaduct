@@ -544,8 +544,10 @@ impl ArticlePaneView {
             // literal escaped text; everything else is escaped.
             title: crate::text::sanitized_title(&state.title, true),
             body: body_html,
-            preferred_link: state.article_url.clone().unwrap_or_default(),
-            feed_link: state.feed_link.clone(),
+            preferred_link: article_renderer::safe_article_url(
+                state.article_url.as_deref().unwrap_or_default(),
+            ),
+            feed_link: article_renderer::safe_article_url(&state.feed_link),
             feed_link_title: article_renderer::escape_html(&state.feed_link_title),
             byline: article_renderer::escape_html(&state.byline),
             datetime_long: state
