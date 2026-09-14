@@ -20,6 +20,25 @@ const STALE_INTERVAL_DAYS: i64 = 180;
 /// from GSettings instead.
 pub const DEFAULT_RETENTION_DAYS: i64 = 30;
 
+/// Row cap on the timeline-feeding queries (`FetchByFeed`, `FetchByFeeds`,
+/// `FetchUnread`, `FetchStarred`, `FetchToday`). Without it a folder
+/// aggregate or an archive-hoarding feed materialized every row's full
+/// `content_html` in one splice: hundreds of MB of RAM for a browse that
+/// only ever shows the newest handful. 1000 newest is far past any
+/// reading session; unread badges and mark-read paths are separate
+/// queries and stay exact. `0` means unlimited (the mark-read callers).
+pub const TIMELINE_FETCH_LIMIT: i64 = 1000;
+
+/// ` LIMIT n` suffix for the timeline queries; `limit <= 0` appends
+/// nothing. Internal constant only, never caller input.
+fn limit_clause(limit: i64) -> String {
+    if limit > 0 {
+        format!(" LIMIT {limit}")
+    } else {
+        String::new()
+    }
+}
+
 /// v2.6.22: timeline sort direction. Drives the `ORDER BY` clause on
 /// every timeline-feeding query (`FetchByFeed`, `FetchByFeeds`,
 /// `FetchUnread`, `FetchStarred`, `FetchToday`). Search results
@@ -73,24 +92,30 @@ impl SortOrder {
 pub enum ArticlesDbOp {
     BatchInsert(Vec<Article>, oneshot::Sender<Result<()>>),
     UpsertStatuses(Vec<ArticleStatus>, oneshot::Sender<Result<()>>),
-    FetchByFeed(String, SortOrder, oneshot::Sender<Result<Vec<Article>>>),
+    FetchByFeed(
+        String,
+        SortOrder,
+        i64,
+        oneshot::Sender<Result<Vec<Article>>>,
+    ),
     /// Bulk variant of `FetchByFeed`. One SQL query with an `IN (?, ?, …)`
     /// clause replaces the previous N-round-trip fan-out used by folder
     /// aggregate views. Empty input is a no-op.
     FetchByFeeds(
         Vec<String>,
         SortOrder,
+        i64,
         oneshot::Sender<Result<Vec<Article>>>,
     ),
     FetchByArticleId(String, oneshot::Sender<Result<Option<Article>>>),
-    FetchUnread(SortOrder, oneshot::Sender<Result<Vec<Article>>>),
-    FetchStarred(SortOrder, oneshot::Sender<Result<Vec<Article>>>),
+    FetchUnread(SortOrder, i64, oneshot::Sender<Result<Vec<Article>>>),
+    FetchStarred(SortOrder, i64, oneshot::Sender<Result<Vec<Article>>>),
     FetchUnreadArticleIds(oneshot::Sender<Result<HashSet<String>>>),
     FetchStarredArticleIds(oneshot::Sender<Result<HashSet<String>>>),
     UpdateStatusesRead(Vec<String>, bool, oneshot::Sender<Result<()>>),
     UpdateStatusesStarred(Vec<String>, bool, oneshot::Sender<Result<()>>),
     FetchMissingArticleIds(oneshot::Sender<Result<Vec<String>>>),
-    FetchToday(SortOrder, oneshot::Sender<Result<Vec<Article>>>),
+    FetchToday(SortOrder, i64, oneshot::Sender<Result<Vec<Article>>>),
     Search(String, oneshot::Sender<Result<Vec<Article>>>),
     SearchWithSnippets(
         String,
@@ -349,24 +374,24 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
             let res = upsert_statuses(conn, statuses);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchByFeed(feed_id, sort, tx) => {
-            let res = fetch_by_feed(conn, &feed_id, sort);
+        ArticlesDbOp::FetchByFeed(feed_id, sort, limit, tx) => {
+            let res = fetch_by_feed(conn, &feed_id, sort, limit);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchByFeeds(feed_ids, sort, tx) => {
-            let res = fetch_by_feeds(conn, &feed_ids, sort);
+        ArticlesDbOp::FetchByFeeds(feed_ids, sort, limit, tx) => {
+            let res = fetch_by_feeds(conn, &feed_ids, sort, limit);
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchByArticleId(article_id, tx) => {
             let res = fetch_by_article_id(conn, &article_id);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchUnread(sort, tx) => {
-            let res = fetch_unread(conn, sort);
+        ArticlesDbOp::FetchUnread(sort, limit, tx) => {
+            let res = fetch_unread(conn, sort, limit);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchStarred(sort, tx) => {
-            let res = fetch_starred(conn, sort);
+        ArticlesDbOp::FetchStarred(sort, limit, tx) => {
+            let res = fetch_starred(conn, sort, limit);
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchUnreadArticleIds(tx) => {
@@ -389,8 +414,8 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
             let res = fetch_missing_article_ids(conn);
             let _ = tx.send(res);
         }
-        ArticlesDbOp::FetchToday(sort, tx) => {
-            let res = fetch_today(conn, sort);
+        ArticlesDbOp::FetchToday(sort, limit, tx) => {
+            let res = fetch_today(conn, sort, limit);
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchSmartFeed(rules, sort, tx) => {
@@ -619,10 +644,16 @@ fn row_to_article(row: &rusqlite::Row) -> rusqlite::Result<Article> {
     })
 }
 
-fn fetch_by_feed(conn: &mut Connection, feed_id: &str, sort: SortOrder) -> Result<Vec<Article>> {
+fn fetch_by_feed(
+    conn: &mut Connection,
+    feed_id: &str,
+    sort: SortOrder,
+    limit: i64,
+) -> Result<Vec<Article>> {
     let sql = format!(
-        "SELECT * FROM articles WHERE feed_id = ? {}",
-        sort.order_by_clause()
+        "SELECT * FROM articles WHERE feed_id = ? {}{}",
+        sort.order_by_clause(),
+        limit_clause(limit)
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([feed_id], row_to_article)?;
@@ -647,6 +678,7 @@ fn fetch_by_feeds(
     conn: &mut Connection,
     feed_ids: &[String],
     sort: SortOrder,
+    limit: i64,
 ) -> Result<Vec<Article>> {
     if feed_ids.is_empty() {
         return Ok(Vec::new());
@@ -657,8 +689,9 @@ fn fetch_by_feeds(
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT * FROM articles WHERE feed_id IN ({placeholders}) {}",
-            sort.order_by_clause()
+            "SELECT * FROM articles WHERE feed_id IN ({placeholders}) {}{}",
+            sort.order_by_clause(),
+            limit_clause(limit)
         );
         let mut stmt = conn.prepare(&sql)?;
         let params: Vec<&dyn rusqlite::ToSql> =
@@ -668,16 +701,21 @@ fn fetch_by_feeds(
             articles.push(row?);
         }
     }
-    // Per-chunk results are each individually sorted; chunks need a
-    // final merge-sort pass so the aggregate view honours the global
-    // sort order. Comparator branches on `sort` since `Reverse` only
-    // flips for newest-first. Keyed on the same logical date as the SQL
-    // ORDER BY (v2.8.1): `date_published`, falling back to `date_modified`.
+    // Per-chunk results are each individually sorted (and each capped at
+    // `limit`, so a 50-feed folder yields at most 50 × limit rows before
+    // the merge); chunks need a final merge-sort pass so the aggregate
+    // view honours the global sort order, then one truncate to the cap.
+    // Comparator branches on `sort` since `Reverse` only flips for
+    // newest-first. Keyed on the same logical date as the SQL ORDER BY
+    // (v2.8.1): `date_published`, falling back to `date_modified`.
     match sort {
         SortOrder::NewestFirst => {
             articles.sort_by_key(|a| std::cmp::Reverse(a.date_published.or(a.date_modified)))
         }
         SortOrder::OldestFirst => articles.sort_by_key(|a| a.date_published.or(a.date_modified)),
+    }
+    if limit > 0 {
+        articles.truncate(limit as usize);
     }
     Ok(articles)
 }
@@ -688,12 +726,13 @@ fn fetch_by_article_id(conn: &mut Connection, article_id: &str) -> Result<Option
     Ok(article)
 }
 
-fn fetch_unread(conn: &mut Connection, sort: SortOrder) -> Result<Vec<Article>> {
+fn fetch_unread(conn: &mut Connection, sort: SortOrder, limit: i64) -> Result<Vec<Article>> {
     let sql = format!(
         "SELECT a.* FROM articles a \
          INNER JOIN statuses s ON a.article_id = s.article_id \
-         WHERE s.read = 0 {}",
-        sort.order_by_clause_aliased()
+         WHERE s.read = 0 {}{}",
+        sort.order_by_clause_aliased(),
+        limit_clause(limit)
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_article)?;
@@ -704,12 +743,13 @@ fn fetch_unread(conn: &mut Connection, sort: SortOrder) -> Result<Vec<Article>> 
     Ok(articles)
 }
 
-fn fetch_starred(conn: &mut Connection, sort: SortOrder) -> Result<Vec<Article>> {
+fn fetch_starred(conn: &mut Connection, sort: SortOrder, limit: i64) -> Result<Vec<Article>> {
     let sql = format!(
         "SELECT a.* FROM articles a \
          INNER JOIN statuses s ON a.article_id = s.article_id \
-         WHERE s.starred = 1 {}",
-        sort.order_by_clause_aliased()
+         WHERE s.starred = 1 {}{}",
+        sort.order_by_clause_aliased(),
+        limit_clause(limit)
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_article)?;
@@ -811,13 +851,14 @@ fn local_midnight_utc_seconds() -> i64 {
     }
 }
 
-fn fetch_today(conn: &mut Connection, sort: SortOrder) -> Result<Vec<Article>> {
+fn fetch_today(conn: &mut Connection, sort: SortOrder, limit: i64) -> Result<Vec<Article>> {
     let today_start = local_midnight_utc_seconds();
     let sql = format!(
         "SELECT a.* FROM articles a \
          INNER JOIN statuses s ON a.article_id = s.article_id \
-         WHERE s.date_arrived >= ? OR a.date_published >= ? {}",
-        sort.order_by_clause_aliased()
+         WHERE s.date_arrived >= ? OR a.date_published >= ? {}{}",
+        sort.order_by_clause_aliased(),
+        limit_clause(limit)
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([today_start, today_start], row_to_article)?;
@@ -1501,7 +1542,7 @@ mod tests {
 
         // The user starred article "b" sometime in the past; "a" was
         // never touched, so it has no status row.
-        let articles = fetch_by_feed(&mut conn, feed_id, SortOrder::default()).expect("fetch");
+        let articles = fetch_by_feed(&mut conn, feed_id, SortOrder::default(), 0).expect("fetch");
         let starred_id = articles
             .iter()
             .find(|a| a.title.as_deref() == Some("Second"))
@@ -1521,7 +1562,7 @@ mod tests {
 
         // The mark-read path: gather current statuses, build rows, write.
         let current = fetch_statuses_by_ids(&mut conn, &ids).expect("statuses");
-        let articles = fetch_by_feed(&mut conn, feed_id, SortOrder::default()).expect("fetch");
+        let articles = fetch_by_feed(&mut conn, feed_id, SortOrder::default(), 0).expect("fetch");
         let rows = mark_read_statuses(articles, &current);
         assert_eq!(rows.len(), 2);
         upsert_statuses(&mut conn, rows).expect("upsert mark-read");
@@ -1538,6 +1579,71 @@ mod tests {
             let expected_star = *id == starred_id;
             assert_eq!(starred, expected_star, "star state must survive mark-read");
         }
+    }
+
+    /// The timeline row cap: `limit > 0` returns the newest `limit`
+    /// articles, `limit == 0` (the mark-read callers) returns every
+    /// row. The folder aggregate caps after the merge, so the global
+    /// newest-N wins, not per-feed newest-N.
+    #[test]
+    fn timeline_fetches_honour_the_row_cap() {
+        let mut conn = in_memory();
+        let feed_a = "https://example.com/a";
+        let feed_b = "https://example.com/b";
+        // Distinct publish dates so newest-first order is unambiguous.
+        let mins_ago = |m: i64| Some(Utc::now() - chrono::Duration::minutes(m));
+        let mk = |id: &str, title: &str, m: i64| {
+            let mut it = item(id, title, "body");
+            it.date_published = mins_ago(m);
+            it
+        };
+        update_feed(
+            &mut conn,
+            feed_a,
+            vec![mk("a1", "A1", 30), mk("a2", "A2", 20), mk("a3", "A3", 10)],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+        update_feed(
+            &mut conn,
+            feed_b,
+            vec![mk("b1", "B1", 5), mk("b2", "B2", 2)],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        // Single feed: cap to the 2 newest; 0 means everything.
+        let all = fetch_by_feed(&mut conn, feed_a, SortOrder::NewestFirst, 0).unwrap();
+        assert_eq!(all.len(), 3);
+        let capped = fetch_by_feed(&mut conn, feed_a, SortOrder::NewestFirst, 2).unwrap();
+        assert_eq!(capped.len(), 2);
+        assert_eq!(capped[0].title.as_deref(), Some("A3"));
+
+        // Folder aggregate: 5 rows across two feeds, cap 3 applies to
+        // the merged result.
+        let ids = vec![feed_a.to_string(), feed_b.to_string()];
+        let merged = fetch_by_feeds(&mut conn, &ids, SortOrder::NewestFirst, 0).unwrap();
+        assert_eq!(merged.len(), 5);
+        let capped_merge = fetch_by_feeds(&mut conn, &ids, SortOrder::NewestFirst, 3).unwrap();
+        assert_eq!(capped_merge.len(), 3);
+        assert_eq!(capped_merge[0].title.as_deref(), Some("B2"));
+
+        // The smart-feed queries take the same cap. `update_feed` gives
+        // every new article an unread status row, so all 5 are unread.
+        assert_eq!(
+            fetch_unread(&mut conn, SortOrder::NewestFirst, 0)
+                .unwrap()
+                .len(),
+            5
+        );
+        assert_eq!(
+            fetch_unread(&mut conn, SortOrder::NewestFirst, 1)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1933,7 +2039,7 @@ mod tests {
         )
         .expect("update_feed");
 
-        let titles: Vec<String> = fetch_by_feed(&mut conn, feed_id, SortOrder::NewestFirst)
+        let titles: Vec<String> = fetch_by_feed(&mut conn, feed_id, SortOrder::NewestFirst, 0)
             .expect("fetch")
             .into_iter()
             .filter_map(|a| a.title)

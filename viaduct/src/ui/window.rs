@@ -589,12 +589,15 @@ impl ViaductWindow {
             glib::spawn_future_local(async move {
                 let click_at = std::time::Instant::now();
                 let sort = current_timeline_sort();
+                let limit = crate::database::articles::TIMELINE_FETCH_LIMIT;
                 let result: crate::error::Result<Vec<_>> = match item {
-                    SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id, sort).await,
+                    SidebarItem::Feed(feed) => {
+                        account.fetch_articles_by_feed(feed.id, sort, limit).await
+                    }
                     SidebarItem::SmartFeed(name) => match name.as_str() {
-                        "Today" => account.fetch_today_articles(sort).await,
-                        "All Unread" => account.fetch_unread_articles(sort).await,
-                        "Starred" => account.fetch_starred_articles(sort).await,
+                        "Today" => account.fetch_today_articles(sort, limit).await,
+                        "All Unread" => account.fetch_unread_articles(sort, limit).await,
+                        "Starred" => account.fetch_starred_articles(sort, limit).await,
                         _ => Ok(Vec::new()),
                     },
                     SidebarItem::Folder(folder) => {
@@ -1794,7 +1797,10 @@ impl ViaductWindow {
             // Sort doesn't matter for mark-as-read — we iterate to mark
             // every article. Use the default to satisfy the API.
             let sort = crate::database::articles::SortOrder::default();
-            let articles = match account.fetch_articles_by_feed(feed.id.clone(), sort).await {
+            let articles = match account
+                .fetch_articles_by_feed(feed.id.clone(), sort, 0)
+                .await
+            {
                 Ok(a) => a,
                 Err(e) => {
                     tracing::warn!(?e, "mark-feed-read: fetch_articles_by_feed failed");
@@ -1836,7 +1842,10 @@ impl ViaductWindow {
             let sort = crate::database::articles::SortOrder::default();
             let mut articles: Vec<crate::models::Article> = Vec::new();
             for feed in &folder.feeds {
-                match account.fetch_articles_by_feed(feed.id.clone(), sort).await {
+                match account
+                    .fetch_articles_by_feed(feed.id.clone(), sort, 0)
+                    .await
+                {
                     Ok(arts) => articles.extend(arts),
                     Err(e) => {
                         tracing::warn!(?e, feed_id = %feed.id, "mark-folder-read: feed fetch failed")
@@ -2336,12 +2345,15 @@ impl ViaductWindow {
         let weak_window = self.downgrade();
         glib::spawn_future_local(async move {
             let sort = current_timeline_sort();
+            let limit = crate::database::articles::TIMELINE_FETCH_LIMIT;
             let result: crate::error::Result<Vec<_>> = match item {
-                SidebarItem::Feed(feed) => account.fetch_articles_by_feed(feed.id, sort).await,
+                SidebarItem::Feed(feed) => {
+                    account.fetch_articles_by_feed(feed.id, sort, limit).await
+                }
                 SidebarItem::SmartFeed(name) => match name.as_str() {
-                    "Today" => account.fetch_today_articles(sort).await,
-                    "All Unread" => account.fetch_unread_articles(sort).await,
-                    "Starred" => account.fetch_starred_articles(sort).await,
+                    "Today" => account.fetch_today_articles(sort, limit).await,
+                    "All Unread" => account.fetch_unread_articles(sort, limit).await,
+                    "Starred" => account.fetch_starred_articles(sort, limit).await,
                     _ => Ok(Vec::new()),
                 },
                 SidebarItem::Folder(folder) => fetch_folder_articles(&account, &folder, sort).await,
@@ -2606,5 +2618,11 @@ async fn fetch_folder_articles(
     // to O(1 · channel + plan). v2.6.22: the bulk op handles cross-
     // chunk sort internally per `SortOrder`, so no second pass needed.
     let feed_ids: Vec<String> = folder.feeds.iter().map(|f| f.id.clone()).collect();
-    account.fetch_articles_by_feeds(feed_ids, sort).await
+    account
+        .fetch_articles_by_feeds(
+            feed_ids,
+            sort,
+            crate::database::articles::TIMELINE_FETCH_LIMIT,
+        )
+        .await
 }

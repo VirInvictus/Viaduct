@@ -97,12 +97,24 @@ pub async fn extract(
     }
 }
 
+/// One client for the process, built on first use. A fresh client per
+/// extraction threw away the connection pool every time and paid the
+/// TLS handshake again on every Reader View fetch of the same host.
+fn reader_client() -> Result<&'static reqwest::Client, ReaderError> {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    Ok(CLIENT.get_or_init(|| {
+        // A client build failure is a process-config problem, not a
+        // per-article one; the feed Fetcher asserts the same way.
+        crate::network::http::client_builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .expect("failed to build reqwest client")
+    }))
+}
+
 async fn fetch_article_html(url: &str) -> Result<String, ReaderError> {
     use reqwest::header;
-    let client = crate::network::http::client_builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| ReaderError::Fetch(e.to_string()))?;
+    let client = reader_client()?;
     tracing::debug!(%url, "reader_view: fetching article");
     let started = std::time::Instant::now();
     let resp = client
@@ -115,10 +127,16 @@ async fn fetch_article_html(url: &str) -> Result<String, ReaderError> {
         tracing::warn!(%url, status = %resp.status(), "reader_view: HTTP non-success");
         return Err(ReaderError::Fetch(format!("HTTP {}", resp.status())));
     }
-    let body = resp
-        .text()
+    // The 5 MB gate is enforced while streaming now, not after an
+    // unbounded `text()` buffered the whole page.
+    let (bytes, truncated) = crate::network::http::read_body_capped(resp, INPUT_SIZE_CAP)
         .await
         .map_err(|e| ReaderError::Fetch(e.to_string()))?;
+    if truncated {
+        tracing::warn!(%url, cap = INPUT_SIZE_CAP, "reader_view: page over input cap");
+        return Err(ReaderError::TooLarge);
+    }
+    let body = String::from_utf8_lossy(&bytes).into_owned();
     tracing::debug!(
         %url,
         bytes = body.len(),

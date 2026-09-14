@@ -42,6 +42,25 @@ const DEFAULT_RETRY_AFTER_SECS: i64 = 10 * 60;
 /// same memory-bound effect.
 const REFRESH_PARALLELISM: usize = 8;
 
+/// Hard cap on a single feed body, enforced while streaming. A hostile
+/// or runaway feed URL can no longer buffer an unbounded response into
+/// RAM. Generous: no real feed approaches 10 MB.
+pub const FEED_BODY_MAX_BYTES: usize = 10 * 1024 * 1024;
+
+/// Per-host 429 cooldowns are process-lifetime, not per-cycle: the
+/// refresher (and so the `Fetcher`) is built fresh for every refresh
+/// cycle, so cycle-scoped cooldowns evaporated at cycle end and a host
+/// that had asked for a backoff was hit again on the very next cycle.
+/// NNW's `DownloadSession` is app-scoped; this matches it.
+type CooldownMap = Arc<Mutex<HashMap<String, DateTime<Utc>>>>;
+
+fn shared_cooldowns() -> CooldownMap {
+    static COOLDOWNS: std::sync::OnceLock<CooldownMap> = std::sync::OnceLock::new();
+    COOLDOWNS
+        .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+        .clone()
+}
+
 #[derive(Clone, Debug)]
 pub struct FetchResult {
     pub status: u16,
@@ -74,7 +93,7 @@ impl Fetcher {
         Self {
             client,
             active_requests: Arc::new(Mutex::new(HashMap::new())),
-            cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            cooldowns: shared_cooldowns(),
         }
     }
 
@@ -199,28 +218,52 @@ impl Fetcher {
                                     }
                                 }
 
-                                let body = response
-                                    .bytes()
-                                    .await
-                                    .map(|b| b.to_vec())
-                                    .unwrap_or_default();
-                                debug!(
-                                    url = %url_clone,
-                                    status = status.as_u16(),
-                                    body_bytes = body.len(),
-                                    encoding = ?content_encoding,
-                                    has_etag = etag.is_some(),
-                                    max_age = ?cache_control_max_age,
-                                    elapsed_ms = send_started.elapsed().as_millis() as u64,
-                                    "fetch: response"
-                                );
-                                Ok(FetchResult {
-                                    status: status.as_u16(),
-                                    body,
-                                    etag,
-                                    last_modified,
-                                    cache_control_max_age,
-                                })
+                                let body = match crate::network::http::read_body_capped(
+                                    response,
+                                    FEED_BODY_MAX_BYTES,
+                                )
+                                .await
+                                {
+                                    Ok((body, false)) => Ok(body),
+                                    Ok((_partial, true)) => {
+                                        warn!(
+                                            url = %url_clone,
+                                            cap_bytes = FEED_BODY_MAX_BYTES,
+                                            "fetch: body over size cap; treating as failed"
+                                        );
+                                        Err("feed body over size cap".to_string())
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            url = %url_clone,
+                                            error = %e,
+                                            "fetch: body read failed"
+                                        );
+                                        Err(e.to_string())
+                                    }
+                                };
+                                match body {
+                                    Ok(body) => {
+                                        debug!(
+                                            url = %url_clone,
+                                            status = status.as_u16(),
+                                            body_bytes = body.len(),
+                                            encoding = ?content_encoding,
+                                            has_etag = etag.is_some(),
+                                            max_age = ?cache_control_max_age,
+                                            elapsed_ms = send_started.elapsed().as_millis() as u64,
+                                            "fetch: response"
+                                        );
+                                        Ok(FetchResult {
+                                            status: status.as_u16(),
+                                            body,
+                                            etag,
+                                            last_modified,
+                                            cache_control_max_age,
+                                        })
+                                    }
+                                    Err(e) => Err(e),
+                                }
                             }
                         }
                         Err(e) => {

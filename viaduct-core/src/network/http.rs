@@ -138,6 +138,35 @@ pub fn client_builder() -> reqwest::ClientBuilder {
         .connect_timeout(CONNECT_TIMEOUT)
 }
 
+/// Stream a response body under a hard byte cap. Returns the bytes read
+/// plus whether the cap truncated the body; callers decide whether
+/// truncation is acceptable (head-scans accept a prefix, body consumers
+/// reject it). The running chunk guard is the real enforcement, since
+/// `Content-Length` can be absent or lie. A mid-body read failure errors
+/// out rather than returning a short body, so a network failure can
+/// never masquerade as an empty successful response.
+pub async fn read_body_capped(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<(Vec<u8>, bool), reqwest::Error> {
+    let mut buf: Vec<u8> = Vec::with_capacity(max_bytes.min(256 * 1024));
+    loop {
+        match response.chunk().await? {
+            Some(chunk) => {
+                let remaining = max_bytes.saturating_sub(buf.len());
+                if chunk.len() >= remaining {
+                    if remaining > 0 {
+                        buf.extend_from_slice(&chunk[..remaining]);
+                    }
+                    return Ok((buf, true));
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            None => return Ok((buf, false)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -149,13 +149,16 @@ impl Account {
         }
     }
 
+    /// `limit` caps the result rows (see `TIMELINE_FETCH_LIMIT`);
+    /// `0` fetches everything (the mark-read callers need every article).
     pub async fn fetch_articles_by_feed(
         &self,
         feed_id: String,
         sort: crate::database::articles::SortOrder,
+        limit: i64,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.dispatch_read(ArticlesDbOp::FetchByFeed(feed_id, sort, tx))
+        self.dispatch_read(ArticlesDbOp::FetchByFeed(feed_id, sort, limit, tx))
             .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
@@ -165,14 +168,16 @@ impl Account {
     /// an `IN (?, ?, …)` clause, chunked at 500 IDs to stay under
     /// SQLite's parameter limit) instead of N round-trips. Used by the
     /// folder-aggregate view (`fetch_folder_articles`); previously that
-    /// fanned out N sequential single-feed queries.
+    /// fanned out N sequential single-feed queries. `limit` caps the
+    /// merged result (see `TIMELINE_FETCH_LIMIT`); `0` fetches everything.
     pub async fn fetch_articles_by_feeds(
         &self,
         feed_ids: Vec<String>,
         sort: crate::database::articles::SortOrder,
+        limit: i64,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.dispatch_read(ArticlesDbOp::FetchByFeeds(feed_ids, sort, tx))
+        self.dispatch_read(ArticlesDbOp::FetchByFeeds(feed_ids, sort, limit, tx))
             .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
@@ -181,9 +186,10 @@ impl Account {
     pub async fn fetch_unread_articles(
         &self,
         sort: crate::database::articles::SortOrder,
+        limit: i64,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.dispatch_read(ArticlesDbOp::FetchUnread(sort, tx))
+        self.dispatch_read(ArticlesDbOp::FetchUnread(sort, limit, tx))
             .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
@@ -192,9 +198,10 @@ impl Account {
     pub async fn fetch_starred_articles(
         &self,
         sort: crate::database::articles::SortOrder,
+        limit: i64,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.dispatch_read(ArticlesDbOp::FetchStarred(sort, tx))
+        self.dispatch_read(ArticlesDbOp::FetchStarred(sort, limit, tx))
             .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
@@ -251,9 +258,10 @@ impl Account {
     pub async fn fetch_today_articles(
         &self,
         sort: crate::database::articles::SortOrder,
+        limit: i64,
     ) -> Result<Vec<Article>> {
         let (tx, rx) = oneshot::channel();
-        self.dispatch_read(ArticlesDbOp::FetchToday(sort, tx))
+        self.dispatch_read(ArticlesDbOp::FetchToday(sort, limit, tx))
             .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
@@ -401,6 +409,23 @@ impl Account {
         let (tx, rx) = oneshot::channel();
         self.db_tx
             .send(DbOp::Settings(Box::new(SettingsDbOp::Fetch(feed_id, tx))))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// Bulk `fetch_feed_settings`: one worker round-trip for N ids.
+    /// Feeds with no stored row are absent from the map.
+    pub async fn fetch_feed_settings_many(
+        &self,
+        feed_ids: Vec<String>,
+    ) -> Result<HashMap<String, FeedSettings>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Settings(Box::new(SettingsDbOp::FetchMany(
+                feed_ids, tx,
+            ))))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await

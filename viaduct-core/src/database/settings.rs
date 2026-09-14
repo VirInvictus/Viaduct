@@ -4,6 +4,7 @@
 
 use chrono::{TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::HashMap;
 use tokio::sync::oneshot;
 
 use crate::error::Result;
@@ -11,6 +12,12 @@ use crate::models::FeedSettings;
 
 pub enum SettingsDbOp {
     Fetch(String, oneshot::Sender<Result<Option<FeedSettings>>>),
+    /// Bulk `Fetch` for the refresh pipeline's feed/settings pairing:
+    /// one worker round-trip per cycle instead of one per feed.
+    FetchMany(
+        Vec<String>,
+        oneshot::Sender<Result<HashMap<String, FeedSettings>>>,
+    ),
     Upsert(Box<FeedSettings>, oneshot::Sender<Result<()>>),
     DeleteSettingsForFeedsNotIn(Vec<String>, oneshot::Sender<Result<usize>>),
     /// Run `VACUUM`. NNW vacuums the FeedSettingsDatabase on every init
@@ -79,6 +86,10 @@ pub(crate) fn handle_op(conn: &mut Connection, op: SettingsDbOp) {
             let res = fetch(conn, &feed_id);
             let _ = tx.send(res);
         }
+        SettingsDbOp::FetchMany(feed_ids, tx) => {
+            let res = fetch_many(conn, &feed_ids);
+            let _ = tx.send(res);
+        }
         SettingsDbOp::Upsert(settings, tx) => {
             let res = upsert(conn, *settings);
             let _ = tx.send(res);
@@ -131,38 +142,60 @@ fn checkpoint(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+fn settings_from_row(row: &rusqlite::Row) -> rusqlite::Result<FeedSettings> {
+    Ok(FeedSettings {
+        feed_id: row.get("feed_id")?,
+        feed_url: row.get("feed_url")?,
+        home_page_url: row.get("home_page_url")?,
+        icon_url: row.get("icon_url")?,
+        favicon_url: row.get("favicon_url")?,
+        edited_name: row.get("edited_name")?,
+        content_hash: row.get("content_hash")?,
+        last_modified: row.get("last_modified")?,
+        etag: row.get("etag")?,
+        date_created: row
+            .get::<_, Option<i64>>("date_created")?
+            .and_then(|t| Utc.timestamp_opt(t, 0).single()),
+        max_age: row.get("max_age")?,
+        authors_json: row.get("authors_json")?,
+        folder_relationship_json: row.get("folder_relationship_json")?,
+        last_check_date: row
+            .get::<_, Option<i64>>("last_check_date")?
+            .and_then(|t| Utc.timestamp_opt(t, 0).single()),
+        reader_view_always_enabled: row.get::<_, i64>("reader_view_always_enabled")? != 0,
+        new_article_notifications_enabled: row
+            .get::<_, i64>("new_article_notifications_enabled")?
+            != 0,
+        last_response_code: row.get("last_response_code")?,
+    })
+}
+
 fn fetch(conn: &mut Connection, feed_id: &str) -> Result<Option<FeedSettings>> {
     let mut stmt = conn.prepare("SELECT * FROM feed_settings WHERE feed_id = ?")?;
-    let settings = stmt
-        .query_row([feed_id], |row| {
-            Ok(FeedSettings {
-                feed_id: row.get("feed_id")?,
-                feed_url: row.get("feed_url")?,
-                home_page_url: row.get("home_page_url")?,
-                icon_url: row.get("icon_url")?,
-                favicon_url: row.get("favicon_url")?,
-                edited_name: row.get("edited_name")?,
-                content_hash: row.get("content_hash")?,
-                last_modified: row.get("last_modified")?,
-                etag: row.get("etag")?,
-                date_created: row
-                    .get::<_, Option<i64>>("date_created")?
-                    .and_then(|t| Utc.timestamp_opt(t, 0).single()),
-                max_age: row.get("max_age")?,
-                authors_json: row.get("authors_json")?,
-                folder_relationship_json: row.get("folder_relationship_json")?,
-                last_check_date: row
-                    .get::<_, Option<i64>>("last_check_date")?
-                    .and_then(|t| Utc.timestamp_opt(t, 0).single()),
-                reader_view_always_enabled: row.get::<_, i64>("reader_view_always_enabled")? != 0,
-                new_article_notifications_enabled: row
-                    .get::<_, i64>("new_article_notifications_enabled")?
-                    != 0,
-                last_response_code: row.get("last_response_code")?,
-            })
-        })
-        .optional()?;
+    let settings = stmt.query_row([feed_id], settings_from_row).optional()?;
     Ok(settings)
+}
+
+/// Bulk variant of `fetch`: one round-trip for N feed ids (chunked at
+/// 500 under SQLite's parameter limit). Absent ids are absent from the
+/// map — callers substitute their blank default.
+fn fetch_many(conn: &mut Connection, feed_ids: &[String]) -> Result<HashMap<String, FeedSettings>> {
+    let mut out: HashMap<String, FeedSettings> = HashMap::with_capacity(feed_ids.len());
+    for chunk in feed_ids.chunks(500) {
+        let placeholders: String = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("SELECT * FROM feed_settings WHERE feed_id IN ({placeholders})");
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), settings_from_row)?;
+        for row in rows {
+            let s = row?;
+            out.insert(s.feed_id.clone(), s);
+        }
+    }
+    Ok(out)
 }
 
 fn upsert(conn: &mut Connection, s: FeedSettings) -> Result<()> {

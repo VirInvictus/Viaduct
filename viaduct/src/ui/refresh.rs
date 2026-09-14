@@ -489,39 +489,46 @@ impl ViaductWindow {
 
 /// Pair each feed with its persisted FeedSettings (or a blank one if the
 /// feed hasn't been seen before). The refresher uses settings for
-/// conditional-GET info, content hash, last_check_date, etc.
+/// conditional-GET info, content hash, last_check_date, etc. One bulk
+/// worker round-trip for the whole cycle instead of one per feed.
 async fn pair_feeds_with_settings(
     account: &Arc<Account>,
     feeds: Vec<crate::models::Feed>,
 ) -> Vec<(crate::models::Feed, crate::models::FeedSettings)> {
-    let mut paired = Vec::with_capacity(feeds.len());
-    for feed in feeds {
-        let settings = account
-            .fetch_feed_settings(feed.id.clone())
-            .await
-            .unwrap_or(None)
-            .unwrap_or_else(|| crate::models::FeedSettings {
-                feed_id: feed.id.clone(),
-                feed_url: feed.url.clone(),
-                home_page_url: feed.home_page_url.clone(),
-                icon_url: None,
-                favicon_url: None,
-                edited_name: feed.edited_name.clone(),
-                content_hash: None,
-                last_modified: None,
-                etag: None,
-                date_created: None,
-                max_age: None,
-                authors_json: None,
-                folder_relationship_json: None,
-                last_check_date: None,
-                reader_view_always_enabled: false,
-                new_article_notifications_enabled: false,
-                last_response_code: None,
-            });
-        paired.push((feed, settings));
-    }
-    paired
+    let ids: Vec<String> = feeds.iter().map(|f| f.id.clone()).collect();
+    let stored = account
+        .fetch_feed_settings_many(ids)
+        .await
+        .unwrap_or_default();
+    feeds
+        .into_iter()
+        .map(|feed| {
+            let settings =
+                stored
+                    .get(&feed.id)
+                    .cloned()
+                    .unwrap_or_else(|| crate::models::FeedSettings {
+                        feed_id: feed.id.clone(),
+                        feed_url: feed.url.clone(),
+                        home_page_url: feed.home_page_url.clone(),
+                        icon_url: None,
+                        favicon_url: None,
+                        edited_name: feed.edited_name.clone(),
+                        content_hash: None,
+                        last_modified: None,
+                        etag: None,
+                        date_created: None,
+                        max_age: None,
+                        authors_json: None,
+                        folder_relationship_json: None,
+                        last_check_date: None,
+                        reader_view_always_enabled: false,
+                        new_article_notifications_enabled: false,
+                        last_response_code: None,
+                    });
+            (feed, settings)
+        })
+        .collect()
 }
 
 /// Run a refresh cycle and return the total `new_articles` count across all

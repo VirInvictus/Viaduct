@@ -34,6 +34,10 @@ use url::Url;
 /// pulling down a multi-MB landing page just to scan the first ~10 KB.
 const HTML_FETCH_CAP_BYTES: usize = 256 * 1024;
 
+/// Cap for the verify-GET fallback: we only need to learn the body is
+/// non-empty, so read at most 1 MB of it.
+const VERIFY_CAP_BYTES: usize = 1024 * 1024;
+
 /// Try to discover a usable favicon URL for `home_page_url`. Returns
 /// `None` when neither the HTML head probe nor the `/favicon.ico`
 /// fallback succeeds — caller leaves `favicon_url` unset so the sidebar
@@ -76,15 +80,13 @@ async fn fetch_html(client: &Client, url: &str) -> Option<Vec<u8>> {
     if !resp.status().is_success() {
         return None;
     }
-    let bytes = resp.bytes().await.ok()?;
-    if bytes.len() > HTML_FETCH_CAP_BYTES {
-        // Truncate at the cap. extract_metadata is byte-driven and
-        // bails at `<body>` for non-YouTube hosts; the head almost
-        // always lands well inside 256 KB.
-        Some(bytes[..HTML_FETCH_CAP_BYTES].to_vec())
-    } else {
-        Some(bytes.to_vec())
-    }
+    // Stream at most the head-scan cap (truncation is fine here — the
+    // scan never needs the body), instead of downloading the whole page
+    // and cutting it down afterwards.
+    let (bytes, _truncated) = crate::network::http::read_body_capped(resp, HTML_FETCH_CAP_BYTES)
+        .await
+        .ok()?;
+    Some(bytes)
 }
 
 /// Walk the metadata's `<link>` tags and pick the best favicon
@@ -145,6 +147,8 @@ async fn verify_favicon(client: &Client, url: &str) -> bool {
     {
         return true;
     }
+    // GET fallback, capped so a hostile favicon URL can't buffer an
+    // unbounded body just to learn it's non-empty.
     if let Ok(resp) = client
         .get(url)
         .header(
@@ -154,7 +158,8 @@ async fn verify_favicon(client: &Client, url: &str) -> bool {
         .send()
         .await
         && resp.status().is_success()
-        && let Ok(bytes) = resp.bytes().await
+        && let Ok((bytes, _truncated)) =
+            crate::network::http::read_body_capped(resp, VERIFY_CAP_BYTES).await
     {
         return !bytes.is_empty();
     }

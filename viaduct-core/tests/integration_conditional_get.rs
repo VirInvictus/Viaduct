@@ -165,6 +165,7 @@ async fn failed_parse_does_not_store_conditional_get() {
         .fetch_articles_by_feed(
             good_url.clone(),
             viaduct_core::database::articles::SortOrder::NewestFirst,
+            0,
         )
         .await
         .expect("fetch articles");

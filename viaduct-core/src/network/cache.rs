@@ -276,7 +276,7 @@ impl Inner {
 
 async fn download(client: &Client, url: &str, max_bytes: usize) -> Option<Vec<u8>> {
     use reqwest::header;
-    let mut resp = match client
+    let resp = match client
         .get(url)
         .header(header::ACCEPT, crate::network::http::ACCEPT_IMAGE)
         .header(
@@ -297,35 +297,17 @@ async fn download(client: &Client, url: &str, max_bytes: usize) -> Option<Vec<u8
         return None;
     }
 
-    // Reject obviously-oversized bodies before reading a byte when the
-    // server is honest about Content-Length.
-    if let Some(len) = resp.content_length()
-        && len as usize > max_bytes
-    {
-        debug!(%url, len, max_bytes, "image over size cap (content-length); skipping");
-        return None;
-    }
-
-    // Stream the body, aborting if the running total crosses the cap —
-    // Content-Length can be absent or lie, so this is the real guard.
-    let mut buf: Vec<u8> = Vec::new();
-    loop {
-        match resp.chunk().await {
-            Ok(Some(chunk)) => {
-                if buf.len() + chunk.len() > max_bytes {
-                    debug!(%url, max_bytes, "image over size cap (streamed); skipping");
-                    return None;
-                }
-                buf.extend_from_slice(&chunk);
-            }
-            Ok(None) => break,
-            Err(e) => {
-                warn!(%url, ?e, "image body read failed");
-                return None;
-            }
+    match crate::network::http::read_body_capped(resp, max_bytes).await {
+        Ok((buf, false)) => Some(buf),
+        Ok((_partial, true)) => {
+            debug!(%url, max_bytes, "image over size cap (streamed); skipping");
+            None
+        }
+        Err(e) => {
+            warn!(%url, ?e, "image body read failed");
+            None
         }
     }
-    Some(buf)
 }
 
 pub(crate) fn cache_filename(url: &str) -> String {

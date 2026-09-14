@@ -18,6 +18,7 @@
 
 use crate::error::{NetworkError, Result, ViaductError};
 use crate::models::ParsedFeed;
+use crate::network::fetcher;
 use crate::parser;
 use reqwest::Client;
 use url::Url;
@@ -114,11 +115,14 @@ async fn fetch_bytes(client: &Client, url: &str) -> Result<Vec<u8>> {
     if !resp.status().is_success() {
         return Err(ViaductError::Network(NetworkError::NoFeedFound));
     }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| ViaductError::Network(NetworkError::Reqwest(e)))?;
-    Ok(bytes.to_vec())
+    // Same streamed cap the feed fetcher enforces: the direct-parse pass
+    // wants a whole feed, the HTML-scan pass only needs the head, and a
+    // truncated body degrades to the pass that tolerates it.
+    let (bytes, _truncated) =
+        crate::network::http::read_body_capped(resp, fetcher::FEED_BODY_MAX_BYTES)
+            .await
+            .map_err(|e| ViaductError::Network(NetworkError::Reqwest(e)))?;
+    Ok(bytes)
 }
 
 /// Walk the metadata's `<link>` tags and return the first one whose

@@ -77,7 +77,7 @@ async fn test_account_update_feed_integration() {
     // crosses the writer→reader boundary — the read-only connection must see
     // the committed write (WAL).
     let fetched = account
-        .fetch_articles_by_feed(feed_id.clone(), SortOrder::NewestFirst)
+        .fetch_articles_by_feed(feed_id.clone(), SortOrder::NewestFirst, 0)
         .await
         .expect("Failed to fetch articles through the read pool");
     assert_eq!(fetched.len(), 1);
