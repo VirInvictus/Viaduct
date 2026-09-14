@@ -2,11 +2,11 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-// UI layer for GTK4/Libadwaita
+// UI layer for plain GTK4 (libadwaita removed in v3.0.0)
 
 // The shared row builders, Alert dialog, and Escape-to-close live in
-// vir-gtk's widget kit since 1.4.0; the historical `rows` and `alert`
-// module paths re-export it so call sites keep resolving.
+// vir-gtk's widget kit since 1.4.0; the historical `rows` module path
+// re-exports it so call sites keep resolving.
 
 /// Close `window` when Escape is pressed. Re-exported from
 /// [`vir_gtk::widgets`] (capture phase, so the dialog closes even while a
@@ -38,7 +38,3 @@ pub mod tree;
 pub mod welcome_dialog;
 pub mod window;
 pub mod window_title;
-
-pub fn init_ui() {
-    // Phase 5: Setup AdwNavigationSplitView
-}

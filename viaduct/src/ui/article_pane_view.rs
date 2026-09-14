@@ -4,7 +4,7 @@
 
 //! Phase 18 / v2.0.0-pre1 — `ViaductArticlePaneView`. Owns the locked-down
 //! `WebKitWebView`, the reader-view + play-video buttons in the article
-//! pane's `AdwHeaderBar`, and the per-article display state. Lifted out of
+//! pane's `GtkHeaderBar`, and the per-article display state. Lifted out of
 //! `ViaductWindow` so the god-object shrinks one pane at a time. Window-side
 //! callers interact through `set_article` / `set_auto_reader` / `clear` /
 //! `idle_for_background` plus a few accessor helpers; everything else

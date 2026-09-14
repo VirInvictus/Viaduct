@@ -719,8 +719,10 @@ impl ViaductWindow {
                 .first()
                 .and_then(|a| a.name.clone())
                 .unwrap_or_default();
-            // feed_link is filled in by the post-load fetch_feed_settings path
-            // below if the feed has a home_page_url; for now stub to empty.
+            // feed_link stays empty: NNW fills it from the feed's home
+            // page, but nothing populates it on this path today, so the
+            // templates render it empty. The reader/notification prefs
+            // below are the only reason fetch_feed_settings runs here.
             let feed_link = String::new();
 
             // Prefer content_html → content_text → summary, in order. NNW
@@ -906,9 +908,7 @@ impl ViaductWindow {
 
     // -----------------------------------------------------------------
     // Action handlers — invoked via win.<name> gio::SimpleActions. See
-    // src/ui/actions.rs for accelerator bindings. Bodies are filled in by
-    // subsequent Phase 9 tasks; stubs emit a trace so unbound keys are
-    // visible during development.
+    // src/ui/actions.rs for accelerator bindings.
     // -----------------------------------------------------------------
 
     /// NNW `scrollOrGoToNextUnread` for Space. Currently the article-pane
@@ -916,11 +916,10 @@ impl ViaductWindow {
     /// pre1.6 — that wrapper's auto-viewport was clipping articles
     /// silently because NNW themes set `html { overflow: hidden }`).
     /// Without JS we can't query scroll position from the GTK side, so
-    /// the "advance at bottom" half of the NNW behavior is on hold. For
-    /// now Space falls through to WebKit's native page-down — this
-    /// handler is a no-op that holds the action slot. v1.3 polish will
-    /// reinstate the at-bottom advance via a webkit_load_changed scroll
-    /// monitor.
+    /// the "advance at bottom" half of the NNW behavior is a standing
+    /// known limitation (spec.md §5): an at-bottom monitor needs the JS
+    /// bridge the §2.2 lockdown disables. Space falls through to
+    /// WebKit's native page-down; this handler holds the action slot.
     pub(crate) fn act_smart_read(&self) {
         // intentionally no-op — Space goes through to WebKit
     }
@@ -932,8 +931,8 @@ impl ViaductWindow {
         // intentionally no-op — Shift+Space goes through to WebKit
     }
 
-    // Will be re-wired once the at-bottom scroll monitor returns —
-    // see act_smart_read.
+    /// Dead code kept as the reattachment point for the at-bottom
+    /// advance, a standing known limitation (see act_smart_read).
     #[allow(dead_code)]
     fn mark_current_read_then_advance(&self) {
         let imp = self.imp();
@@ -1359,7 +1358,7 @@ impl ViaductWindow {
         self.show_toast("Feed URL copied.");
     }
 
-    /// Confirmation-gated feed removal. Presents an `AdwAlertDialog`
+    /// Confirmation-gated feed removal. Presents an `Alert`
     /// with destructive-action styling on Delete; on confirm, calls
     /// `Account::remove_feed` and reloads the sidebar. Article rows
     /// for the removed feed are pruned by the next `cleanup_at_startup`
@@ -1432,7 +1431,7 @@ impl ViaductWindow {
     }
 
     /// v2.1.0: rename a feed via the right-click menu. Shows an
-    /// `AdwAlertDialog` with a single text entry pre-filled with the
+    /// `Alert` with a single text entry pre-filled with the
     /// feed's current display name; on save, calls `Account::rename_feed`
     /// and reloads the sidebar. Empty input clears `edited_name` (reverts
     /// to the parsed feed name / URL host fallback).
@@ -1575,7 +1574,7 @@ impl ViaductWindow {
     }
 
     /// v2.1.0: move the right-clicked feed to a different folder (or to
-    /// the standalone list). Shows an `AdwAlertDialog` with a
+    /// the standalone list). Shows an `Alert` with a
     /// `GtkDropDown` listing existing folders plus a leading
     /// "(No folder)" option. The currently-selected entry mirrors the
     /// feed's current location.
@@ -1686,7 +1685,7 @@ impl ViaductWindow {
     }
 
     /// v2.4.0: open the Feed Settings dialog for the right-clicked feed.
-    /// Two `AdwSwitchRow` toggles bound to per-feed `FeedSettings`: "New
+    /// Two `rows::switch_row` toggles bound to per-feed `FeedSettings`: "New
     /// article notifications" (the actual v2.4.0 feature) and "Always
     /// use Reader View" (existing field, exposed in the UI for the first
     /// time). On save: fetch the current `FeedSettings` from the DB,

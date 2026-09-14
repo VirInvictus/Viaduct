@@ -29,3 +29,7 @@ data/gschemas.compiled
 # Memory-diagnostic capture file. Produced by `--debug` runs, regenerated
 # every time, never committed.
 debug-memory.log
+
+# In-tree flatpak-builder state. The tracked manifest invites local
+# runs; the default build dir must never land in git.
+.flatpak-builder/

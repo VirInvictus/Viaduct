@@ -264,8 +264,8 @@ fn build_ui(app: &gtk::Application, account: Arc<Account>) {
         return;
     }
 
-    // Phase 20b: resolve dark/light from the settings portal ourselves,
-    // first, because everything below reads `theme::is_dark()`.
+    // Phase 20b: dark/light resolves through theme.rs, the shim over
+    // vir_gtk::portal, before anything below reads `theme::is_dark()`.
     viaduct::theme::init(viaduct::preferences::settings());
     // Phase 20d: install the owned Kanagawa stylesheet at USER+1 (beating any
     // system gtk.css), and keep it following dark/light flips.

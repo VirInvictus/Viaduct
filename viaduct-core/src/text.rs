@@ -1,3 +1,7 @@
+// Copyright (c) 2002-2026 Brent Simmons, Ranchero Software
+// Copyright (c) 2026 Brandon LaRocque
+// Licensed under the MIT License. See LICENSE in the project root for details.
+
 //! Article-title sanitization. Port of NNW
 //! `Shared/Extensions/ArticleStringFormatter.sanitizedTitle` (commits
 //! 3eac947dd, de464b6a3): a title may carry inline HTML, and the

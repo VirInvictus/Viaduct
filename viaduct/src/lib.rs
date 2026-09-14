@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Brandon LaRocque
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
-//! viaduct binary crate's library root. Holds every GTK / libadwaita /
-//! WebKit-touching module; everything headless lives in the sibling
+//! viaduct binary crate's library root. Holds every GTK / WebKit-touching
+//! module (libadwaita removed in v3.0.0); everything headless lives in the sibling
 //! `viaduct-core` crate. `main.rs` is the thin GTK entrypoint.
 //!
 //! Re-exports `viaduct_core` symbols at the crate root so existing

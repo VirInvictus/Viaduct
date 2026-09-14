@@ -242,8 +242,8 @@ pub fn spawn_read_workers(read_rx: cbc::Receiver<ArticlesDbOp>) -> Result<()> {
 /// `query_only` is implied by the read-only flag; `busy_timeout` makes a
 /// reader wait out the brief exclusive window of a `wal_checkpoint(TRUNCATE)`
 /// instead of failing with `SQLITE_BUSY`. No `mmap_size` is set, so each
-/// pool connection keeps a minimal resident footprint (reads come from the
-/// shared page cache).
+/// pool connection keeps a minimal resident footprint (each connection
+/// has its own private page caches; there is no shared-cache mode here).
 fn open_read_only(path: &Path) -> Result<Connection> {
     let conn = Connection::open_with_flags(
         path,

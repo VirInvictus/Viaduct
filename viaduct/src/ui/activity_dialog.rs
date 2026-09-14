@@ -7,7 +7,7 @@
 //! NetNewsWire's "Activity Log" surface; NewsFlash has the same idea
 //! under a different name. Reads a snapshot of the process-wide
 //! `ActivityLog` ring buffer (most-recent first) and renders one row
-//! per event grouped into AdwActionRows. Each entry says **what feed**,
+//! per event in a boxed list. Each entry says **what feed**,
 //! **what happened** (success / 304 / HTTP error / network error /
 //! parse error / DB error / skipped), and **when**. Closes the gap
 //! between "did my refresh run?" and "why didn't this feed update?"

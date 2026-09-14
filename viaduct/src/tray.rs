@@ -260,7 +260,10 @@ fn start_service(tx: tokio::sync::mpsc::UnboundedSender<TrayAction>) {
 /// HiDPI extensions tend to want the larger. Stored at `docs/` rather
 /// than `data/` because the meson install for shipped builds relies on
 /// the SVG (themable, scalable) — the PNGs are exclusively the dev /
-/// fallback path used by `icon_pixmap`.
+/// fallback path used by `icon_pixmap`. Byte-identical twins of these
+/// PNGs live in `data/icons/` (the meson-installed rasters); the two
+/// pairs are maintained together by hand, so an icon update edits
+/// both.
 const ICON_PNG_256: &[u8] = include_bytes!("../../docs/icon-256.png");
 const ICON_PNG_512: &[u8] = include_bytes!("../../docs/icon-512.png");
 

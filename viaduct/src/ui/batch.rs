@@ -77,13 +77,10 @@ impl BatchUpdate {
     }
 
     fn post_batch_update_did_perform(&self) {
-        // In Rust/GTK, we emit signals or custom events.
-        // For now, we will trigger a sidebar unread count refresh
-        // since that's the most common need after a batch update.
-        glib::idle_add_local_once(|| {
-            // We need a way to reach the window or a global notifier.
-            // For now, we'll assume the window will eventually subscribe
-            // to some global state or we'll pass a callback.
-        });
+        // Deliberately inert: nothing subscribes to a batch-update
+        // signal today. The window refreshes the sidebar's unread
+        // counts itself after each pipeline completes (see refresh.rs),
+        // so this hook has no work; it exists to keep the NNW
+        // BatchUpdate shape. No idle callback is scheduled.
     }
 }

@@ -6,7 +6,7 @@
 //! Database, network, parser, models, error types, XDG path helpers, and
 //! the global tokio runtime + debug-mode toggles all live here.
 //!
-//! The GTK / libadwaita / WebKit binary lives in the sibling `viaduct`
+//! The GTK / WebKit binary lives in the sibling `viaduct`
 //! crate which depends on this one. The split (introduced in v1.5.0)
 //! enforces architectural boundaries by making it a *compile error* to
 //! reach into GTK from data / network / parser code, rather than relying

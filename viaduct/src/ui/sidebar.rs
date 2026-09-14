@@ -460,8 +460,8 @@ pub fn setup_sidebar_list_view(
                     SidebarItem::SmartFeedGroup => {
                         label.set_text("Smart Feeds");
                         // Section-header styling — bold, slightly smaller,
-                        // dimmed. The icon stays as a folder for now since
-                        // GtkListView still wants something in the slot.
+                        // dimmed. The slot carries a link emblem:
+                        // GtkListView wants something in the icon slot.
                         label.add_css_class("viaduct-sidebar-heading");
                         icon_image.set_icon_name(Some("emblem-symbolic-link-symbolic"));
                         icon_stack.set_visible_child_name("icon");
