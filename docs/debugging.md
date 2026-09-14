@@ -30,12 +30,13 @@ For a noisier session, pass `--debug`:
 viaduct --debug
 ```
 
-This sets `debug,viaduct=trace,html5ever=error` and enables a periodic
-memory-status ticker (`/proc/self/status` snapshot every 8–25 s, logged
-at `INFO`).
+This sets `info,viaduct=debug,viaduct_core=debug,html5ever=error` (the
+v2.6.17 filter: viaduct's own surface at debug, third-party crates at
+info) and enables a periodic memory-status ticker
+(`/proc/self/status` snapshot every 8–25 s, logged at `INFO`).
 
 The flag is consumed by viaduct's own argv pre-pass and stripped before
-GTK sees argv, so it doesn't conflict with libadwaita's command-line
+GTK sees argv, so it doesn't conflict with GTK's command-line
 handling.
 
 ## Filtering by module
@@ -73,24 +74,24 @@ INFO viaduct::perf: selection navigation
 
 Field meanings:
 
-- **`item`** — what the user clicked. Feed display name, `[Folder Name]`,
+- **`item`**: what the user clicked. Feed display name, `[Folder Name]`,
   `Smart: All Unread`, or similar.
-- **`articles`** — how many rows landed in the timeline store.
-- **`fetch_ms`** — time from click → DB fetch complete. Worker-thread
+- **`articles`**: how many rows landed in the timeline store.
+- **`fetch_ms`**: time from click → DB fetch complete. Worker-thread
   contention shows up here (e.g. if a refresh cycle is hogging the
   writer).
-- **`populate_ms`** — time spent on the GTK main thread building the
+- **`populate_ms`**: time spent on the GTK main thread building the
   ListStore and triggering items_changed. Scales with article count;
   this is where 5000-row smart-feed clicks spend their time.
-- **`status_ms`** — bulk status fetch + apply. Should always be small.
-- **`total_ms`** — wall-clock end-to-end.
+- **`status_ms`**: bulk status fetch + apply. Should always be small.
+- **`total_ms`**: wall-clock end-to-end.
 
 When `total_ms ≥ 500`, the level promotes from `INFO` to `WARN` so the
 line stands out. The dropped-result log line surfaces when the user
 clicks again before the previous fetch finished:
 
 ```
-INFO viaduct::perf: selection fetch dropped — newer click in flight
+INFO viaduct::perf: selection fetch dropped: newer click in flight
   item="All Unread"
   generation=12
   current=14
@@ -112,14 +113,15 @@ that 187 ms of worker time was wasted.
      output around the same timestamp). If many refreshes are competing,
      the fix is in the refresher's parallelism / throttling.
    - **`populate_ms` is large** → main-thread cost of building
-     `ArticleNode` GObjects. For now this scales linearly with article
-     count; a smart feed with 5000+ articles will pay ~150–300 ms here.
-     The eventual fix is lazy `gio::ListModel` vivification.
+     `ArticleNode` GObjects. This scales linearly with article count;
+     the timeline fetch caps at `TIMELINE_FETCH_LIMIT` (1000 rows), so
+     a huge smart feed pays the worst case once, not per article above
+     the cap. The eventual fix is lazy `gio::ListModel` vivification.
    - **`status_ms` is large** → unusual. Bulk status fetch is one DB
      op. If this is large, the SQLite `IN` clause hit an unindexed
      path or the worker thread is wedged.
    - **All small but UI still feels slow** → could be GTK layout /
-     adaptive-layout transition cost (libadwaita-side). Use
+     layout transition cost. Use
      `RUST_LOG=trace` and look for unexpected work between the
      `selection navigation` line and the next user input.
 

@@ -34,17 +34,61 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
-    <release version="3.8.0" date="2026-09-13" />
-    <release version="3.7.5" date="2026-09-06" />
-    <release version="3.7.4" date="2026-09-06" />
-    <release version="3.7.3" date="2026-09-04" />
-    <release version="3.7.2" date="2026-09-04" />
-    <release version="3.7.1" date="2026-09-04" />
-    <release version="3.7.0" date="2026-09-04" />
-    <release version="3.6.0" date="2026-09-04" />
-    <release version="3.5.0" date="2026-09-04" />
-    <release version="3.4.1" date="2026-09-04" />
-    <release version="3.4.0" date="2026-09-03" />
+    <release version="3.8.0" date="2026-09-13">
+      <description>
+        <p>The vir-gtk widget kit and the gtk4 0.11 platform</p>
+      </description>
+    </release>
+    <release version="3.7.5" date="2026-09-06">
+      <description>
+        <p>Stable scrollbar gutter and the Flatpak builds again</p>
+      </description>
+    </release>
+    <release version="3.7.4" date="2026-09-06">
+      <description>
+        <p>Vir-gtk adoption records and the blitz record repairs</p>
+      </description>
+    </release>
+    <release version="3.7.3" date="2026-09-04">
+      <description>
+        <p>Feed discovery on ranchero.com-style pages</p>
+      </description>
+    </release>
+    <release version="3.7.2" date="2026-09-04">
+      <description>
+        <p>The inspectable half of the verification tail</p>
+      </description>
+    </release>
+    <release version="3.7.1" date="2026-09-04">
+      <description>
+        <p>Hardened against the real feed</p>
+      </description>
+    </release>
+    <release version="3.7.0" date="2026-09-04">
+      <description>
+        <p>Atom xml:base</p>
+      </description>
+    </release>
+    <release version="3.6.0" date="2026-09-04">
+      <description>
+        <p>The sync engine goes live</p>
+      </description>
+    </release>
+    <release version="3.5.0" date="2026-09-04">
+      <description>
+        <p>Inoreader rate-limit machinery</p>
+      </description>
+    </release>
+    <release version="3.4.1" date="2026-09-04">
+      <description>
+        <p>The documentation audit</p>
+      </description>
+    </release>
+    <release version="3.4.0" date="2026-09-03">
+      <description>
+        <p>The July-September upstream sync</p>
+      </description>
+    </release>
     <release version="3.3.1" date="2026-08-23" />
     <release version="3.2.1" date="2026-08-08" />
     <release version="3.2.0" date="2026-08-08" />

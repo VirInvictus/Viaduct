@@ -62,7 +62,7 @@ Unconstrained web engines are memory black holes. viaduct ships **exactly one** 
     * **`javascript_can_open_windows_automatically(false)`**: belt-and-braces.
     * **Back-forward gestures, fullscreen: off.**
 5. **CSP enforcement** in the page wrapper:
-    `default-src 'none'; img-src viaduct-img: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
+    `default-src 'none'; img-src viaduct-img: data:; font-src viaduct-font:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
 6. **`viaduct-img://` URI scheme handler** routes every image lookup through our `ImageCache` (memory LRU → disk → network). WebKit can render images, but every byte travels through the cache, and no other origin can load anything.
 7. **Link interception:** `decide-policy` cancels every `LinkClicked` / `FormSubmitted` / `NewWindowAction` and shells the URL out to `xdg-open` (system browser). `Other` / `Reload` / `BackForward` allowed through so `load_html`'s synthetic about:blank works.
 8. **Hover URL overlay:** `mouse-target-changed` updates a `gtk::Label` overlay (osd + caption) in the bottom-left so the user can preview link destinations.
@@ -116,7 +116,7 @@ no `GtkPaned` analog and is a deferred refinement.
 
 ### 3.1 Sidebar (Feeds & Folders)
 
-Displayed via `AdwOverlaySplitView`. Populated via a `gio::ListModel` bound to the `feeds` table.
+Rendered by the `ViaductSidebarView` custom widget (plain GTK4; a `GtkListView` over a tree of `gio::ListModel` nodes managed by the sidebar tree controller). The feed/folder hierarchy lives on disk in `local.opml`, not in a SQL table; per-feed state rides the `feed-settings` database.
 * **Smart Feeds:** Pinned at the top (Today, All Unread, Starred).
 * **Folders:** Expandable tree nodes.
 * **Badges:** Unread counts display dynamically next to feeds and folders.
@@ -138,7 +138,7 @@ The middle pane. This is the primary memory trap for poorly written readers.
 
 ### 4.1 Smart Feeds
 Virtual feeds generated dynamically via SQLite queries, automatically updating as the database changes.
-* **Today:** Articles published in the last 24 hours.
+* **Today:** Articles published or arrived since local midnight (regression-tested; the badge and the click result share one boundary helper).
 * **All Unread:** Global unread aggregate.
 * **Starred/Saved:** User-flagged articles retained indefinitely.
 
@@ -147,8 +147,8 @@ viaduct shipped a single account type in v1.0: **Local**. OPML intake, direct RS
 
 Inoreader sync shipped post-1.0 (v3.6.0) and is a first-class account type alongside Local, driven once per refresh cycle. The remaining remote sync engines (Feedbin, Miniflux, FreshRSS, CloudKit, NewsBlur) are explicitly out of scope. They may be added someday, but only if they can be implemented without compromising the local-first architecture or the RAM budget (§10).
 
-### 4.3 Reader View (Optional, RAM-Gated)
-A local Readability-style extractor for truncated feeds. Runs on-demand only (hotkey or toolbar), never eagerly, and is gated by the 500 MB peak-RAM ceiling. If the extractor can't hit that budget running in-process, it either runs in a short-lived subprocess or is cut from v1.0. NetNewsWire's Reader View calls a remote Mercury service, which is not an option here.
+### 4.3 Reader View (Local, On-Demand)
+A local Readability-style extractor for truncated feeds. Runs on-demand only (hotkey or toolbar), never eagerly, in-process via `tokio::task::spawn_blocking` (shipped v1.1.0/Phase 10; the original "subprocess or cut" contingency predates it and no longer exists). Input HTML is capped at 5 MB before extraction; measured cost is ~5 MB over the post-warmup peak for ten extractions, noise against the §10 envelope. NetNewsWire's Reader View calls a remote Mercury service, which is not an option here.
 
 ---
 
@@ -158,7 +158,7 @@ Standard desktop accelerators, prioritizing spatial navigation without forcing a
 
 | Action | Shortcut |
 |--------|----------|
-| Smart Read (Scroll down, jump to next unread) | Space |
+| Smart Read (pages the article; never jumps, see below) | Space |
 | Focus Article Pane | F6 |
 | Move down list | j, Down |
 | Move up list | k, Up |
@@ -170,21 +170,38 @@ Standard desktop accelerators, prioritizing spatial navigation without forcing a
 | Fetch/Sync Now | Ctrl+R |
 | Focus Search | Ctrl+F |
 | Toggle Sidebar | F9 |
+| Toggle Read/Unread | r |
+| Mark Unread & Advance | Shift+M |
+| Mark Older Read | o |
+| Mark All Read & Advance | l |
+| Open in Browser (alternate) | b |
+| Open Enclosure | Ctrl+Return |
+| Add Feed | Ctrl+N |
+| Copy Article URL | Ctrl+Shift+C |
+| Toggle Reader View | Ctrl+Shift+R |
+| Close Article / Dismiss Dialog | Escape |
+| Print Article | Ctrl+P |
+| Keyboard Shortcuts | Ctrl+? |
 
 **Space is WebKit's, and only half of Smart Read is implemented.** Paging the article body is WebKit's own native binding, which applies only while the `WebKitWebView` holds keyboard focus. Phase 19 makes that reachable without a mouse: `j`/`k`/`n` hand focus to the body once they select an article, and `F6` does it on demand for an article opened by click. The capture-phase nav shortcuts installed on the WebView keep `Down`/`Up`/`j`/`k`/`n` navigating from there, so both halves of this table hold at once.
 
 The *"jump to next unread"* half of Smart Read is **not implemented**. It needs an at-bottom scroll monitor, which needs a JS bridge that §2.2's lockdown disables. Space pages; it never advances. Reaching NNW parity here means either finding a non-JS scroll-position signal or carving a deliberate exception into the lockdown, and the latter is a §7 decision, not an implementation detail.
 
+## 6. Persistence & Storage
+
 All state lives under `$XDG_DATA_HOME/viaduct/`:
+
+* `smart-feeds.json`: user-defined custom smart feeds (atomic temp-file + rename writes).
 
 * `local.opml`: feed + folder hierarchy (coalesced save, ~500 ms debounce, atomic temp-file + rename).
 * `articles.sqlite`: `articles`, `statuses`, `authors`, `authorsLookup`, FTS5 `search`.
-* `feed-settings.sqlite`: the per-feed cache (ETag, Last-Modified, Cache-Control, favicon URLs, edited names, authors JSON, folder-relationship JSON, last-check date, per-feed Reader View preference).
+* `feed-settings.sqlite`: the per-feed cache (ETag, Last-Modified, Cache-Control, favicon URLs, edited names, authors JSON, folder-relationship JSON, last-check date, per-feed Reader View preference, the Inoreader list conditional-GET markers).
+* `sync.sqlite`: the `syncStatus` queue (Inoreader accounts only; local accounts wipe it at startup).
 
 Image and favicon caches live under `$XDG_CACHE_HOME/viaduct/`.
 
 ### 6.1 SQLite Configuration
-* **WAL Mode:** Write-Ahead Logging is enforced on both databases. The background fetcher can write thousands of new articles while the user actively scrolls without throwing database locks or stuttering the UI.
+* **WAL Mode:** Write-Ahead Logging is enforced on the SQLite stores (articles, feed settings, and the sync queue). The background fetcher can write thousands of new articles while the user actively scrolls without throwing database locks or stuttering the UI.
 * **Single writer:** A dedicated thread owns the write connection to each database and serializes all writes; the GTK thread holds only a `Sender` and never blocks on SQLite. The writer (and the sync worker) run their receive loop under a panic supervisor that restarts on a panic, so one bad op can't take the DB layer down for the session.
 * **Read pool:** Articles reads (timeline fetches, search, unread counts) go to a small pool of read-only connections rather than queuing behind the writer. WAL lets these readers run concurrently with the single writer, so a long write never stalls the timeline.
 * **FTS5:** Full-Text Search is enabled on the `articles` table for instantaneous local querying. (NetNewsWire uses FTS4; we modernize.)
@@ -194,7 +211,7 @@ To enforce the memory and disk footprint, the database is regularly vacuumed.
 * Articles older than 30 days are automatically deleted.
 * Starred/Saved articles are excluded from pruning.
 * Unread status does not save an article from pruning; if it hasn't been read in a month, it is dropped.
-* `VACUUM` runs at startup only on launches where the prune step actually removed rows, so a steady-state launch pays no full-file rewrite. A cheap `wal_checkpoint(TRUNCATE)` runs every startup regardless to keep the WAL bounded.
+* `VACUUM` runs at startup only when the prune step actually removed rows AND at least `VACUUM_INTERVAL_DAYS` (13) have passed since the previous one, so a steady-state launch pays no full-file rewrite. A cheap `wal_checkpoint(TRUNCATE)` runs every startup regardless to keep the WAL bounded.
 
 ---
 
@@ -208,12 +225,17 @@ To enforce the memory and disk footprint, the database is regularly vacuumed.
 * `rusqlite`: SQLite bindings (bundled, FTS5).
 * `crossbeam-channel`: Main/Worker thread communication.
 * `readability`: Local Reader View extraction.
-* `oo7`: libsecret credential storage (Inoreader OAuth tokens).
+* `oo7`: Secret Service credential storage. Note: the shipped Inoreader client is **ClientLogin** (email + password exchanged for a bearer token), not OAuth; what oo7 stores is the account password. The app id/key pair the API requires comes from the `INOREADER_APP_ID` / `INOREADER_APP_KEY` environment variables at build time (`option_env!`), compiled into every Reader-API request as `AppId`/`AppKey` headers.
+* `vir-gtk` (git dependency, lock-pinned): the shared VirInvictus widget kit: portal-based dark/light, the crate-tier base stylesheet, and the `rows`/`Alert` widget replacements since v3.8.0.
+* `ksni`: StatusNotifierItem system tray (run-in-background mode).
+* `ashpd`: xdg-desktop-portal client (Background portal for run-in-background).
+* `mimalloc`: the binary crate's global allocator (`viaduct-core` stays allocator-agnostic).
+* `tracing` + `tracing-subscriber`: structured logging with `RUST_LOG` filtering.
 
 ### C/GTK Libraries (Frontend)
 * `gtk4` (via `gtk4-rs`): Minimum 4.16.
 * ~~`libadwaita`~~ **Removed in v3.0.0 (Phase 20).** The design layer is viaduct-owned; see §12.
-* `webkitgtk-6.0` (via `webkit6` 0.4): Minimum 2.42; the article reading pane runs a single neutered instance (see §2.2).
+* `webkitgtk-6.0` (via `webkit6` 0.6): Minimum 2.42; the article reading pane runs a single neutered instance (see §2.2).
 
 ---
 
@@ -372,7 +394,7 @@ House rule, unit-tested: **no `font-family` anywhere in the sheet.** The bundled
 | `AboutDialog` | `gtk::AboutDialog` |
 | **`Avatar`** | **net-new**: sidebar favicon with an initials + hashed-colour fallback (`ImageCache::color_for` already ports NNW `ColorHash`) |
 | **`SwitchRow`, `EntryRow`, `SpinRow`, `PreferencesRow`** | **net-new** row flavours extending the owned rows module |
-| **`AlertDialog` + `ResponseAppearance`** | **net-new**: `gtk::AlertDialog` for the delete-feed confirm and rename-feed prompt, including the destructive styling |
+| **`AlertDialog` + `ResponseAppearance`** | net-new modal `gtk::Window` mimicking `adw::AlertDialog`'s shape (heading/body/extra-child/response buttons, destructive styling): `gtk::AlertDialog` has no slot for extra children and was never the implementation. Shipped as `ui::alert` in v3.0.0, absorbed into `vir_gtk::widgets::Alert` in v3.8.0 |
 
 `AdwOverlaySplitView` appears only in a `window.rs` doc comment as a hypothetical and is not in use. `Clamp` and `Banner` are unused, so the pilot's `clamp.rs` does not transfer.
 

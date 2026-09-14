@@ -24,7 +24,7 @@ No code changes. Six docs-only commits had accumulated on main past the v3.7.3 t
 
 ## v3.7.3: feed discovery on ranchero.com-style pages (2026-09-04)
 
-A fix that was a long-standing blind spot: pages writing their `<link>` tags with unquoted attribute values — valid HTML5, and the house style at ranchero.com — produced zero feed-link and zero favicon candidates in viaduct. The old scan handed the page to an XML attribute parser, which rejects `href=https://…` outright; every attribute of every tag failed, so neither Add Feed's website path nor favicon discovery could see such a site at all. This is the viaduct twin of NetNewsWire's `d1eaf7676` (their scanner had the inverse bug: `/` terminated unquoted values, truncating `href=https://…` mid-URL).
+A fix that was a long-standing blind spot: pages writing their `<link>` tags with unquoted attribute values: valid HTML5, and the house style at ranchero.com: produced zero feed-link and zero favicon candidates in viaduct. The old scan handed the page to an XML attribute parser, which rejects `href=https://…` outright; every attribute of every tag failed, so neither Add Feed's website path nor favicon discovery could see such a site at all. This is the viaduct twin of NetNewsWire's `d1eaf7676` (their scanner had the inverse bug: `/` terminated unquoted values, truncating `href=https://…` mid-URL).
 
 The head scan is now a hand-rolled byte scanner following the HTML5 tokenizer rules: unquoted values end at whitespace or `>` (a `/` is part of the value, so `href=https://example.com/feed` survives whole), quoted values end at their matching quote, `<script>` and `<style>` bodies are raw text whose contents never produce tags, comments and CDATA pass through unscanned, and a tag whose quoted value runs off the end of the input is discarded as malformed rather than emitted truncated. Upstream's ranchero test case is ported 1:1 alongside six scanner tests; 222 tests pass, seven new. Consumers (Add Feed discovery, favicon discovery) see the same attribute map shape as before; only the broken case changes.
 
@@ -32,9 +32,9 @@ The head scan is now a hand-rolled byte scanner following the HTML5 tokenizer ru
 
 Three of the Phase 20f verification items turned out to be closable without launching anything, and are now closed with their method recorded:
 
-- The **app-id invariant** (20f): the GTK4 `application_id` and the `.desktop` basename match exactly, the desktop file carries no `StartupWMClass` line, and none should ever be added — the id and the basename are one string by design.
+- The **app-id invariant** (20f): the GTK4 `application_id` and the `.desktop` basename match exactly, the desktop file carries no `StartupWMClass` line, and none should ever be added: the id and the basename are one string by design.
 - The **CSD invariant** (20f): the window's titlebar child is an invisible `GtkHeaderBar` and every functional control lives in per-pane header bars; no code path depends on a compositor-drawn title bar.
-- The **dconf documentation** (20f): README gains a Runtime requirements section (a D-Bus session bus and a running dconf service; no GNOME Shell dependency), and the path was verified headlessly on the Hyprland session — schema compiled to a temp dir, `gsettings get/set/reset` round-tripped through dconf without GNOME Shell running.
+- The **dconf documentation** (20f): README gains a Runtime requirements section (a D-Bus session bus and a running dconf service; no GNOME Shell dependency), and the path was verified headlessly on the Hyprland session: schema compiled to a temp dir, `gsettings get/set/reset` round-tripped through dconf without GNOME Shell running.
 
 Also documented: README now states the runtime requirements explicitly. No code changes.
 
