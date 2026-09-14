@@ -121,14 +121,46 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// The one funnel for user-initiated status writes (timeline
+    /// toggles, auto-mark-read, mark-feed/folder-read). Applies the
+    /// rows, then — on a remote account — queues every *changed* field
+    /// as a `syncStatus` intent row so the next sync sends it to the
+    /// server. Without the queue the sync's remote→local reconcile
+    /// reads a locally-read article as a remote delta and flips it
+    /// right back to unread (the v3.9.0 write-half bug). The
+    /// delegate's own remote→local apply path does NOT go through
+    /// here (it uses `update_statuses_read` / `_starred`), so applied
+    /// server deltas can't loop back as fake intent.
     pub async fn upsert_statuses(&self, statuses: Vec<ArticleStatus>) -> Result<()> {
+        // Snapshot the pre-write state so the intent rows reflect what
+        // this upsert actually changed (a missing row reads as
+        // `(false, false)` — never touched).
+        let local = self.is_local_account();
+        let previous = if local {
+            std::collections::HashMap::new()
+        } else {
+            let ids: Vec<String> = statuses.iter().map(|s| s.article_id.clone()).collect();
+            self.fetch_statuses_by_ids(ids).await.unwrap_or_default()
+        };
+        let intent = if local {
+            Vec::new()
+        } else {
+            sync_intent_rows(statuses.clone(), &previous)
+        };
+
         let (tx, rx) = oneshot::channel();
         self.db_tx
             .send(DbOp::Articles(ArticlesDbOp::UpsertStatuses(statuses, tx)))
             .await
             .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
         rx.await
-            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))?;
+
+        if intent.is_empty() {
+            return Ok(());
+        }
+        tracing::debug!(count = intent.len(), "queueing status changes for sync");
+        self.insert_sync_statuses(intent).await
     }
 
     /// v2.8.0: route an articles READ op. When the read pool is wired
@@ -494,17 +526,26 @@ impl Account {
     /// `feed_url` — adding a feed that already exists at the same URL
     /// returns the existing entry rather than creating a duplicate row.
     /// Returns the `Feed` for immediate refresh by the caller.
+    ///
+    /// On a remote account the delegate subscribes server-side first
+    /// (and tags the folder), so the server-authoritative reconcile
+    /// keeps what the user added; the local id becomes the server's
+    /// canonical stream id.
     pub async fn add_feed(
-        &self,
+        self: &std::sync::Arc<Self>,
         feed_url: String,
         feed_name: Option<String>,
         home_page_url: Option<String>,
         folder_name: Option<String>,
     ) -> Result<Feed> {
+        let server_id = self
+            .delegate
+            .server_add_feed(self.clone(), &feed_url, folder_name.as_deref())
+            .await?;
         let mut opml = self.load_opml().await?;
         let feed = Feed {
-            id: feed_url.clone(),
-            url: feed_url.clone(),
+            id: server_id.unwrap_or_else(|| feed_url.clone()),
+            url: feed_url,
             name: feed_name,
             edited_name: None,
             home_page_url,
@@ -551,8 +592,30 @@ impl Account {
     /// Article rows for the removed feed are pruned by the next
     /// `cleanup_at_startup` cycle via `delete_articles_not_in_feeds`,
     /// or immediately if the caller fires that op manually.
-    pub async fn remove_feed(&self, feed_url: &str) -> Result<bool> {
-        let mut opml = self.load_opml().await?;
+    pub async fn remove_feed(self: &std::sync::Arc<Self>, feed_url: &str) -> Result<bool> {
+        let opml = self.load_opml().await?;
+        // Unsubscribe server-side first: the reconcile is
+        // server-authoritative for existence, so a local-only removal
+        // would be resurrected at the next sync.
+        let feed = opml
+            .standalone_feeds
+            .iter()
+            .find(|f| f.url == feed_url)
+            .or_else(|| {
+                opml.folders
+                    .iter()
+                    .flat_map(|folder| folder.feeds.iter())
+                    .find(|f| f.url == feed_url)
+            });
+        let Some(feed) = feed else {
+            return Ok(false);
+        };
+        let feed_id = feed.id.clone();
+        self.delegate
+            .server_delete_feed(self.clone(), &feed_id)
+            .await?;
+
+        let mut opml = opml;
         let mut removed = false;
 
         let original_standalone = opml.standalone_feeds.len();
@@ -580,15 +643,36 @@ impl Account {
     /// resolver uses the existing fallback chain `edited_name → name →
     /// URL host → raw URL`, so an empty `new_name` reverts to whatever
     /// the parsed feed reported. Saves the OPML; returns true if a feed
-    /// was found and updated.
-    pub async fn rename_feed(&self, feed_url: &str, new_name: String) -> Result<bool> {
-        let mut opml = self.load_opml().await?;
+    /// was found and updated. A non-empty name is also pushed to the
+    /// server on a remote account (NNW renames the subscription
+    /// server-side); an empty one only clears the local override.
+    pub async fn rename_feed(
+        self: &std::sync::Arc<Self>,
+        feed_url: &str,
+        new_name: String,
+    ) -> Result<bool> {
+        let opml = self.load_opml().await?;
         let trimmed = new_name.trim().to_string();
         let edited = if trimmed.is_empty() {
             None
         } else {
-            Some(trimmed)
+            Some(trimmed.clone())
         };
+
+        if let Some(id) = opml
+            .standalone_feeds
+            .iter()
+            .chain(opml.folders.iter().flat_map(|f| f.feeds.iter()))
+            .find(|f| f.url == feed_url)
+            .map(|f| f.id.clone())
+            && !trimmed.is_empty()
+        {
+            self.delegate
+                .server_rename_feed(self.clone(), &id, &trimmed)
+                .await?;
+        }
+
+        let mut opml = opml;
         let mut changed = false;
 
         for feed in opml.standalone_feeds.iter_mut() {
@@ -639,7 +723,7 @@ impl Account {
     /// destination-only (no duplicates). Saves the OPML; returns true
     /// when the feed was found and the move actually changed something.
     pub async fn move_feed_to_folder(
-        &self,
+        self: &std::sync::Arc<Self>,
         feed_url: &str,
         target_folder: Option<String>,
     ) -> Result<bool> {
@@ -685,6 +769,17 @@ impl Account {
             }
             return Ok(false);
         }
+
+        // Re-tag server-side before mutating the local tree, so the
+        // reconcile sees the grouping the user asked for.
+        self.delegate
+            .server_move_feed(
+                self.clone(),
+                &feed.id,
+                current_folder.as_deref(),
+                target_folder.as_deref(),
+            )
+            .await?;
 
         match target_folder {
             None => opml.standalone_feeds.push(feed),
@@ -1167,4 +1262,100 @@ fn opml_feed_ids(opml: &OpmlFile) -> Vec<String> {
         }
     }
     out
+}
+
+/// The `syncStatus` intent rows a user-initiated status upsert implies:
+/// one row per field whose value differs from the pre-write state (a
+/// missing status row reads as un-read, un-starred). Only *changed*
+/// fields queue: a mark-read that preserves the star must not send a
+/// `starred=false` edit that could clobber a star another client made
+/// after our last sync. Used by `Account::upsert_statuses`; pure so the
+/// changed-field semantics are pinned by test.
+fn sync_intent_rows(
+    statuses: Vec<ArticleStatus>,
+    previous: &std::collections::HashMap<String, (bool, bool)>,
+) -> Vec<crate::database::sync::SyncStatus> {
+    let mut out = Vec::new();
+    for s in statuses {
+        let (prev_read, prev_starred) = previous
+            .get(&s.article_id)
+            .copied()
+            .unwrap_or((false, false));
+        if s.read != prev_read {
+            out.push(crate::database::sync::SyncStatus {
+                article_id: s.article_id.clone(),
+                key: "read".to_string(),
+                flag: s.read,
+                selected: false,
+            });
+        }
+        if s.starred != prev_starred {
+            out.push(crate::database::sync::SyncStatus {
+                article_id: s.article_id,
+                key: "starred".to_string(),
+                flag: s.starred,
+                selected: false,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(id: &str, read: bool, starred: bool) -> ArticleStatus {
+        ArticleStatus {
+            article_id: id.to_string(),
+            read,
+            starred,
+            date_arrived: chrono::Utc::now(),
+        }
+    }
+
+    fn previous(pairs: &[(&str, bool, bool)]) -> std::collections::HashMap<String, (bool, bool)> {
+        pairs
+            .iter()
+            .map(|(id, r, s)| (id.to_string(), (*r, *s)))
+            .collect()
+    }
+
+    /// The write-half of the sync driver: only fields the user actually
+    /// changed queue as intent. A mark-read that preserves the star must
+    /// NOT queue `starred=false` (it could clobber a star another client
+    /// made after our last sync), and a star toggle must queue the star,
+    /// not the untouched read state.
+    #[test]
+    fn sync_intent_rows_queue_only_changed_fields() {
+        let prev = previous(&[("a", false, false), ("b", true, false), ("c", true, false)]);
+
+        // a: read (unread→read, no star) — one "read" row only.
+        // b: star toggle while already read — one "starred" row only.
+        // c: already read+unstarred, re-marked read — NOTHING queues.
+        let rows = sync_intent_rows(
+            vec![
+                status("a", true, false),
+                status("b", true, true),
+                status("c", true, false),
+            ],
+            &prev,
+        );
+        assert_eq!(rows.len(), 2, "only changed fields queue: {rows:?}");
+        assert_eq!(rows[0].key, "read");
+        assert!(rows[0].flag);
+        assert_eq!(rows[1].key, "starred");
+        assert!(rows[1].flag);
+
+        // A missing previous row counts as (false, false): marking a
+        // never-touched article read queues read=true, starred untouched.
+        let rows = sync_intent_rows(vec![status("new", true, false)], &previous(&[]));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, "read");
+
+        // Un-reading (Shift+M) queues read=false so the server follows.
+        let rows = sync_intent_rows(vec![status("c", false, false)], &prev);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].flag);
+    }
 }

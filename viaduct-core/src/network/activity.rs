@@ -53,6 +53,12 @@ pub enum ActivityKind {
         updated: usize,
         deleted: usize,
     },
+    /// Account-level sync events (rate-limit pause armed, quota skip,
+    /// sync failure) — the sync delegate's terminal states, the same
+    /// surface NNW's Activity Log gives its sync engine.
+    Sync {
+        detail: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +80,28 @@ impl ActivityLog {
         Arc::new(Self {
             events: RwLock::new(VecDeque::with_capacity(RING_CAPACITY)),
         })
+    }
+
+    /// The process-lifetime log, shared by the window's Activity dialog
+    /// and every producer: the refresher (via `with_activity_log`) and
+    /// the sync delegate, which is built long before any window exists
+    /// and so can't be handed a window-owned handle.
+    pub fn global() -> Arc<Self> {
+        static LOG: std::sync::OnceLock<Arc<ActivityLog>> = std::sync::OnceLock::new();
+        LOG.get_or_init(ActivityLog::new).clone()
+    }
+
+    /// Account-level sync event (see `ActivityKind::Sync`).
+    pub fn push_sync(detail: impl Into<String>) {
+        Self::global().push(ActivityEvent {
+            at: Utc::now(),
+            feed_id: String::new(),
+            feed_url: String::new(),
+            feed_name: Some("Inoreader sync".to_string()),
+            kind: ActivityKind::Sync {
+                detail: detail.into(),
+            },
+        });
     }
 
     pub fn push(&self, ev: ActivityEvent) {

@@ -83,6 +83,15 @@ pub enum NetworkError {
     #[error("http status {0}")]
     HttpStatus(u16),
 
+    /// Reader-API authentication failed: missing or incomplete keyring
+    /// credentials, a rejected login, or a token request the server
+    /// refused. Distinct from `HttpStatus`/`RateLimited` so diagnostics
+    /// say "check your account" instead of "slow down" — the v3.5.0
+    /// rate-limit work relies on `RateLimited` meaning a real 429, so
+    /// auth problems must not alias into it.
+    #[error("authentication failed: {0}")]
+    Auth(String),
+
     /// `feed_discovery::discover_feed` exhausted both passes (URL
     /// didn't parse as a feed, no `<link rel="alternate">` in the HTML).
     #[error("no feed found at the supplied URL")]

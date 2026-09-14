@@ -199,7 +199,7 @@ impl ViaductWindow {
         window
             .imp()
             .activity_log
-            .set(crate::network::activity::ActivityLog::new())
+            .set(crate::network::activity::ActivityLog::global())
             .ok();
         // Phase 18 (v2.0.0-pre1): the article-pane WebView lives inside
         // the ViaductArticlePaneView custom widget now. Bootstrap it with

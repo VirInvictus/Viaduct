@@ -294,11 +294,9 @@ fn sync_retry_after_secs(headers: &reqwest::header::HeaderMap) -> u64 {
 
 /// Map a non-success response onto the error type, preserving a real 429's
 /// identity and parsed Retry-After so the sync delegate can arm its pause.
-/// Every other status becomes `HttpStatus`. The placeholder
-/// `RateLimited { retry_after_secs: 0 }` values older call sites return
-/// for unrelated failures are distinguishable by convention: this parser
-/// always yields a positive number, so only a genuine 429 ever arms the
-/// pause.
+/// Every other status becomes `HttpStatus` (auth-shaped endpoints map to
+/// `NetworkError::Auth` at their own call sites), so only a genuine 429
+/// ever arms the pause.
 fn status_error(resp: &reqwest::Response) -> ViaductError {
     let status = resp.status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -402,9 +400,10 @@ impl ReaderAPICaller {
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            })); // Simplified error
+            return Err(ViaductError::Network(NetworkError::Auth(format!(
+                "login rejected with HTTP {}",
+                resp.status()
+            ))));
         }
 
         let body = resp
@@ -418,9 +417,9 @@ impl ReaderAPICaller {
             }
         }
 
-        Err(ViaductError::Network(NetworkError::RateLimited {
-            retry_after_secs: 0,
-        })) // Simplified error
+        Err(ViaductError::Network(NetworkError::Auth(
+            "login response carried no Auth token".to_string(),
+        )))
     }
 
     pub async fn request_authorization_token(&self, auth_token: &str) -> Result<String> {
@@ -452,9 +451,10 @@ impl ReaderAPICaller {
         // the garbage token until the process restarts. Mirrors the guard in
         // validate_credentials.
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            }));
+            return Err(ViaductError::Network(NetworkError::Auth(format!(
+                "edit-token request returned HTTP {}",
+                resp.status()
+            ))));
         }
 
         let token = resp
@@ -465,9 +465,9 @@ impl ReaderAPICaller {
             .to_string();
 
         if token.is_empty() {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            }));
+            return Err(ViaductError::Network(NetworkError::Auth(
+                "edit-token response was empty".to_string(),
+            )));
         }
 
         let mut write_token = self.access_token.write().await;
@@ -632,9 +632,7 @@ impl ReaderAPICaller {
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
         if result.num_results == 0 {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            })); // Simplified error
+            return Err(ViaductError::Network(NetworkError::NoFeedFound));
         }
 
         let subscriptions = self
@@ -645,11 +643,7 @@ impl ReaderAPICaller {
         subscriptions
             .into_iter()
             .find(|s| s.feed_id == result.stream_id)
-            .ok_or_else(|| {
-                ViaductError::Network(NetworkError::RateLimited {
-                    retry_after_secs: 0,
-                })
-            }) // Simplified error
+            .ok_or_else(|| ViaductError::Network(NetworkError::NoFeedFound))
     }
 
     pub async fn delete_subscription(&self, auth_token: &str, subscription_id: &str) -> Result<()> {
@@ -674,9 +668,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            }));
+            return Err(status_error(&resp));
         }
         Ok(())
     }
@@ -722,9 +714,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            }));
+            return Err(status_error(&resp));
         }
         Ok(())
     }
@@ -798,9 +788,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            }));
+            return Err(status_error(&resp));
         }
         Ok(())
     }
@@ -823,9 +811,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            }));
+            return Err(status_error(&resp));
         }
         Ok(())
     }
@@ -1026,9 +1012,7 @@ impl ReaderAPICaller {
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
         if !resp.status().is_success() {
-            return Err(ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            }));
+            return Err(status_error(&resp));
         }
         Ok(())
     }

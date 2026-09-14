@@ -192,6 +192,7 @@ fn display_subtitle(ev: &ActivityEvent) -> String {
                 "Skipped · openrss.org: one feed per client-hour".to_string()
             }
         },
+        ActivityKind::Sync { detail } => trim(detail),
     }
 }
 

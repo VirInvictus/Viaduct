@@ -54,6 +54,10 @@ impl SyncRateLimiter {
             ?resume_at,
             "inoreader: rate limited; pausing syncing until then"
         );
+        crate::network::activity::ActivityLog::push_sync(format!(
+            "Sync paused until {} (rate limited)",
+            resume_at.to_rfc2822()
+        ));
         *self.resume_at.write().await = Some(resume_at);
         resume_at
     }
@@ -61,9 +65,8 @@ impl SyncRateLimiter {
     /// The Retry-After of an error that arms a pause. The one shape that
     /// qualifies: a real 429 mapped by `inoreader::status_error`, whose
     /// `retry_after_secs` is always the parsed header or a positive
-    /// default. The placeholder `RateLimited { retry_after_secs: 0 }`
-    /// values older call sites return for unrelated failures (missing
-    /// credentials, an unparseable login response) never pause, so a
+    /// default. Auth failures (missing keyring credentials, a rejected
+    /// login) surface as `NetworkError::Auth` and never pause, so a
     /// broken keyring can't stall sync.
     fn retry_after_of(err: &ViaductError) -> Option<u64> {
         match err {
@@ -147,6 +150,61 @@ pub trait AccountDelegate: Send + Sync {
     fn is_local(&self) -> bool {
         false
     }
+
+    // --- Server halves of the sidebar CRUD ops. The Account performs
+    // the local OPML mutation only after the server half succeeds, so
+    // the server-authoritative reconcile can never drop or resurrect a
+    // change it never saw (the write-half of the v3.6.0 sync driver).
+    // NNW counterparts: the `AccountDelegate` protocol's addFeed /
+    // removeFeed / renameFeed / moveFeedToFolder. Defaults do nothing:
+    // for a local account the OPML is the authority.
+
+    /// Subscribe to `url` server-side; `folder` (a bare label name) is
+    /// tagged in the same breath when given. Returns the server's
+    /// canonical stream id for the feed, or `None` from a delegate with
+    /// no server concept (the local default) — the Account then keeps
+    /// the URL as the id, as it always has.
+    fn server_add_feed(
+        &self,
+        _account: Arc<Account>,
+        _url: &str,
+        _folder: Option<&str>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>>
+    {
+        Box::pin(async move { Ok(None) })
+    }
+
+    fn server_delete_feed(
+        &self,
+        _account: Arc<Account>,
+        _feed_id: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn server_rename_feed(
+        &self,
+        _account: Arc<Account>,
+        _feed_id: &str,
+        _new_name: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    /// Re-home a feed server-side. `source_folder` / `dest_folder` are
+    /// bare label names; `None` means top level. Reader-API tagging is
+    /// add/remove of `user/-/label/<name>`, so each quadrant maps to one
+    /// call: folder→folder moves, top-level→folder tags, folder→top
+    /// untags, and top→top is a no-op.
+    fn server_move_feed(
+        &self,
+        _account: Arc<Account>,
+        _feed_id: &str,
+        _source_folder: Option<&str>,
+        _dest_folder: Option<&str>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move { Ok(()) })
+    }
 }
 
 pub struct LocalAccountDelegate;
@@ -220,20 +278,23 @@ impl InoreaderAccountDelegate {
             limit = limits.zone1_limit,
             "inoreader: skipping status downloads; Zone 1 API usage near the daily limit"
         );
+        crate::network::activity::ActivityLog::push_sync(
+            "Status downloads skipped: Inoreader API quota near the daily limit",
+        );
         true
     }
 
     async fn get_auth_token(&self) -> Result<String> {
         let creds = fetch_credentials("inoreader").await?.ok_or_else(|| {
-            ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            })
-        })?; // Simplified error
+            ViaductError::Network(NetworkError::Auth(
+                "no Inoreader credentials in the keyring".to_string(),
+            ))
+        })?;
 
         let password = creds.password.ok_or_else(|| {
-            ViaductError::Network(NetworkError::RateLimited {
-                retry_after_secs: 0,
-            })
+            ViaductError::Network(NetworkError::Auth(
+                "stored Inoreader credentials carry no password".to_string(),
+            ))
         })?;
         self.caller
             .validate_credentials(&creds.username, &password)
@@ -544,9 +605,8 @@ impl AccountDelegate for InoreaderAccountDelegate {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             if self.rate_limiter.should_skip().await {
-                // NNW `52e78b29c` logs this skip to its Activity Log; ours is
-                // window-owned and unreachable from the delegate, so the
-                // pause's warn line carries the resume time instead.
+                // NNW `52e78b29c` logs this skip to its Activity Log;
+                // ours rides the process-global log's Sync event.
                 tracing::info!("inoreader: skipping sync; rate-limit pause still in force");
                 return Ok(());
             }
@@ -561,7 +621,12 @@ impl AccountDelegate for InoreaderAccountDelegate {
                         self.rate_limiter.note_rate_limited(retry_after_secs).await;
                         Ok(())
                     }
-                    None => Err(e),
+                    None => {
+                        crate::network::activity::ActivityLog::push_sync(format!(
+                            "Sync failed: {e}"
+                        ));
+                        Err(e)
+                    }
                 },
                 Ok(()) => Ok(()),
             }
@@ -575,6 +640,80 @@ impl AccountDelegate for InoreaderAccountDelegate {
         self.refresh_all(account)
     }
 
+    fn server_add_feed(
+        &self,
+        _account: Arc<Account>,
+        url: &str,
+        folder: Option<&str>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>>
+    {
+        let url = url.to_string();
+        let folder = folder.map(str::to_string);
+        Box::pin(async move {
+            let token = self.get_auth_token().await?;
+            let subscription = self.caller.create_subscription(&token, &url).await?;
+            if let Some(folder) = &folder {
+                self.caller
+                    .create_tagging(&token, &subscription.feed_id, folder)
+                    .await?;
+            }
+            Ok(Some(subscription.feed_id))
+        })
+    }
+
+    fn server_delete_feed(
+        &self,
+        _account: Arc<Account>,
+        feed_id: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        let feed_id = feed_id.to_string();
+        Box::pin(async move {
+            let token = self.get_auth_token().await?;
+            self.caller.delete_subscription(&token, &feed_id).await
+        })
+    }
+
+    fn server_rename_feed(
+        &self,
+        _account: Arc<Account>,
+        feed_id: &str,
+        new_name: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        let feed_id = feed_id.to_string();
+        let new_name = new_name.to_string();
+        Box::pin(async move {
+            let token = self.get_auth_token().await?;
+            self.caller
+                .rename_subscription(&token, &feed_id, &new_name)
+                .await
+        })
+    }
+
+    fn server_move_feed(
+        &self,
+        _account: Arc<Account>,
+        feed_id: &str,
+        source_folder: Option<&str>,
+        dest_folder: Option<&str>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        let feed_id = feed_id.to_string();
+        let source = source_folder.map(str::to_string);
+        let dest = dest_folder.map(str::to_string);
+        Box::pin(async move {
+            let token = self.get_auth_token().await?;
+            match (source, dest) {
+                (Some(source), Some(dest)) => {
+                    self.caller
+                        .move_subscription(&token, &feed_id, &source, &dest)
+                        .await
+                }
+                (None, Some(dest)) => self.caller.create_tagging(&token, &feed_id, &dest).await,
+                (Some(source), None) => self.caller.delete_tagging(&token, &feed_id, &source).await,
+                (None, None) => Ok(()),
+            }
+        })
+    }
+
     fn import_opml(
         &self,
         account: Arc<Account>,
@@ -584,10 +723,34 @@ impl AccountDelegate for InoreaderAccountDelegate {
     > {
         let path = path.to_path_buf();
         Box::pin(async move {
-            let auth_token = self.get_auth_token().await?;
-            let xml = tokio::fs::read(&path).await?;
-            self.caller.import_opml(&auth_token, &xml).await?;
-            account.import_opml_internal(&path).await
+            // Import locally first, upload best-effort: being offline
+            // (or keyring-less) must not lose the user's import. Known
+            // residue: the next server-authoritative reconcile drops
+            // subscriptions the upload never delivered, so an offline
+            // import needs a re-run once online.
+            let feeds = account.import_opml_internal(&path).await?;
+            match self.get_auth_token().await {
+                Ok(token) => match tokio::fs::read(&path).await {
+                    Ok(xml) => {
+                        if let Err(e) = self.caller.import_opml(&token, &xml).await {
+                            tracing::warn!(
+                                ?e,
+                                "inoreader: OPML upload failed; re-run the import once online or the subscriptions will be dropped at the next reconcile"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(?e, "inoreader: could not re-read OPML for upload")
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        ?e,
+                        "inoreader: OPML upload skipped (no auth); subscriptions are local-only until an upload succeeds"
+                    );
+                }
+            }
+            Ok(feeds)
         })
     }
 }
