@@ -19,11 +19,9 @@
     ],
     "build-options": {
         "append-path": "/usr/lib/sdk/rust-stable/bin",
-        "build-args": [
-            "--share=network"
-        ],
         "env": {
-            "CARGO_HOME": "/run/build/viaduct/cargo"
+            "CARGO_HOME": "/run/build/viaduct/cargo",
+            "CARGO_NET_OFFLINE": "true"
         }
     },
     "modules": [
@@ -39,8 +37,15 @@
             "sources": [
                 {
                     "type": "dir",
-                    "path": "."
-                }
+                    "path": ".",
+                    "skip": [
+                        ".git",
+                        "target",
+                        ".flatpak-builder",
+                        "build-dir"
+                    ]
+                },
+                "data/cargo-sources.json"
             ]
         }
     ]
