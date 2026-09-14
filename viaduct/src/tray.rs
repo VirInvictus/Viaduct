@@ -129,6 +129,9 @@ thread_local! {
     /// stop calls happen exclusively here.
     static TRAY_HANDLE: RefCell<Option<ksni::Handle<ViaductTray>>> =
         const { RefCell::new(None) };
+    /// Set when `stop_service` fires while the spawn is still in flight
+    /// (no handle to shut down yet); the arriving handle honors it.
+    static TRAY_STOP_PENDING: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Wire the tray: install the GSetting change listener, start the
@@ -204,6 +207,10 @@ fn start_service(tx: tokio::sync::mpsc::UnboundedSender<TrayAction>) {
             // Already running — flip-on-while-on is a no-op.
             return;
         }
+        // A flip-off that lands while the spawn is still in flight must
+        // not leave a fresh handle running: remember the request and
+        // honor it when the handle arrives.
+        TRAY_STOP_PENDING.with(|p| *p.borrow_mut() = false);
         let icons = cached_icons();
         let icon_theme_path = cached_icon_theme_path().unwrap_or_default();
         let tray = ViaductTray {
@@ -212,18 +219,39 @@ fn start_service(tx: tokio::sync::mpsc::UnboundedSender<TrayAction>) {
             icon_theme_path,
         };
         // ksni's `spawn` consumes the tray and yields a Handle on the
-        // current Tokio runtime (the global one we install in `main`).
-        // Has to run from a Tokio context; the wire() call site is on
-        // the GTK thread but the global runtime is reachable from
-        // anywhere via the runtime-builder we stored.
-        let handle = match crate::block_on_runtime(async move { tray.spawn().await }) {
-            Ok(handle) => handle,
-            Err(e) => {
-                tracing::warn!(?e, "ksni tray spawn failed; sys-tray disabled");
+        // current Tokio runtime (the global one we install in `main`),
+        // and it talks to the session bus on the way. The call site is
+        // the GTK thread, so the spawn runs on the runtime via
+        // `spawn_on_runtime` and the handle comes back through a
+        // oneshot: `block_on_runtime` here would park the UI on those
+        // DBus round-trips, against the runtime helper's own contract.
+        // Trade-off, recorded: between this call and the handle landing
+        // on the GTK thread, `stop_service` sees no handle — hence the
+        // stop-pending flag above.
+        let (handle_tx, handle_rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
+            let result = tray.spawn().await;
+            let _ = handle_tx.send(result);
+        });
+        glib::spawn_future_local(async move {
+            let handle = match handle_rx.await {
+                Ok(Ok(handle)) => handle,
+                Ok(Err(e)) => {
+                    tracing::warn!(?e, "ksni tray spawn failed; sys-tray disabled");
+                    return;
+                }
+                Err(_) => {
+                    tracing::warn!("tray spawn task dropped its handle channel");
+                    return;
+                }
+            };
+            let stop_requested = TRAY_STOP_PENDING.with(|p| p.replace(false));
+            if stop_requested {
+                handle.shutdown();
                 return;
             }
-        };
-        cell.borrow_mut().replace(handle);
+            TRAY_HANDLE.with(|cell| *cell.borrow_mut() = Some(handle));
+        });
     });
 }
 
@@ -404,6 +432,9 @@ fn stop_service() {
     TRAY_HANDLE.with(|cell| {
         if let Some(handle) = cell.borrow_mut().take() {
             handle.shutdown();
+        } else {
+            // The spawn is still in flight; don't let it land running.
+            TRAY_STOP_PENDING.with(|p| *p.borrow_mut() = true);
         }
     });
 }
