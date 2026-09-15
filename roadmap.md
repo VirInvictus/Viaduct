@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.0.0.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.0.1.
 
 ---
 
@@ -358,6 +358,19 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
 
+## Upstream Sync Candidates (September 15, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `dc74019c2` (+8 commits over `d794eeafb`, Sep 3 – Sep 15); `.newsflash` and `.liferea` were not re-reviewed this window. See `CLAUDE.md` §2 for the sync note. A small, iOS-heavy window: **nothing ports and no new candidates are recorded.** The triage, kept so nobody re-derives it:
+
+- `819d0c08c` + `6c66c52a8` + `8b4221eb0` + `7b004a155` (refreshAll reports ran/skipped; NetworkMonitor optimistic when unknown): all target a connectivity pre-check gate. viaduct never gates refreshes on reachability; unreachable hosts fail per-feed into the Activity Log. No mechanism to port.
+- `86e69b589` + `5d6d6d292` (await push-triggered syncs; end the sync-wait background task exactly once): iOS push + BGTask bookkeeping; viaduct has no push and no background-task scheduler.
+- `ac5f8dac6` (#5417, stale back-navigation cleanup deselects a just-selected article): lives in the collapsed-split-view push/pop lifecycle; the viaduct shell keeps the article pane always visible and has no navigation-stack push. The fetch-side staleness concern is already covered by the v1.9.0 `selection_fetch_generation` counter.
+- CacheCleaner refactor (drop the connectivity gate around the 3-day flush, stamp unconditionally): our `cache_sweep` runs unconditionally at startup and never had the gate.
+
+`Themes/` untouched (byte-check re-verified 2026-09-15); `RSParser`, `RSCore`, `ArticlesDatabase` untouched.
+
+---
+
 ## Upstream Sync Candidates (September 3, 2026)
 
 Surfaced by fast-forwarding `.netnewswire` to `d794eeafb` (+326 commits over `08d10f501`, the `mac-7.1.3` → `mac-7.1.4b1` line, Jul 8 – Sep 3); `.newsflash` and `.liferea` were not re-reviewed this window. See `CLAUDE.md` §2 for the full sync note. The bulk of the range is a Feedly-overhaul series, CloudKit/iCloud error handling, and iOS-27-beta churn that does not port; `Themes/` was untouched (all 8 bundled copies verified byte-identical). Eight ports shipped in v3.4.0; the remaining ported work below landed as v3.5.0 (the rate-limit machinery), v3.6.0 (browser UA, openrss throttle, and the sync driver), and v3.7.0 (xml:base); the unquoted-attributes item carries a design proposal awaiting the decision, and the watch items stay watch items.
@@ -505,7 +518,7 @@ Portfolio direction change (Brandon, 2026-07-09): the goal moved from "runs poli
 
 - [x] **`mem_check` + live memory: memory-positive, not just neutral** *(done)*. Headless harness: peak 59 MB (< 500 budget). Live GTK app, 130-feed refresh: `peak_mb ≈ 302`, `anon_mb ≈ 112`: down from ~333–364 peak / ~150 anon with libadwaita. Recorded in spec.md §2.2/§11. **The Phase 19 geometry/keyboard/portal/WebKit audit items still want the hands-on pass** (below).
 - [x] **WebKit article path checked: no adwaita assumptions.** `--accent-color` is injected from each theme's own `accent_hex` (`render_themed`), not from libadwaita; the Adwaita theme (None) injects nothing and its CSS only *mentions* the GNOME accent GSetting in a comment. `currentColor`-driven scrollbars key off the article text colour, which respects `prefers-color-scheme`. No breakage.**Original:** Viaduct carries WebKitGTK and the pilot did not, so this is unprecedented territory: the v2.0.0-pre6 WebKit ↔ GTK CSS bridge propagates `--accent-color` from the libadwaita system accent, and `currentColor`-driven scrollbars key off GTK theme colours.
-- [ ] **Hands-on pass, keyboard in hand, on Hyprland and a GNOME session.** The pilot verified everything scriptable and deferred exactly this, which is how the focus flash escaped. Budget for it; do not let it be the residue. **New data point (2026-09-14, staging the sepia screenshot):** force-light rendering on the live session shows washed-out, low-contrast timeline and sidebar rows while the article pane renders correctly; the mixed look persisted with `GTK_THEME=Adwaita:light`, so the global gtk.css skin is not the whole story. Dark mode is unaffected and crisp. Diagnose the light-palette sheet's text-color coverage during this pass.
+- [ ] **Hands-on pass, keyboard in hand, on Hyprland and a GNOME session.** The pilot verified everything scriptable and deferred exactly this, which is how the focus flash escaped. Budget for it; do not let it be the residue. **New data point (2026-09-14, staging the sepia screenshot):** force-light rendering on the live session shows washed-out, low-contrast timeline and sidebar rows while the article pane renders correctly; the mixed look persisted with `GTK_THEME=Adwaita:light`, so the global gtk.css skin is not the whole story. **RESOLVED 2026-09-15 (v4.0.1):** root cause was never viaduct's sheet alone; the desktop's dark `gtk-theme-name` writes explicit label colors at theme priority and the base sheet never pinned plain label text. Fixed upstream in vir-gtk 1.4.1 (`label { color: %FG% }`), wave-verified live in both modes; the remaining hands-on items in this pass are unchanged.
 
 **Phase 19 audit items, deferred here (2026-07-17).** These moved from Phase 19 wholesale. Every one audits something Phase 20 replaces or restyles, so they are run **once**, against the migrated shell, rather than twice. **Re-anchored 2026-09-04 (AUDIT_THREE Stage 4):** the citations below used to name `AdwNavigationSplitView` / `AdwBreakpoint` / `adw::Dialog` / `AdwStyleManager` / `AdwHeaderBar`, all deleted in the v3.0.0 de-adwaita migration; every citation now names the shipped shell (nested `GtkPaned`, width-driven sidebar auto-hide, plain modal `gtk::Window` dialogs, portal-driven dark/light via `theme.rs`, per-pane `GtkHeaderBar`s). The items remain open hands-on passes.
 

@@ -1,5 +1,13 @@
 # viaduct: Patch Notes
 
+## v4.0.1: light mode, readable (2026-09-15)
+
+One dependency wave with a real user-visible fix, plus the record of an upstream window that ports nothing. 226 tests; clippy `-D warnings` clean.
+
+- **Fixed:** force-light rendered the chrome washed-out and barely readable: pale Lotus backgrounds with dark-theme label text in the sidebar and timeline rows. Root cause found by A/B (`GTK_THEME=Adwaita:light` vs the desktop's dark base theme with identical app sheets): a desktop whose `gtk-theme-name` points at a dark third-party theme writes explicit label colors at theme priority, and explicit rules beat inheritance wherever the app's two stylesheet tiers never restate a color. Fixed upstream in vir-gtk 1.4.1, which now pins plain `label` text (and a dim disabled variant) in the base sheet; this release takes the consumer-wave lock bump and was verified live in both modes on the real desktop.
+- **Documented:** the September 3-15 upstream sync window fast-forwarded `.netnewswire` to `dc74019c2` (+8 commits) and ports nothing, recorded with the full triage in the roadmap: an iOS background-scheduler/refreshAll-return-value arc behind a connectivity gate viaduct never had, push-triggered sync bookkeeping with no counterpart here, and #5417's stale back-navigation deselect living in a collapsed-split-view push/pop lifecycle the always-visible three-pane shell does not implement. `Themes/`, `RSParser`, `RSCore`, and `ArticlesDatabase` were untouched upstream.
+- **Verified:** the article-theme cargo re-audited byte-for-byte against upstream (all 8 NNW bundles identical; the NewsFax/Promenade newsfoot CSS additions remain the only recorded divergences), and all nine reading themes (the 8 ports plus the Adwaita theme) were render-checked live in light mode, with the viaduct-authored dark overlays (Sepia's roasted-coffee, Biblioteca's deep blue) checked in dark.
+
 ## v4.0.0: the app-id the Flathub submission will carry (2026-09-14)
 
 The decided-but-never-executed identity change lands together with the packaging fix that unblocks the submission it was decided for. Both verify end to end on real runs, not inspection. 226 tests; clippy `-D warnings` clean.
