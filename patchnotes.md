@@ -1,5 +1,15 @@
 # viaduct: Patch Notes
 
+## Unreleased
+
+- **vir-gtk adopted at 1.4.2** (consumer wave, lock bump only): the
+  final-audit contract fixes land upstream (close_on_escape really
+  captures, Alert answers once per presentation, scope_css splits at
+  parentheses depth, at_priority warns off the scope rung,
+  bind_settings stops leaking bound scopes). No Viaduct code changes;
+  suite 227 green; `data/cargo-sources.json` regenerated against the
+  moved lock in the same commit.
+
 ## v4.0.2: the sidebar glyphs, the pane avatar, and a calmer Sepia dark (2026-09-15)
 
 Three visual fixes straight from Brandon's review of the verification screenshots. 227 tests; clippy `-D warnings` clean.

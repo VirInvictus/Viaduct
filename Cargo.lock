@@ -557,7 +557,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -894,7 +894,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps 9.0.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2598,7 +2598,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3078,7 +3078,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3556,8 +3556,8 @@ dependencies = [
 
 [[package]]
 name = "vir-gtk"
-version = "1.4.1"
-source = "git+https://github.com/VirInvictus/vir-gtk.git#cc51428f550832a003e652226d012bddbe9cf176"
+version = "1.4.2"
+source = "git+https://github.com/VirInvictus/vir-gtk.git#21300aea160ed60eb98998dfa93bc2c57f2fc985"
 dependencies = [
  "gtk4",
 ]
