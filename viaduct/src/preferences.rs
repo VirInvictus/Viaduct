@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the project root for details.
 
 //! GSettings-backed user preferences. Schema lives at
-//! `data/org.virinvictus.Viaduct.gschema.xml`.
+//! `data/io.github.virinvictus.Viaduct.gschema.xml`.
 //!
 //! Port of NNW's `AppDefaults` / `AppearancePreferencesView` for Linux.
 //! NNW uses `UserDefaults` (NSUserDefaults); we use `gio::Settings`. Storage
@@ -14,7 +14,11 @@ use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 
-pub const SCHEMA_ID: &str = "org.virinvictus.Viaduct";
+/// The application id: GTK application_id, GSettings schema id, the
+/// `.desktop` basename, the D-Bus name, and the icon name are all this
+/// one string by design (spec.md: never fork them; the io.github.*
+/// rename rode v4.0.0). Route every new literal here.
+pub const APP_ID: &str = "io.github.virinvictus.Viaduct";
 
 pub mod keys {
     pub const COLOR_SCHEME: &str = "color-scheme";
@@ -54,8 +58,8 @@ pub fn settings() -> Option<gio::Settings> {
     CELL.with(|cell| {
         cell.get_or_init(|| {
             let source = gio::SettingsSchemaSource::default()?;
-            source.lookup(SCHEMA_ID, true)?;
-            Some(gio::Settings::new(SCHEMA_ID))
+            source.lookup(APP_ID, true)?;
+            Some(gio::Settings::new(APP_ID))
         })
         .clone()
     })

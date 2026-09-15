@@ -1,7 +1,7 @@
 # The SVG app icons (scalable + symbolic) install by default so from-source
 # and distro builds ship the crisp vector and the monochrome glyph. The
 # Flatpak build disables them (`-Dsvg-icons=false` in
-# org.virinvictus.Viaduct.json): both appstreamcli compose (through
+# io.github.virinvictus.Viaduct.json): both appstreamcli compose (through
 # GdkPixbuf) and the export-stage icon validation load every icon file, and
 # the GNOME 50 stacks have no working SVG loader in that path at all, so any
 # SVG in the Flatpak payload aborts the build ("Unrecognized image file

@@ -112,7 +112,7 @@ fn main() -> glib::ExitCode {
     }
 
     let app = gtk::Application::builder()
-        .application_id("org.virinvictus.Viaduct")
+        .application_id(viaduct::preferences::APP_ID)
         .build();
 
     let account_for_activate = account.clone();

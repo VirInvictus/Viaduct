@@ -20,7 +20,7 @@ fn main() {
         .map(|p| p.join("data"))
         .unwrap_or_else(|| Path::new(&manifest_dir).join("data"));
 
-    println!("cargo:rerun-if-changed=../data/org.virinvictus.Viaduct.gschema.xml");
+    println!("cargo:rerun-if-changed=../data/io.github.virinvictus.Viaduct.gschema.xml");
 
     if !schema_dir.exists() {
         return;

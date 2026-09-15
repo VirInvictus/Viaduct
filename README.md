@@ -63,7 +63,7 @@ Captures in dark mode, three-pane wide layout.
   <em>Sepia reading-pane theme (the eight NetNewsWire article themes are unchanged in v3.0.0)</em>
 </p>
 
-The AppStream metainfo (`data/org.virinvictus.Viaduct.appdata.xml`) also lists screenshots; those are the ones gnome-software / Flathub display on the install page, so keep both in sync when adding new captures.
+The AppStream metainfo (`data/io.github.virinvictus.Viaduct.appdata.xml`) also lists screenshots; those are the ones gnome-software / Flathub display on the install page, so keep both in sync when adding new captures.
 
 ## Installation
 
@@ -77,6 +77,16 @@ Viaduct targets **GTK 4.16+ / WebKitGTK 6.0** on Wayland (Hyprland, GNOME, or an
 | WebKitGTK | 6.0 | `webkitgtk6.0-devel` | `libwebkitgtk-6.0-dev` |
 | SQLite (bundled) | — | — | — |
 | TLS | rustls (vendored) | — | — |
+
+### Upgrading from pre-4.0 (org.virinvictus builds)
+
+v4.0.0 renamed the application id to `io.github.virinvictus.Viaduct`, which moves the GSettings path with it. Preferences set under the old id are orphaned, not read; carry them over once with:
+
+```sh
+dconf dump /org/virinvictus/Viaduct/ | dconf load /io/github/virinvictus/Viaduct/
+```
+
+and remove the old tree afterwards with `dconf reset -r /org/virinvictus/Viaduct/`. Hyprland `windowrulev2` rules matching the old `org.virinvictus.Viaduct` class need the new id too.
 
 ### Runtime requirements
 

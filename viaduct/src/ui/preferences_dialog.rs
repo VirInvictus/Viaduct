@@ -511,7 +511,7 @@ mod tests {
             true,
         )
         .ok()?;
-        let schema = source.lookup("org.virinvictus.Viaduct", true)?;
+        let schema = source.lookup(crate::preferences::APP_ID, true)?;
         Some(gio::Settings::new_full(
             &schema,
             Some(&gio::memory_settings_backend_new()),

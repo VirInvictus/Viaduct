@@ -65,7 +65,7 @@ impl Tray for ViaductTray {
     }
 
     fn id(&self) -> String {
-        "org.virinvictus.Viaduct".into()
+        crate::preferences::APP_ID.into()
     }
 
     fn icon_name(&self) -> String {
@@ -76,7 +76,7 @@ impl Tray for ViaductTray {
         // placeholder here; v2.6.6 also implements `icon_pixmap` below
         // with bytes embedded at compile time, so the tray icon
         // renders correctly regardless of install state.
-        "org.virinvictus.Viaduct".into()
+        crate::preferences::APP_ID.into()
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -351,8 +351,8 @@ fn decode_icon(png_bytes: &[u8]) -> Result<ksni::Icon, String> {
 /// ```text
 ///   $XDG_CACHE_HOME/viaduct/tray-icons/
 ///   └── hicolor/
-///       ├── 256x256/apps/org.virinvictus.Viaduct.png
-///       └── 512x512/apps/org.virinvictus.Viaduct.png
+///       ├── 256x256/apps/io.github.virinvictus.Viaduct.png
+///       └── 512x512/apps/io.github.virinvictus.Viaduct.png
 /// ```
 ///
 /// Returns `None` (caller falls back to empty `icon_theme_path`) when
@@ -364,7 +364,7 @@ fn cached_icon_theme_path() -> Option<String> {
 }
 
 fn install_tray_icon_theme() -> Option<String> {
-    const ICON_NAME: &str = "org.virinvictus.Viaduct";
+    const ICON_NAME: &str = crate::preferences::APP_ID;
     // v2.6.8: GTK's IconTheme spec requires a per-theme `index.theme`
     // declaring which subdirs hold which size buckets. Without it,
     // `St.IconTheme.lookup_icon_for_scale` (the GNOME Shell wrapper

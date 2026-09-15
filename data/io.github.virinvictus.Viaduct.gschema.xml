@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
-  <enum id="org.virinvictus.Viaduct.ColorScheme">
+  <enum id="io.github.virinvictus.Viaduct.ColorScheme">
     <value nick="default" value="0"/>
     <value nick="force-light" value="1"/>
     <value nick="force-dark" value="2"/>
   </enum>
 
-  <enum id="org.virinvictus.Viaduct.ArticleTheme">
+  <enum id="io.github.virinvictus.Viaduct.ArticleTheme">
     <value nick="auto" value="0"/>
     <value nick="adwaita" value="1"/>
     <value nick="sepia" value="2"/>
@@ -19,19 +19,19 @@
     <value nick="verdana-revival" value="9"/>
   </enum>
 
-  <enum id="org.virinvictus.Viaduct.VideoPlaybackMode">
+  <enum id="io.github.virinvictus.Viaduct.VideoPlaybackMode">
     <value nick="in-pane" value="0"/>
     <value nick="external" value="1"/>
     <value nick="disabled" value="2"/>
   </enum>
 
-  <enum id="org.virinvictus.Viaduct.TimelineSortOrder">
+  <enum id="io.github.virinvictus.Viaduct.TimelineSortOrder">
     <value nick="newest-first" value="0"/>
     <value nick="oldest-first" value="1"/>
   </enum>
 
-  <schema id="org.virinvictus.Viaduct" path="/org/virinvictus/Viaduct/">
-    <key name="color-scheme" enum="org.virinvictus.Viaduct.ColorScheme">
+  <schema id="io.github.virinvictus.Viaduct" path="/io/github/virinvictus/Viaduct/">
+    <key name="color-scheme" enum="io.github.virinvictus.Viaduct.ColorScheme">
       <default>"default"</default>
       <summary>Color scheme</summary>
       <description>
@@ -141,7 +141,7 @@
       </description>
     </key>
 
-    <key name="video-playback-mode" enum="org.virinvictus.Viaduct.VideoPlaybackMode">
+    <key name="video-playback-mode" enum="io.github.virinvictus.Viaduct.VideoPlaybackMode">
       <default>"in-pane"</default>
       <summary>How to play YouTube / Vimeo videos detected in articles</summary>
       <description>
@@ -182,7 +182,7 @@
       </description>
     </key>
 
-    <key name="timeline-sort-order" enum="org.virinvictus.Viaduct.TimelineSortOrder">
+    <key name="timeline-sort-order" enum="io.github.virinvictus.Viaduct.TimelineSortOrder">
       <default>"newest-first"</default>
       <summary>Timeline article sort order</summary>
       <description>
@@ -195,7 +195,7 @@
       </description>
     </key>
 
-    <key name="article-theme" enum="org.virinvictus.Viaduct.ArticleTheme">
+    <key name="article-theme" enum="io.github.virinvictus.Viaduct.ArticleTheme">
       <default>"auto"</default>
       <summary>Article reading theme</summary>
       <description>

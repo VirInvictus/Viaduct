@@ -12,7 +12,7 @@
 #   meson compile -C builddir
 #   meson install -C builddir
 #
-# The Flatpak manifest at `org.virinvictus.Viaduct.json` invokes meson the
+# The Flatpak manifest at `io.github.virinvictus.Viaduct.json` invokes meson the
 # same way against `/app`.
 
 project(
@@ -23,7 +23,7 @@ project(
   license: 'MIT',
 )
 
-application_id = 'org.virinvictus.Viaduct'
+application_id = 'io.github.virinvictus.Viaduct'
 prefix = get_option('prefix')
 bindir = prefix / get_option('bindir')
 datadir = prefix / get_option('datadir')
