@@ -28,6 +28,25 @@ What shipped:
   (dead queues deleted, Mobile claim dropped), and the sepia
   screenshot retaken on the current build.
 
+Post-completion releases (still 2026-09-15, same blitz residue lane):
+
+- v4.0.1 "light mode, readable" (ecf152d + 2d478a2): the vir-gtk 1.4.1
+  consumer wave carrying the force-light fix — a dark gtk-theme-name
+  supplies explicit label colors that beat inheritance, so light Lotus
+  chrome rendered with dark-theme label text; upstream pinned plain
+  `label` text in the base sheet, verified live in both modes. Also
+  recorded the September 3-15 upstream window (dc74019c2, +8 commits,
+  nothing ports) and re-verified the article-theme cargo byte-for-byte.
+  The first red CI run was the new cargo-sources freshness guard
+  catching its stale pin; regenerated and green.
+- v4.0.2 "the sidebar glyphs, the pane avatar, and a calmer Sepia dark"
+  (2f69946), from Brandon's review of the verification screenshots:
+  bundled viaduct-* sidebar symbolics (system themes don't reliably ship
+  x-office-calendar-symbolic), the pane's [[avatar_src]] wired to the
+  feed favicon through viaduct-img:// (was always empty: every theme's
+  header drew a broken-image glyph), and Sepia's dark overlay links
+  softened from peach e8b88a to copper c89968.
+
 Reopen conditions (recorded futures, not open work):
 - The Flathub submission itself: blocked on Brandon's Flathub
   onboarding credentials (decision 64's standing gate), not code. The
