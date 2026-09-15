@@ -1,0 +1,51 @@
+viaduct: THE FINAL BLITZ completion record
+
+Completion date: 2026-09-15 (work executed 2026-09-14/15)
+Commit range: 8ae8fb4 (audit roadmap block landed)..7ab5418 (v4.0.0 release commit)
+Tags cut: v3.9.0 (3c1be64), v4.0.0 (7ab5418); both annotated with the
+verbatim patchnotes entry (--cleanup=verbatim, cat-file verified
+before pushing) and both carrying GitHub Releases. CI green on both.
+
+What shipped:
+- v3.9.0 "the sync write half connects": the Inoreader write-half lane
+  (status intent queue, subscription CRUD dispatch through the
+  delegate, Auth error variant, activity-log sync events, offline-safe
+  OPML import), the mark-feed/folder-read unstars data-loss fix, the
+  fetcher-family memory bounds (shared streamed capped-get, 10 MB feed
+  cap, TIMELINE_FETCH_LIMIT, bulk settings round-trip,
+  process-lifetime 429 cooldowns), the tray block_on removal, href
+  attribute escaping + scheme validation, the favicon-discovery
+  30-minute retry interval, and the entire recorded docs backlog with
+  the 231-dash em-dash sweep.
+- v4.0.0 "the app-id the Flathub submission will carry": the
+  io.github.virinvictus.Viaduct rename executed (decision 64; fifteen
+  sites, APP_ID constant, dconf migration note, Wayland app_id
+  verified live), the offline Flatpak build (cargo-sources.json +
+  CARGO_NET_OFFLINE + CI freshness guard; full flatpak-builder run
+  verified with no sandbox network), the approved GitHub presentation
+  subset (description without retired memory numbers, 20-topic set,
+  fedora:43 pin, CI hardening quartet), the answered removal gates
+  (dead queues deleted, Mobile claim dropped), and the sepia
+  screenshot retaken on the current build.
+
+Reopen conditions (recorded futures, not open work):
+- The Flathub submission itself: blocked on Brandon's Flathub
+  onboarding credentials (decision 64's standing gate), not code. The
+  submission now targets v4.0.0.
+- Phase 20f hands-on pass (Brandon, keyboard in hand), now carrying a
+  new data point: force-light rendering shows washed-out low-contrast
+  timeline/sidebar rows on the live session; dark mode is unaffected.
+- Deferred features, reaffirmed 2026-09-14: Mastodon share target,
+  smart-feed edit-existing; the idle-backoff status-sync timer stays
+  candidate 416.
+- Declined-this-pass candidates, recoverable from the roadmap audit
+  block: SourceSerif4 TTF pair, 8 theme Info.plists,
+  docs/screenshots/adaptive-layout.png, Releases backfill for the 11
+  pre-v3.8.0 tags (forward-only stands), secret-scanning/push-
+  protection enables, release.yml, issue templates.
+- Lens 4 feature candidates never on the ranked list stay roadmap
+  candidates: feed-health persistence, rusqlite 0.40, a11y name/role
+  pass, group-by-feed sort.
+
+At close: tree clean, pushed through v4.0.0, 226 tests runner-counted,
+clippy -D warnings clean, fmt clean, cargo target/ cleaned.
