@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt};
 use viaduct::database::accounts::Account;
-use viaduct::{database, fonts, paths, ui};
+use viaduct::{database, fonts, icons, paths, ui};
 
 fn main() -> glib::ExitCode {
     // v2.6.14: tune mimalloc's idle-page purge before its global heap
@@ -76,6 +76,12 @@ fn main() -> glib::ExitCode {
         // still render (browser falls back to system fonts when the bundled
         // ones aren't installed).
         tracing::warn!(?err, "failed to install bundled fonts");
+    }
+    if let Err(err) = icons::install_bundled() {
+        // Icon install is best-effort — log but don't abort. The sidebar
+        // falls back to theme-provided glyphs when the bundled ones aren't
+        // installed.
+        tracing::warn!(?err, "failed to install bundled icons");
     }
 
     info!(version = env!("CARGO_PKG_VERSION"), "Starting viaduct");

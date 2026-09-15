@@ -463,7 +463,7 @@ pub fn setup_sidebar_list_view(
                         // dimmed. The slot carries a link emblem:
                         // GtkListView wants something in the icon slot.
                         label.add_css_class("viaduct-sidebar-heading");
-                        icon_image.set_icon_name(Some("emblem-symbolic-link-symbolic"));
+                        icon_image.set_icon_name(Some("viaduct-smart-feeds-symbolic"));
                         icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::SmartFeed(name) => {
@@ -474,7 +474,7 @@ pub fn setup_sidebar_list_view(
                     SidebarItem::CustomSmartFeedsGroup => {
                         label.set_text("My Smart Feeds");
                         label.add_css_class("viaduct-sidebar-heading");
-                        icon_image.set_icon_name(Some("emblem-symbolic-link-symbolic"));
+                        icon_image.set_icon_name(Some("viaduct-smart-feeds-symbolic"));
                         icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::CustomSmartFeed(sf) => {
@@ -635,12 +635,15 @@ fn spawn_favicon_fetch(
     });
 }
 
+/// The bundled glyphs (see `icons.rs`): not every icon theme ships a
+/// calendar symbolic, and mixed-theme artwork rendered the smart-feed
+/// block inconsistent.
 fn smart_feed_icon(name: &str) -> &'static str {
     match name {
-        "Today" => "x-office-calendar-symbolic",
-        "All Unread" => "mail-unread-symbolic",
-        "Starred" => "starred-symbolic",
-        _ => "view-pin-symbolic",
+        "Today" => "viaduct-today-symbolic",
+        "All Unread" => "viaduct-all-unread-symbolic",
+        "Starred" => "viaduct-starred-symbolic",
+        _ => "viaduct-smart-feed-symbolic",
     }
 }
 

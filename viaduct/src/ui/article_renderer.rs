@@ -303,8 +303,12 @@ pub struct ArticleSubstitutions {
     pub time_long: String,
     pub time_medium: String,
     pub time_short: String,
-    /// `nnwImageIcon://<articleID>` in NNW; empty until Phase 6 wires the
-    /// `viaduct-img://` URI scheme handler.
+    /// `nnwImageIcon://<articleID>` in NNW, whose handler serves the
+    /// feed's icon; viaduct wires the same slot through
+    /// `viaduct-img://i/<encoded favicon url>` once the per-feed settings
+    /// resolve, and falls back to [`TRANSPARENT_AVATAR_SRC`] before that
+    /// (or when the feed has no icon) so the theme's avatar cell never
+    /// renders a broken-image glyph.
     pub avatar_src: String,
     pub external_link: String,
     pub external_link_label: String,
@@ -434,6 +438,13 @@ pub(crate) fn safe_article_url(url: &str) -> String {
         _ => String::new(),
     }
 }
+
+/// A 1x1 transparent GIF substituted for `[[avatar_src]]` until (or
+/// unless) the feed's favicon resolves: the bundled themes render that
+/// slot as an `<img>`, and an empty or broken source draws WebKit's
+/// missing-image glyph above the article title. CSP allows `data:`.
+pub const TRANSPARENT_AVATAR_SRC: &str =
+    "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
 /// Scheme allowlist for handing a URL to the OS handler (NNW
 /// `0eacfe05c`, `preparedForOpeningInBrowser`): only http, https, and

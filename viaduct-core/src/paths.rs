@@ -58,6 +58,13 @@ pub fn fonts_dir() -> Result<PathBuf> {
         .join(APP_DIR))
 }
 
+/// The user icon-theme root (`$XDG_DATA_HOME/icons`). Bundled sidebar
+/// glyphs install into its `hicolor/scalable/apps` subtree so they
+/// resolve through the standard fallback chain.
+pub fn icons_dir() -> Result<PathBuf> {
+    Ok(xdg_home("XDG_DATA_HOME", ".local/share")?.join("icons"))
+}
+
 pub fn ensure_dirs() -> Result<()> {
     for dir in [
         data_dir()?,

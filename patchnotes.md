@@ -1,5 +1,13 @@
 # viaduct: Patch Notes
 
+## v4.0.2: the sidebar glyphs, the pane avatar, and a calmer Sepia dark (2026-09-15)
+
+Three visual fixes straight from Brandon's review of the verification screenshots. 227 tests; clippy `-D warnings` clean.
+
+- **Fixed:** the sidebar's smart-feed block rendered missing-image placeholders or mismatched glyphs (Smart Feeds header, Today, All Unread, Starred). `x-office-calendar-symbolic` doesn't resolve on several icon themes, and whatever else resolved came from an arbitrary theme with mismatched weight. The five glyphs are now bundled (`viaduct-smart-feeds`/`-today`/`-all-unread`/`-starred`/`-smart-feed` symbolics, drawn in-repo) and installed at startup into `$XDG_DATA_HOME/icons/hicolor/scalable/apps/`, the same runtime-install pattern the bundled fonts use.
+- **Fixed:** every bundled theme's article header drew WebKit's broken-image glyph above the title: the themes render `[[avatar_src]]` as an `<img>`, and viaduct always substituted the empty string (NNW fills the slot through its `nnwImageIcon://` handler; ours was never wired). The per-feed settings lookup now resolves the feed's `favicon_url`/`icon_url` and serves it through the same `viaduct-img://i/<encoded>` route inline images use; before resolution, or with no icon, a 1x1 transparent GIF renders instead.
+- **Changed:** Sepia's dark overlay links were too strong (the review called them "no bueno, too bold"): links dropped from bright peach `#e8b88a` to the overlay's own copper accent `#c89968`, and the feed link from `#d8a87a` to `#bfa27e`. Verified against a link-bearing article; the other overlays' accents are unchanged.
+
 ## v4.0.1: light mode, readable (2026-09-15)
 
 One dependency wave with a real user-visible fix, plus the record of an upstream window that ports nothing. 226 tests; clippy `-D warnings` clean.

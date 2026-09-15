@@ -795,16 +795,27 @@ impl ViaductWindow {
             let account = account_for_article.clone();
             let window_weak = window_weak_for_article.clone();
             glib::spawn_future_local(async move {
-                let auto = account
-                    .fetch_feed_settings(feed_id)
-                    .await
-                    .ok()
-                    .flatten()
+                let settings = account.fetch_feed_settings(feed_id).await.ok().flatten();
+                let auto = settings
+                    .as_ref()
                     .map(|s| s.reader_view_always_enabled)
                     .unwrap_or(false)
                     || (is_stub && has_url);
                 if let Some(window) = window_weak.upgrade() {
                     window.imp().article_pane.get().set_auto_reader(auto);
+                    // The theme's avatar cell: serve the feed icon through
+                    // the same viaduct-img:// route inline images use, so
+                    // the header renders the favicon instead of a broken
+                    // empty <img>.
+                    let avatar = settings
+                        .as_ref()
+                        .and_then(|s| s.favicon_url.clone().or_else(|| s.icon_url.clone()))
+                        .map(|url| crate::ui::article_renderer::encode_image_url(&url));
+                    window
+                        .imp()
+                        .article_pane
+                        .get()
+                        .set_avatar_src(avatar.unwrap_or_default());
                 }
             });
         });

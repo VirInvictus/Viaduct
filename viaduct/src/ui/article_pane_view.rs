@@ -178,6 +178,10 @@ pub struct ArticleDisplayState {
     pub extracted_html: Option<String>,
     pub article_url: Option<String>,
     pub auto_reader: bool,
+    /// The feed-icon URL for the theme's avatar cell, already encoded as a
+    /// `viaduct-img://` link. Empty until the per-feed settings resolve;
+    /// rendering substitutes the transparent pixel for the empty case.
+    pub avatar_src: String,
     pub title: String,
     pub byline: String,
     pub feed_link: String,
@@ -373,6 +377,7 @@ impl ArticlePaneView {
             state.extracted_html = None;
             state.article_url = ctx.article_url;
             state.auto_reader = false;
+            state.avatar_src = String::new();
             state.title = ctx.title;
             state.byline = ctx.byline;
             state.feed_link = ctx.feed_link;
@@ -410,6 +415,22 @@ impl ArticlePaneView {
         if auto {
             imp.reader_btn.set_active(true);
         }
+    }
+
+    /// Push the feed's icon in once the per-feed settings lookup resolves.
+    /// Window resolves it asynchronously (same lookup as `set_auto_reader`).
+    /// An empty string keeps the transparent placeholder; a URL re-renders
+    /// so the avatar appears without a selection change.
+    pub fn set_avatar_src(&self, src: String) {
+        let imp = self.imp();
+        {
+            let mut state = imp.display.borrow_mut();
+            if state.avatar_src == src {
+                return;
+            }
+            state.avatar_src = src;
+        }
+        self.render_article_body();
     }
 
     /// Programmatically toggle the reader-view button. Bound to
@@ -548,6 +569,11 @@ impl ArticlePaneView {
                 state.article_url.as_deref().unwrap_or_default(),
             ),
             feed_link: article_renderer::safe_article_url(&state.feed_link),
+            avatar_src: if state.avatar_src.is_empty() {
+                article_renderer::TRANSPARENT_AVATAR_SRC.to_string()
+            } else {
+                state.avatar_src.clone()
+            },
             feed_link_title: article_renderer::escape_html(&state.feed_link_title),
             byline: article_renderer::escape_html(&state.byline),
             datetime_long: state
@@ -586,7 +612,6 @@ impl ArticlePaneView {
                 .date_published
                 .map(|d| d.format("%l:%M %p").to_string())
                 .unwrap_or_default(),
-            avatar_src: String::new(),
             external_link: String::new(),
             external_link_label: String::new(),
             external_link_stripped: String::new(),
