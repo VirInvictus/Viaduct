@@ -10,17 +10,24 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+# One run per ref at a time; a pushed fix cancels the superseded run
+# instead of queueing behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # viaduct requires gtk4 >= 4.16 (v4_16); Ubuntu runners ship 4.14.5, so
     # the build aborts in gdk4-sys before a single crate of ours compiles.
     # That is why this workflow had never once gone green on ubuntu-24.04.
     # Fedora carries a new-enough GTK, and the same container pattern is
     # already proven in Atrium and Colophon. rusqlite is bundled, so it
     # compiles from source and needs only a C toolchain.
-    container: fedora:latest
+    container: fedora:43
     steps:
       - name: Install system dependencies
         # --disablerepo=fedora-cisco-openh264: webkitgtk6.0-devel pulls
@@ -43,7 +50,8 @@ jobs:
             openssl-devel \
             xorg-x11-server-Xvfb
 
-      - uses: actions/checkout@v4
+      # Pinned to the v4 tag's SHA (actions hardening, final audit L6.8).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -68,7 +76,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
       - name: cargo fmt --check
         run: cargo fmt --all --check

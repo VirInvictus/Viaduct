@@ -34,6 +34,9 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="4.0.0" date="2026-09-14">
+      <description><p>The app-id the Flathub submission will carry</p></description>
+    </release>
     <release version="3.9.0" date="2026-09-14">
       <description><p>The sync write half connects</p></description>
     </release>
