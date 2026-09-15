@@ -9,4 +9,3 @@ Categories=GNOME;GTK;Network;News;
 Keywords=RSS;Feed;Reader;News;Inoreader;
 StartupNotify=true
 DBusActivatable=true
-X-Purism-FormFactor=Workstation;Mobile;

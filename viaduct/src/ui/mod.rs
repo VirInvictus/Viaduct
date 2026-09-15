@@ -23,8 +23,6 @@ pub mod article_renderer;
 pub mod article_renderer_widget;
 pub mod avatar;
 pub mod batch;
-pub mod coalescing_queue;
-pub mod fetch_queue;
 pub mod preferences_dialog;
 pub mod reader_view;
 pub mod refresh;
