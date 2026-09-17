@@ -22,6 +22,7 @@
   </developer>
   <launchable type="desktop-id">io.github.virinvictus.Viaduct.desktop</launchable>
   <url type="homepage">https://github.com/virinvictus/Viaduct</url>
+  <url type="donation">https://github.com/sponsors/VirInvictus</url>
   <screenshots>
     <screenshot type="default">
       <caption>Three-pane wide layout</caption>
