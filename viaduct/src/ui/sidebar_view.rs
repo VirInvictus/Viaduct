@@ -37,6 +37,45 @@ use crate::ui::timeline::FeedNameMap;
 pub type FeedUrlMap = Rc<RefCell<HashMap<String, String>>>;
 use crate::ui::tree::TreeController;
 
+/// Single-flight + dirty flag for unread-count rounds. Distilled from
+/// NNW `04e1a054a` (`Account._fetchAllUnreadCounts`) and `655883214`
+/// (`SmartFeed.fetchUnreadCounts`): status changes arrive continuously
+/// while a count round runs, so only one round is ever in flight, and
+/// a request landing mid-flight just raises the dirty flag instead of
+/// starting a second query. Completion releases the flight and reports
+/// whether exactly one follow-up round must run. Kept as a plain value
+/// type so the collapse semantics are unit-testable without GTK; the
+/// `RefCell` holding it lives on the sidebar imp and never crosses a
+/// thread.
+#[derive(Default)]
+pub(crate) struct UnreadCountFlight {
+    in_flight: bool,
+    needs_refetch: bool,
+}
+
+impl UnreadCountFlight {
+    /// A request arrived: `true` when the caller must start a query
+    /// round, `false` when a round is already running and this request
+    /// collapsed into its follow-up.
+    fn request(&mut self) -> bool {
+        if self.in_flight {
+            self.needs_refetch = true;
+            return false;
+        }
+        self.in_flight = true;
+        true
+    }
+
+    /// A round finished: releases the flight and reports whether at
+    /// most one follow-up round must run (something changed while this
+    /// one ran). Never arms more than one, so a burst of N overlapping
+    /// requests costs one round plus one follow-up, not N rounds.
+    fn complete(&mut self) -> bool {
+        self.in_flight = false;
+        std::mem::take(&mut self.needs_refetch)
+    }
+}
+
 mod imp {
     use super::*;
 
@@ -74,6 +113,9 @@ mod imp {
         /// `ViaductWindow` take it via the accessors below.
         pub right_clicked_feed: RefCell<Option<crate::models::Feed>>,
         pub right_clicked_folder: RefCell<Option<crate::models::Folder>>,
+        /// Single-flight state for unread-count rounds. GTK-main-thread
+        /// only, like every other field here; see [`UnreadCountFlight`].
+        pub(crate) unread_counts_flight: RefCell<UnreadCountFlight>,
     }
 
     #[glib::object_subclass]
@@ -373,64 +415,104 @@ impl SidebarView {
     /// bookkeeping is gone — we just touch leaves and let the cascade
     /// propagate. Triggered after every status mutation, refresh-cycle
     /// completion, OPML load, and OPML import.
+    ///
+    /// Port of NNW `04e1a054a` / `655883214` (unread-count single-flight
+    /// coalescing): the triggers fire per status mutation, so holding
+    /// Down through a timeline used to start one pooled
+    /// `UnreadCountsByFeed` query plus one full tree walk per row
+    /// opened, all overlapping. Now: a request arriving while a round
+    /// runs only raises the dirty flag, and each finished round runs at
+    /// most one follow-up, so a burst collapses to one round plus one.
+    /// Chosen mechanism: NNW's literal flag pair, not a glib
+    /// debounce — a `timeout_add` would delay every badge update by its
+    /// interval (the single-flight pair adds none; a round is at most
+    /// one query behind) and still needs re-arm bookkeeping to collapse
+    /// a burst, while the flags are the exact shape upstream proved.
+    /// All state is GTK-main-thread (`RefCell` on the imp; the round
+    /// future runs on the main loop via `spawn_future_local`, with no
+    /// borrow held across an await), the same place NNW pins the flags
+    /// on `Account` / `SmartFeed`.
     pub fn refresh_unread_counts(&self, account: Arc<Account>) {
         let Some(controller) = self.imp().controller.get().cloned() else {
             return;
         };
+        if !self.imp().unread_counts_flight.borrow_mut().request() {
+            return;
+        }
+
+        let weak = self.downgrade();
         glib::spawn_future_local(async move {
+            let view = weak.upgrade();
             let per_feed = match account.unread_counts_by_feed().await {
-                Ok(m) => m,
+                Ok(m) => Some(m),
                 Err(e) => {
                     tracing::debug!(?e, "unread_counts_by_feed failed");
-                    return;
+                    None
                 }
             };
-            let smart = account.smart_feed_counts().await.ok();
+            let smart = if per_feed.is_some() {
+                account.smart_feed_counts().await.ok()
+            } else {
+                None
+            };
 
-            let to_u32 = |n: i64| n.max(0).min(u32::MAX as i64) as u32;
-            let count_for_feed = |id: &str| to_u32(per_feed.get(id).copied().unwrap_or(0));
+            if let Some(per_feed) = per_feed {
+                let to_u32 = |n: i64| n.max(0).min(u32::MAX as i64) as u32;
+                let count_for_feed = |id: &str| to_u32(per_feed.get(id).copied().unwrap_or(0));
 
-            for top in controller.root_node.child_nodes() {
-                let Some(rep) = top.represented_object() else {
-                    continue;
-                };
-                let Some(item) = rep.downcast_ref::<SidebarItem>() else {
-                    continue;
-                };
-                match item {
-                    SidebarItem::Feed(feed) => {
-                        // Standalone feed (not in a folder).
-                        top.set_unread_count(count_for_feed(&feed.id));
-                    }
-                    SidebarItem::Folder(_)
-                    | SidebarItem::SmartFeedGroup
-                    | SidebarItem::CustomSmartFeedsGroup => {
-                        // Container — only set leaves; total auto-sums.
-                        for child in top.child_nodes() {
-                            let Some(c_rep) = child.represented_object() else {
-                                continue;
-                            };
-                            let Some(c_item) = c_rep.downcast_ref::<SidebarItem>() else {
-                                continue;
-                            };
-                            match c_item {
-                                SidebarItem::Feed(feed) => {
-                                    child.set_unread_count(count_for_feed(&feed.id));
+                for top in controller.root_node.child_nodes() {
+                    let Some(rep) = top.represented_object() else {
+                        continue;
+                    };
+                    let Some(item) = rep.downcast_ref::<SidebarItem>() else {
+                        continue;
+                    };
+                    match item {
+                        SidebarItem::Feed(feed) => {
+                            // Standalone feed (not in a folder).
+                            top.set_unread_count(count_for_feed(&feed.id));
+                        }
+                        SidebarItem::Folder(_)
+                        | SidebarItem::SmartFeedGroup
+                        | SidebarItem::CustomSmartFeedsGroup => {
+                            // Container — only set leaves; total auto-sums.
+                            for child in top.child_nodes() {
+                                let Some(c_rep) = child.represented_object() else {
+                                    continue;
+                                };
+                                let Some(c_item) = c_rep.downcast_ref::<SidebarItem>() else {
+                                    continue;
+                                };
+                                match c_item {
+                                    SidebarItem::Feed(feed) => {
+                                        child.set_unread_count(count_for_feed(&feed.id));
+                                    }
+                                    SidebarItem::SmartFeed(name) => {
+                                        let count = match (name.as_str(), smart) {
+                                            ("Today", Some(s)) => to_u32(s.today_unread),
+                                            ("All Unread", Some(s)) => to_u32(s.all_unread),
+                                            ("Starred", Some(s)) => to_u32(s.starred_unread),
+                                            _ => 0,
+                                        };
+                                        child.set_unread_count(count);
+                                    }
+                                    _ => {}
                                 }
-                                SidebarItem::SmartFeed(name) => {
-                                    let count = match (name.as_str(), smart) {
-                                        ("Today", Some(s)) => to_u32(s.today_unread),
-                                        ("All Unread", Some(s)) => to_u32(s.all_unread),
-                                        ("Starred", Some(s)) => to_u32(s.starred_unread),
-                                        _ => 0,
-                                    };
-                                    child.set_unread_count(count);
-                                }
-                                _ => {}
                             }
                         }
+                        SidebarItem::SmartFeed(_) | SidebarItem::CustomSmartFeed(_) => {}
                     }
-                    SidebarItem::SmartFeed(_) | SidebarItem::CustomSmartFeed(_) => {}
+                }
+            }
+
+            // Round complete: release the flight, then honor at most one
+            // re-run if any request collapsed while this round ran. Runs
+            // on the query-error path too, so a failed round doesn't
+            // swallow the follow-up and strand the badges stale.
+            if let Some(view) = view {
+                let rerun = view.imp().unread_counts_flight.borrow_mut().complete();
+                if rerun {
+                    view.refresh_unread_counts(account);
                 }
             }
         });
@@ -552,4 +634,57 @@ fn pick_sidebar_item_at(listview: &gtk::Widget, x: f64, y: f64) -> Option<Sideba
         walker = w.parent();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unread_count_flight_collapses_a_burst_into_one_round_plus_followup() {
+        let mut f = UnreadCountFlight::default();
+        // The first request starts the single in-flight round...
+        assert!(f.request());
+        // ...and every request landing while it runs collapses; none
+        // starts a second query.
+        for _ in 0..25 {
+            assert!(!f.request());
+        }
+        // Completion releases the flight and runs exactly one follow-up
+        // (NNW needsRefetch), no matter how many requests collapsed.
+        assert!(f.complete());
+        assert!(f.request());
+        // A clean follow-up completes without arming another round.
+        assert!(!f.complete());
+    }
+
+    #[test]
+    fn unread_count_flight_clean_round_runs_no_followup() {
+        let mut f = UnreadCountFlight::default();
+        assert!(f.request());
+        // Nothing changed while the round ran: no re-run armed.
+        assert!(!f.complete());
+        // And the machine is idle-reusable for the next burst.
+        assert!(f.request());
+        assert!(!f.request());
+        assert!(f.complete());
+        assert!(!f.complete());
+    }
+
+    #[test]
+    fn unread_count_flight_collapsed_requests_are_never_lost() {
+        // The badge may lag a burst by one round, never by the burst
+        // size: a follow-up round starts after completion even when the
+        // completion was for a round whose query failed.
+        let mut f = UnreadCountFlight::default();
+        assert!(f.request());
+        assert!(!f.request());
+        assert!(!f.request());
+        assert!(f.complete());
+        assert!(f.request());
+        assert!(!f.request());
+        assert!(f.complete());
+        assert!(f.request());
+        assert!(!f.complete());
+    }
 }
