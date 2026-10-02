@@ -73,18 +73,19 @@ fn discover_feed_with_depth<'a>(
         }
 
         let canonical = canonicalize_input(url)?;
-        let bytes = fetch_bytes(client, &canonical).await?;
+        let (bytes, final_url) = fetch_bytes(client, &canonical).await?;
 
-        // Pass 1: try parsing as a feed. parse() dispatches on the magic
-        // bytes / opening element so RSS / RDF / Atom / JSON Feed all
-        // work without us pre-classifying.
-        if let Ok(parsed) = parser::parse(&bytes, &canonical) {
-            return Ok(DiscoveredFeed::from_parsed(canonical, parsed));
+        // NNW `7f004d968`: redirects mean relative links have to resolve
+        // against where the page actually came from, and a URL that
+        // redirects straight to a feed is identified by its final URL,
+        // not the one we entered.
+        if let Ok(parsed) = parser::parse(&bytes, &final_url) {
+            return Ok(DiscoveredFeed::from_parsed(final_url, parsed));
         }
 
         // Pass 2: treat as HTML, scan for rel=alternate.
-        let metadata = parser::extract_metadata(&bytes, &canonical);
-        let Some(alternate_url) = first_feed_link(&metadata, &canonical) else {
+        let metadata = parser::extract_metadata(&bytes, &final_url);
+        let Some(alternate_url) = first_feed_link(&metadata, &final_url) else {
             return Err(ViaductError::Network(NetworkError::NoFeedFound));
         };
 
@@ -106,7 +107,10 @@ fn canonicalize_input(raw: &str) -> Result<String> {
     Ok(format!("https://{trimmed}"))
 }
 
-async fn fetch_bytes(client: &Client, url: &str) -> Result<Vec<u8>> {
+/// Fetch `url`, returning the body bytes and the **final** URL after any
+/// redirects. NNW `7f004d968`: link resolution and feed identity key on
+/// where the response actually came from.
+async fn fetch_bytes(client: &Client, url: &str) -> Result<(Vec<u8>, String)> {
     let resp = client
         .get(url)
         .send()
@@ -115,6 +119,7 @@ async fn fetch_bytes(client: &Client, url: &str) -> Result<Vec<u8>> {
     if !resp.status().is_success() {
         return Err(ViaductError::Network(NetworkError::NoFeedFound));
     }
+    let final_url = resp.url().to_string();
     // Same streamed cap the feed fetcher enforces: the direct-parse pass
     // wants a whole feed, the HTML-scan pass only needs the head, and a
     // truncated body degrades to the pass that tolerates it.
@@ -122,7 +127,7 @@ async fn fetch_bytes(client: &Client, url: &str) -> Result<Vec<u8>> {
         crate::network::http::read_body_capped(resp, fetcher::FEED_BODY_MAX_BYTES)
             .await
             .map_err(|e| ViaductError::Network(NetworkError::Reqwest(e)))?;
-    Ok(bytes)
+    Ok((bytes, final_url))
 }
 
 /// Walk the metadata's `<link>` tags and return the first one whose

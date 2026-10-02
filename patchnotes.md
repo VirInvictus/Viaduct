@@ -1,5 +1,15 @@
 # viaduct: Patch Notes
 
+## v4.0.4: the Slashdot window (2026-10-02)
+
+Five ports from the October 2 NetNewsWire sync (`dc74019c2` to `eb398b9ab`, +135 commits), most of them triggered by Slashdot's own feed. 237 tests; clippy `-D warnings` clean.
+
+- **Fixed:** Slashdot's feed retitled itself on every refresh: its RDF still carries a channel-level `<textinput>` block, and the RSS parser read the search box's `<title>` as the channel's title. The whole `<textinput>`/`<textInput>` subtree is now skipped (NNW #5459), for both the RSS 2.0 and RDF shapes.
+- **Fixed:** Slashdot articles rendered as one giant paragraph, because the feed puts whole articles in a single `<p>` with blank lines separating the real ones. For feeds on the slashdot.org domain list, runs of two or more line ends now become paragraph breaks at render time (NNW #5460); Reader View output is untouched.
+- **Fixed:** feed and favicon discovery resolved relative links against the URL you entered, not the page the server actually served after redirects; both now key on the final URL (NNW `7f004d968`), pinned by three new integration tests.
+- **Fixed:** tabs inside `pre`/`code` rendered at width 8, forcing horizontal scrolling on aligned ASCII art and tables; the pane override now sets `tab-size: 4` (NNW #4398).
+- **Changed:** the bundled Tiqoe Dark theme is synced to upstream's font-sizing rework and `<sup>`-orphan fix (byte-identical with upstream; the other seven themes unchanged this window).
+
 ## v4.0.3: the vir-gtk final-audit wave and sponsorship hooks (2026-10-02)
 
 A lock-only dependency wave plus the project's first sponsorship presence; no Viaduct code changes. 227 tests; clippy `-D warnings` clean.

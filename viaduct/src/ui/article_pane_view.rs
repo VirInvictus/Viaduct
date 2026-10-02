@@ -163,6 +163,10 @@ pub struct ArticleRenderContext {
     pub byline: String,
     pub feed_link: String,
     pub feed_link_title: String,
+    /// The feed's own URL (the RSS address). Drives NNW's per-feed
+    /// rendering special cases (Slashdot paragraph separation, #5460),
+    /// which match on the feed's domain.
+    pub feed_url: Option<String>,
     pub date_published: Option<chrono::DateTime<chrono::Utc>>,
     /// Detected video source (if any) used to drive `play_video_btn`.
     pub video: Option<VideoSource>,
@@ -186,6 +190,7 @@ pub struct ArticleDisplayState {
     pub byline: String,
     pub feed_link: String,
     pub feed_link_title: String,
+    pub feed_url: Option<String>,
     pub date_published: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -382,6 +387,7 @@ impl ArticlePaneView {
             state.byline = ctx.byline;
             state.feed_link = ctx.feed_link;
             state.feed_link_title = ctx.feed_link_title;
+            state.feed_url = ctx.feed_url;
             state.date_published = ctx.date_published;
         }
         // Keep the header bar oriented: article title up top, feed name as
@@ -541,10 +547,17 @@ impl ArticlePaneView {
         let extracted = state.extracted_html.clone();
         let url = state.article_url.clone();
 
-        let body_html = if reader_mode {
-            extracted.clone().or_else(|| raw.clone())
+        // NNW `06ff4cbb6` (#5460): the paragraph-separation special case
+        // applies to raw feed bodies only, never Reader View output
+        // (readability already produces real paragraphs, and rewriting
+        // extracted HTML could corrupt <pre> blocks).
+        let (body_html, from_raw) = if reader_mode {
+            match extracted.clone() {
+                Some(extracted) => (Some(extracted), false),
+                None => (raw.clone(), true),
+            }
         } else {
-            raw.clone()
+            (raw.clone(), true)
         };
         let Some(body_html) = body_html else {
             drop(state);
@@ -564,7 +577,14 @@ impl ArticlePaneView {
             // subset (<em>, <b>, <abbr>…) renders as markup instead of
             // literal escaped text; everything else is escaped.
             title: crate::text::sanitized_title(&state.title, true),
-            body: body_html,
+            body: if from_raw {
+                article_renderer::insert_paragraph_tags_if_needed(
+                    &body_html,
+                    state.feed_url.as_deref(),
+                )
+            } else {
+                body_html
+            },
             preferred_link: article_renderer::safe_article_url(
                 state.article_url.as_deref().unwrap_or_default(),
             ),

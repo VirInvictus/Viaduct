@@ -76,6 +76,12 @@ html, body {\n\
 html {\n\
   scrollbar-gutter: stable;\n\
 }\n\
+/* NNW `8ce9a7251` (#4398): render tabs as four spaces inside pre/code\n\
+ * so aligned ASCII art, tables, and code blocks don't force horizontal\n\
+ * scrolling at the default tab width of 8. */\n\
+pre, code {\n\
+  tab-size: 4;\n\
+}\n\
 /* v2.0.0-pre6: thinner scrollbar driven by `currentColor` so the\n\
  * thumb adopts the page's text color (which respects\n\
  * `prefers-color-scheme` already) — closer to libadwaita's overlay\n\
@@ -953,6 +959,78 @@ fn removing_document_wrapper(html: &str) -> String {
     s
 }
 
+/// NNW `06ff4cbb6` (#5460): Slashdot puts whole articles in a single
+/// paragraph with blank lines separating the real ones, so they render
+/// as one giant paragraph. For feeds whose domain is on this list, runs
+/// of two or more line ends become `<p>` tags. Applied to raw
+/// (non-extracted) article bodies only — Reader View output already has
+/// real paragraphs.
+const FEED_DOMAINS_WITH_PARAGRAPHS_SEPARATED_BY_RETURNS: &[&str] = &["slashdot.org"];
+
+/// See [`FEED_DOMAINS_WITH_PARAGRAPHS_SEPARATED_BY_RETURNS`]. Port of
+/// NNW `ArticleRenderingSpecialCases.insertParagraphTagsIfNeeded`.
+pub fn insert_paragraph_tags_if_needed(html: &str, feed_url: Option<&str>) -> String {
+    let Some(feed_url) = feed_url else {
+        return html.to_string();
+    };
+    if !crate::network::fetcher::url_host_matches_domain(
+        feed_url,
+        FEED_DOMAINS_WITH_PARAGRAPHS_SEPARATED_BY_RETURNS,
+    ) {
+        return html.to_string();
+    }
+    if !html.contains('\n') {
+        return html.to_string();
+    }
+    insert_paragraph_tags(html)
+}
+
+/// Replace every run of two or more `(\r?\n[ \t]*)` with `<p>`, the
+/// hand-rolled equivalent of NNW's `consecutiveReturnsRegex` (no regex
+/// dependency, same discipline as the module's other scanners).
+fn insert_paragraph_tags(html: &str) -> String {
+    fn line_run_at(bytes: &[u8], i: usize) -> Option<usize> {
+        let start = i;
+        let mut i = i;
+        if bytes[i] == b'\r' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            i += 2;
+        } else if bytes[i] == b'\n' {
+            i += 1;
+        } else {
+            return None;
+        }
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        Some(i - start)
+    }
+
+    let bytes = html.as_bytes();
+    let mut out = String::with_capacity(html.len() + 16);
+    let mut seg_start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let Some(first) = line_run_at(bytes, i) else {
+            i += 1;
+            continue;
+        };
+        let mut end = i + first;
+        let mut runs = 1usize;
+        while let Some(len) = line_run_at(bytes, end) {
+            end += len;
+            runs += 1;
+        }
+        if runs >= 2 {
+            out.push_str(&html[seg_start..i]);
+            out.push_str("<p>");
+            seg_start = end;
+        }
+        i = end;
+    }
+    out.push_str(&html[seg_start..]);
+    out
+}
+
 /// Render an article with the NNW page-wrapper + theme. Two-pass macro
 /// substitution (matches NNW): inner pass fills the article fields into
 /// the theme template; outer pass fills the result, the theme stylesheet,
@@ -1145,6 +1223,55 @@ mod tests {
         // override: `hidden` here would clip long articles again (the
         // v1.1.0-pre1.6 bug that motivated this sheet).
         assert!(VIADUCT_PANE_OVERRIDE_CSS.contains("overflow: auto !important;"));
+    }
+
+    // --- insert_paragraph_tags_if_needed (NNW `06ff4cbb6`, #5460) ---
+
+    #[test]
+    fn slashdot_paragraph_separation_inserts_p_tags() {
+        let body = "<p>first para\n\nsecond para\n\nthird";
+        let out = insert_paragraph_tags_if_needed(body, Some("https://slashdot.org/index.rss"));
+        assert_eq!(out, "<p>first para<p>second para<p>third");
+    }
+
+    #[test]
+    fn paragraph_separation_ignores_other_domains_and_missing_feed() {
+        let body = "a\n\nb";
+        assert_eq!(insert_paragraph_tags_if_needed(body, None), body);
+        assert_eq!(
+            insert_paragraph_tags_if_needed(body, Some("https://example.com/feed.rss")),
+            body
+        );
+    }
+
+    #[test]
+    fn paragraph_separation_matches_subdomains_of_listed_hosts() {
+        let out =
+            insert_paragraph_tags_if_needed("a\n\nb", Some("https://science.slashdot.org/rss"));
+        assert_eq!(out, "a<p>b");
+    }
+
+    #[test]
+    fn paragraph_separation_requires_two_returns() {
+        let body = "only\none\nnewline";
+        assert_eq!(
+            insert_paragraph_tags_if_needed(body, Some("https://slashdot.org/rss")),
+            body
+        );
+    }
+
+    #[test]
+    fn paragraph_separation_handles_crlf_and_trailing_whitespace() {
+        // The run consumes \r\n plus trailing spaces/tabs, mirroring the
+        // regex `(\r?\n[ \t]*){2,}`; a lone \r is not a line end.
+        let body = "one\r\n  \r\n\ttwo";
+        let out = insert_paragraph_tags_if_needed(body, Some("https://slashdot.org/rss"));
+        assert_eq!(out, "one<p>two");
+        let lone_cr = "one\rtwo";
+        assert_eq!(
+            insert_paragraph_tags_if_needed(lone_cr, Some("https://slashdot.org/rss")),
+            lone_cr
+        );
     }
 
     // --- extract_body_fragment (NNW `85e527b0a`, #3008) ---

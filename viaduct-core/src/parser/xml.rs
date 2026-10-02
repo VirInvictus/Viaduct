@@ -324,6 +324,12 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
     // Inside `<channel><image>...</image></channel>` — capture child `<url>`
     // as the channel icon. Set on `<image>` Start, cleared on `</image>`.
     let mut in_channel_image = false;
+    // NNW #5459 (`60bfa4e20`): inside channel-level `<textinput>` /
+    // `<textInput>` (the RSS 1.0 / 2.0 spellings of the same search-box
+    // element). The whole subtree is swallowed so its `<title>` /
+    // `<description>` can't be read as the channel's own metadata —
+    // Slashdot's feed still ships one.
+    let mut in_text_input = false;
 
     let mut current_item_guid = None;
     let mut current_item_title = None;
@@ -368,6 +374,18 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 }
 
                 current_tag = name_ref.to_vec();
+
+                if !in_item && name_ref.eq_ignore_ascii_case(b"textinput") {
+                    in_text_input = true;
+                    current_tag.clear();
+                    buf.clear();
+                    continue;
+                }
+                if in_text_input {
+                    current_tag.clear();
+                    buf.clear();
+                    continue;
+                }
 
                 if name_ref == b"item" {
                     in_item = true;
@@ -435,6 +453,10 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                     buf.clear();
                     continue;
                 }
+                if in_text_input {
+                    buf.clear();
+                    continue;
+                }
                 let name = e.local_name();
                 let name_ref = name.as_ref();
                 if in_item && name_ref == b"enclosure" {
@@ -453,6 +475,10 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
             }
             Ok(Event::Text(ref e)) => {
                 if namespace_element_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
+                if in_text_input {
                     buf.clear();
                     continue;
                 }
@@ -479,6 +505,10 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
             }
             Ok(Event::CData(ref e)) => {
                 if namespace_element_depth > 0 {
+                    buf.clear();
+                    continue;
+                }
+                if in_text_input {
                     buf.clear();
                     continue;
                 }
@@ -518,6 +548,15 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                 let name = e.local_name();
                 let name_ref = name.as_ref();
                 current_tag.clear();
+
+                if in_text_input {
+                    if !in_item && name_ref.eq_ignore_ascii_case(b"textinput") {
+                        in_text_input = false;
+                    }
+                    current_tag.clear();
+                    buf.clear();
+                    continue;
+                }
 
                 if name_ref == b"image" && in_channel_image {
                     in_channel_image = false;
@@ -1787,6 +1826,63 @@ mod tests {
         assert_eq!(item.content_html.as_deref(), Some("<p>Body HTML</p>"));
         assert_eq!(item.authors.len(), 1);
         assert_eq!(item.authors[0].name.as_deref(), Some("Jane Maker"));
+    }
+
+    #[test]
+    fn rss_textinput_title_does_not_clobber_channel_title() {
+        // NNW #5459 (`60bfa4e20`): <textInput> is legal channel metadata
+        // (a search box); its <title> and <description> must not be read
+        // as the channel's own.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Real Channel Title</title>
+    <link>https://example.com</link>
+    <description>Real description.</description>
+    <textInput>
+      <title>Search Example</title>
+      <description>Search this site</description>
+      <name>q</name>
+      <link>https://example.com/search</link>
+    </textInput>
+    <item>
+      <title>Item One</title>
+      <link>https://example.com/1</link>
+    </item>
+  </channel>
+</rss>"#;
+        let feed = parse_rss(xml, "https://example.com/feed", false).unwrap();
+        assert_eq!(feed.title.as_deref(), Some("Real Channel Title"));
+        assert_eq!(feed.items.len(), 1);
+        assert_eq!(feed.items[0].title.as_deref(), Some("Item One"));
+    }
+
+    #[test]
+    fn rdf_textinput_sibling_does_not_clobber_channel_title() {
+        // The Slashdot shape (the only feed NNW saw it on): RSS 1.0 puts
+        // <textinput> at the rdf:RDF top level as a sibling of <item>s,
+        // and it can precede them.
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/">
+  <channel rdf:about="https://slashdot.example/">
+    <title>Real Site Title</title>
+    <link>https://slashdot.example/</link>
+    <description>News for nerds</description>
+  </channel>
+  <textinput rdf:about="https://slashdot.example/search">
+    <title>Search Real Site</title>
+    <description>Search</description>
+    <name>q</name>
+  </textinput>
+  <item rdf:about="https://slashdot.example/story/1">
+    <title>Story One</title>
+    <link>https://slashdot.example/story/1</link>
+  </item>
+</rdf:RDF>"#;
+        let feed = parse_rss(xml, "https://slashdot.example/rss", true).unwrap();
+        assert_eq!(feed.title.as_deref(), Some("Real Site Title"));
+        assert_eq!(feed.items.len(), 1);
+        assert_eq!(feed.items[0].title.as_deref(), Some("Story One"));
     }
 
     #[test]

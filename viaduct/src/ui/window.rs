@@ -714,6 +714,16 @@ impl ViaductWindow {
                 .get(&feed_id)
                 .cloned()
                 .unwrap_or_default();
+            // The feed's own URL, for the pane's per-feed rendering
+            // special cases (Slashdot paragraph separation, NNW #5460).
+            let feed_url = window
+                .imp()
+                .sidebar_view
+                .get()
+                .feed_urls()
+                .borrow()
+                .get(&feed_id)
+                .cloned();
             let byline = article
                 .authors
                 .first()
@@ -758,6 +768,7 @@ impl ViaductWindow {
                     byline,
                     feed_link,
                     feed_link_title,
+                    feed_url,
                     date_published: article.date_published,
                     video: detected,
                 },

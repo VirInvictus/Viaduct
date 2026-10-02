@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.0.3.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.0.4.
 
 ---
 
@@ -365,6 +365,39 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [x] **Add-feed "open in Reader View by default" toggle** *(shipped v3.1.0, 2026-08-08)*. We already persisted `reader_view_always_enabled` per feed; NewsFlash exposes the equivalent as a checkbox in its add-feed dialog (#905). A `rows::switch_row` in `add_feed_dialog.rs` (same copy as the feed-settings dialog) now sets it at creation time, upserted before the feed's first refresh so the refresher's settings writes can't race the fresh row. Default off, matching the DB default. Verified live: dialog renders and the switch defaults off.
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
+
+## Upstream Sync Candidates (October 2, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `eb398b9ab` (+135 commits over `dc74019c2`, Sep 15 – Oct 2; the `mac-7.1.4` / `iOS-7.1.4` release line); `.newsflash` and `.liferea` were not re-reviewed (weekly-sync charter: NNW only). See `CLAUDE.md` §2 for the full sync note. The bulk is Mac storyboard→xib conversion, a new Mac timeline column layout, and iOS SwiftUI conversion churn that does not port. Five ports shipped in v4.0.4.
+
+### Ported from NetNewsWire
+
+- [x] **RSS `<textinput>` skip** (NNW `60bfa4e20`, #5459) *(shipped v4.0.4)*. Channel-level `<textinput>`/`<textInput>` (RSS 1.0 / 2.0 spellings of the search-box element) is swallowed whole in `parse_rss`, so its `<title>`/`<description>` can no longer clobber the channel's own metadata. Slashdot's RDF still ships one, so every Slashdot refresh was retitling the feed to "Search Slashdot"-alike. Two parser tests pin both the RSS 2.0 and RDF-sibling shapes.
+- [x] **Slashdot paragraph separation** (NNW `06ff4cbb6`, #5460) *(shipped v4.0.4)*. `article_renderer::insert_paragraph_tags_if_needed` turns runs of 2+ line ends into `<p>` for feeds on the slashdot.org domain list (hand-rolled scanner standing in for NNW's regex, same discipline as the module's other scanners). Raw bodies only, never Reader View output. Plumbing: `feed_url` rides `ArticleRenderContext` → `ArticleDisplayState`, resolved through a new `feed_urls` twin of the sidebar's `feed_names` map.
+- [x] **Redirected-to URL in discovery** (NNW `7f004d968`) *(shipped v4.0.4)*. `feed_discovery` and `favicon_discovery` now key link resolution and feed identity on the post-redirect final URL (`resp.url()`), not the entered URL. Pinned by a new `integration_discovery_redirect.rs` (feed redirect, HTML-relative-href redirect, favicon redirect).
+- [x] **`tab-size: 4` for pre/code** (NNW `8ce9a7251`, #4398) *(shipped v4.0.4)*. Added to `VIADUCT_PANE_OVERRIDE_CSS`, our stand-in for the core.css rule we don't bundle.
+- [x] **Tiqoe Dark stylesheet sync** (NNW `8e9d7e961` font-sizing rework + `85d83b758` `<sup>` orphans via `:has()`) *(shipped v4.0.4)*. Bundled copy fast-forwarded to byte-identical with upstream `eb398b9ab`; the other seven themes verified unchanged this window (newsfax/promenade keep only their recorded newsfoot divergences).
+
+### Deferred candidates (not yet ported)
+
+- [ ] **Today-query index seeks** (NNW `19930aa3c`). NNW duplicated the `feedID in (...)` test into both branches of the date OR so SQLite seeks `articles_feedID_datePublished_articleID` per branch instead of scanning. Our `fetch_today` / `smart_feed_counts` have the same cross-column OR shape but **no indexes at all** on `articles(date_published)` or `statuses(date_arrived)` (the only explicit index is `authorsLookup_article_id_idx`), so the query rewrite alone buys nothing. Real work: add the indexes (schema change: idempotent `CREATE INDEX IF NOT EXISTS` at init, plus consideration of write-amplification and DB size on large libraries) and measure. Needs the schema-change bar, hence deferred.
+- [ ] **`.instapaper_ignore` element removal** (NNW `d55c93376`, #3501). Upstream implemented it in main.js, which never runs under our CSP. The intent ports as a pre-render transform, but element-removal-by-class needs a proper HTML scanner helper (ammonia strips classes; regex deletion is fragile across nested markup). Design-then-build, not a line port.
+- [ ] **HTTP error response bodies in diagnostics** (NNW `49dbebf67`). `WebserviceError.httpError` gained a whitespace-collapsed, 500-char body excerpt surfaced in error logs. Our `NetworkError::HttpError` carries status only; the port threads the body through the fetcher error paths into the Activity Log's `HttpError` event. Cross-cutting (fetch + discovery + activity surfaces), so deferred rather than rushed.
+- [ ] **Unread-count single-flight coalescing** (NNW `04e1a054a`, `655883214`). NNW made full unread-count queries single-flight per account with a dirty-flag re-run, and smart feeds one-round-at-a-time. We call `refresh_unread_counts` after every status mutation (each keyboard navigation), each a pooled query; coalescing is a GTK-side architecture change.
+- [ ] **"Sort Articles By" menu** (NNW `2ccc95721`, `70c3ec809`, `24688d50e`). Upstream rebuilt sort options (menu patterned after Mail, per-window preferences, and title-sorting keyed on the *displayed* title so untitled articles sort by body excerpt). We sort by logical date with a rowid tiebreak and have no title sort for the fix to attach to; adopting the mode set is a feature.
+- [ ] **Add Feed UX pair** (NNW `b4361413f` #4221, `7ea15d7f7` #3758). Initial folder selection mirrors the sidebar selection (with root-feed substitution); the already-subscribed alert names the folder(s) the feed lives in. Both need `add_feed_dialog` design work; the lookups (`existing_feed(withURL:)` analogues) exist on our account model.
+
+### Watch / inapplicable (this window)
+
+- `24c17e782` (429 host-key tightening: exact-host cancellation, lowercased lookup, locale-invariant folding): already our shape. Our cooldown map keys on the `url` crate's normalized host (lowercased at parse), exact-match, no substring, and we have no in-flight cancellation to tighten.
+- Slashdot forced JS-off + per-navigation JS toggling (`8b8d8cec5`, `29b7bcb04`): our article pane is JS-off by construction under the §7.4 lockdown.
+- SyncDatabase error-propagation cluster (`b06be8623`…`6e600420e`): our sync worker already returns `Result`s through the op channels and the delegate log-and-continues (v2.8.3); the ReaderAPI side upstream deliberately kept swallowing too.
+- Feedbin status-send ordering (`177f6ae14`, `6829887c2`, `3c2c52bb1`): Feedbin-only; our Inoreader delegate already sends statuses before body fetches and continues past failed batches.
+- Article markdown equality + NULL-not-empty strings (`dd09097b3`): our `ParsedItem`/diff path carries no markdown field.
+- Hidden-iframe whitespace (`eb398b9ab`): JS-only, and we never had the aspect-ratio iframe wrapper that caused it.
+- Mac column layout / storyboard conversions, iOS SwiftUI conversions, TestingURLProtocol test isolation: platform or test-infrastructure churn.
+
+---
 
 ## Upstream Sync Candidates (September 15, 2026)
 

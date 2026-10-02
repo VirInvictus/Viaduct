@@ -723,7 +723,7 @@ fn retry_after_secs(header_value: Option<&str>) -> i64 {
 /// on hosts like `evilrachelbythebay.com` or `rachelbythebay.com.evil.com`,
 /// a real attack surface for the conditional-GET / no-minimum-time bypass.
 /// Suffix matching against `"." + domain` avoids both.
-fn url_host_matches_domain(url: &str, domains: &[&str]) -> bool {
+pub fn url_host_matches_domain(url: &str, domains: &[&str]) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
     };

@@ -30,6 +30,11 @@ use crate::ui::sidebar::{
     SidebarDataSource, SidebarItem, SidebarTreeControllerDelegate, setup_sidebar_list_view,
 };
 use crate::ui::timeline::FeedNameMap;
+
+/// Twin of [`FeedNameMap`]: feed id → feed URL, rebuilt on every OPML
+/// apply. Consumed by the article pane's per-feed rendering special
+/// cases (NNW #5460).
+pub type FeedUrlMap = Rc<RefCell<HashMap<String, String>>>;
 use crate::ui::tree::TreeController;
 
 mod imp {
@@ -60,6 +65,7 @@ mod imp {
         pub data_source: OnceCell<Rc<SidebarDataSource>>,
         pub selection: OnceCell<gtk::SingleSelection>,
         pub feed_names: OnceCell<FeedNameMap>,
+        pub feed_urls: OnceCell<FeedUrlMap>,
         pub feed_popover: OnceCell<gtk::PopoverMenu>,
         pub folder_popover: OnceCell<gtk::PopoverMenu>,
         pub smart_feed_popover: OnceCell<gtk::PopoverMenu>,
@@ -147,6 +153,10 @@ impl SidebarView {
         // Rc and reads through it on every row bind.
         let feed_names: FeedNameMap = Rc::new(RefCell::new(HashMap::new()));
         let _ = imp.feed_names.set(feed_names);
+        // Twin resolver (feed id → feed URL) for the article pane's
+        // per-feed rendering special cases (NNW #5460).
+        let feed_urls: FeedUrlMap = Rc::new(RefCell::new(HashMap::new()));
+        let _ = imp.feed_urls.set(feed_urls);
 
         // ---- Sidebar feed popover ----
         let feed_menu = gio::Menu::new();
@@ -259,6 +269,14 @@ impl SidebarView {
     pub fn feed_names(&self) -> FeedNameMap {
         self.imp()
             .feed_names
+            .get()
+            .cloned()
+            .expect("SidebarView used before bootstrap")
+    }
+
+    pub fn feed_urls(&self) -> FeedUrlMap {
+        self.imp()
+            .feed_urls
             .get()
             .cloned()
             .expect("SidebarView used before bootstrap")
@@ -477,6 +495,20 @@ impl SidebarView {
         for folder in &opml.folders {
             for feed in &folder.feeds {
                 map.insert(feed.id.clone(), display_name_for_feed(feed));
+            }
+        }
+        // The twin map the article pane's rendering special cases key on
+        // (Slashdot paragraph separation, NNW #5460): feed id → feed URL.
+        if let Some(url_map_rc) = self.imp().feed_urls.get() {
+            let mut url_map = url_map_rc.borrow_mut();
+            url_map.clear();
+            for feed in &opml.standalone_feeds {
+                url_map.insert(feed.id.clone(), feed.url.clone());
+            }
+            for folder in &opml.folders {
+                for feed in &folder.feeds {
+                    url_map.insert(feed.id.clone(), feed.url.clone());
+                }
             }
         }
     }

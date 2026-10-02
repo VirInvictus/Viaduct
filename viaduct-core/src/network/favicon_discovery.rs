@@ -43,21 +43,30 @@ const VERIFY_CAP_BYTES: usize = 1024 * 1024;
 /// fallback succeeds — caller leaves `favicon_url` unset so the sidebar
 /// shows the `adw::Avatar` fallback (deterministic accent + initials).
 pub async fn discover_favicon(client: &Client, home_page_url: &str) -> Option<String> {
-    let base = Url::parse(home_page_url).ok()?;
+    // NNW `7f004d968`: a redirected home page's relative icon links (and
+    // the `/favicon.ico` fallback origin) must resolve against where the
+    // page actually came from, not the URL we started from.
+    let mut effective_base = home_page_url.to_string();
 
     // Pass 1: scan the home page HTML head.
-    if let Some(html_bytes) = fetch_html(client, home_page_url).await
-        && let Some(candidate) = first_icon_link(&html_bytes, home_page_url)
-        && verify_favicon(client, &candidate).await
-    {
-        debug!(%home_page_url, %candidate, "favicon discovery: html head match");
-        return Some(candidate);
+    if let Some((html_bytes, final_url)) = fetch_html(client, home_page_url).await {
+        effective_base = final_url;
+        if let Some(candidate) = first_icon_link(&html_bytes, &effective_base)
+            && verify_favicon(client, &candidate).await
+        {
+            debug!(%home_page_url, %candidate, "favicon discovery: html head match");
+            return Some(candidate);
+        }
     }
 
     // Pass 2: `<origin>/favicon.ico` fallback. The vast majority of
     // sites still serve one even when the HTML head doesn't reference
     // it explicitly.
-    let fallback = base.join("/favicon.ico").ok()?.to_string();
+    let fallback = Url::parse(&effective_base)
+        .ok()?
+        .join("/favicon.ico")
+        .ok()?
+        .to_string();
     if verify_favicon(client, &fallback).await {
         debug!(%home_page_url, %fallback, "favicon discovery: fallback /favicon.ico");
         return Some(fallback);
@@ -66,7 +75,9 @@ pub async fn discover_favicon(client: &Client, home_page_url: &str) -> Option<St
     None
 }
 
-async fn fetch_html(client: &Client, url: &str) -> Option<Vec<u8>> {
+/// Fetch `url`, returning the body bytes and the **final** URL after any
+/// redirects (see `discover_favicon`).
+async fn fetch_html(client: &Client, url: &str) -> Option<(Vec<u8>, String)> {
     let resp = client
         .get(url)
         .header(header::ACCEPT, crate::network::http::ACCEPT_HTML)
@@ -80,13 +91,14 @@ async fn fetch_html(client: &Client, url: &str) -> Option<Vec<u8>> {
     if !resp.status().is_success() {
         return None;
     }
+    let final_url = resp.url().to_string();
     // Stream at most the head-scan cap (truncation is fine here — the
     // scan never needs the body), instead of downloading the whole page
     // and cutting it down afterwards.
     let (bytes, _truncated) = crate::network::http::read_body_capped(resp, HTML_FETCH_CAP_BYTES)
         .await
         .ok()?;
-    Some(bytes)
+    Some((bytes, final_url))
 }
 
 /// Walk the metadata's `<link>` tags and pick the best favicon
