@@ -1,14 +1,11 @@
 # viaduct: Patch Notes
 
-## Unreleased
+## v4.0.3: the vir-gtk final-audit wave and sponsorship hooks (2026-10-02)
 
-- **vir-gtk adopted at 1.4.2** (consumer wave, lock bump only): the
-  final-audit contract fixes land upstream (close_on_escape really
-  captures, Alert answers once per presentation, scope_css splits at
-  parentheses depth, at_priority warns off the scope rung,
-  bind_settings stops leaking bound scopes). No Viaduct code changes;
-  suite 227 green; `data/cargo-sources.json` regenerated against the
-  moved lock in the same commit.
+A lock-only dependency wave plus the project's first sponsorship presence; no Viaduct code changes. 227 tests; clippy `-D warnings` clean.
+
+- **Changed:** vir-gtk adopted at 1.4.2 (consumer wave, lock bump only): the final-audit contract fixes land upstream (close_on_escape really captures, Alert answers once per presentation, scope_css splits at parentheses depth, at_priority warns off the scope rung, bind_settings stops leaking bound scopes). No Viaduct code changes; `data/cargo-sources.json` was regenerated against the moved lock in the same commit.
+- **Added:** sponsorship hooks: `.github/FUNDING.yml` (GitHub Sponsors + Liberapay) and the matching donation URL in the AppStream metainfo, so the GitHub page and software-center listings can both surface a way to support development.
 
 ## v4.0.2: the sidebar glyphs, the pane avatar, and a calmer Sepia dark (2026-09-15)
 

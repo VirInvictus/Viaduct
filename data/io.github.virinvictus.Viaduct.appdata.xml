@@ -35,6 +35,9 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="4.0.3" date="2026-10-02">
+      <description><p>The vir-gtk final-audit wave and sponsorship hooks</p></description>
+    </release>
     <release version="4.0.2" date="2026-09-15">
       <description><p>Sidebar glyphs, pane avatar, calmer Sepia dark</p></description>
     </release>
