@@ -77,11 +77,18 @@ pub enum NetworkError {
     RateLimited { retry_after_secs: u64 },
 
     /// Any other non-success HTTP status from a Reader API call, carrying
-    /// the status code. Exists alongside `RateLimited` so the sync
+    /// the status code plus, per NNW `49dbebf67`, a whitespace-collapsed
+    /// 500-char prefix of the error response's body — the body often says
+    /// what the server didn't like (`None` when it was empty, non-UTF-8,
+    /// or unreadable). Exists alongside `RateLimited` so the sync
     /// delegate can tell a real 429 (which arms the sync pause) apart
-    /// from every other failure the server can return.
-    #[error("http status {0}")]
-    HttpStatus(u16),
+    /// from every other failure the server can return. Classification
+    /// keys on the status only, never the body.
+    #[error("http status {status}")]
+    HttpStatus {
+        status: u16,
+        response_body: Option<String>,
+    },
 
     /// Reader-API authentication failed: missing or incomplete keyring
     /// credentials, a rejected login, or a token request the server
@@ -96,6 +103,22 @@ pub enum NetworkError {
     /// didn't parse as a feed, no `<link rel="alternate">` in the HTML).
     #[error("no feed found at the supplied URL")]
     NoFeedFound,
+}
+
+impl NetworkError {
+    /// The captured server-response excerpt, for presentation paths.
+    /// Upstream keeps `errorDescription` keyed on the status alone and
+    /// appends `-- server response: …` where the error message is
+    /// built (NNW `AccountError.message`); callers here do the same.
+    pub fn server_response(&self) -> Option<&str> {
+        match self {
+            NetworkError::HttpStatus {
+                response_body: Some(body),
+                ..
+            } => Some(body),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Error)]

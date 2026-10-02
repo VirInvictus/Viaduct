@@ -1,5 +1,13 @@
 # viaduct: Patch Notes
 
+## v4.0.7: the server-response excerpt (2026-10-02)
+
+Third port from the October 2 sync's deferred list: NNW `49dbebf67`, HTTP error responses carry up to 500 characters of their body into the error logs, because the body usually says what the server didn't like. 261 tests; clippy `-D warnings` clean.
+
+- **Changed:** when a feed fetch answers with an HTTP error, the `RUST_LOG` warning and the Activity Log row now show what the server said, not just the code: "Feed HTTP 503 … -- server response: gateway timeout" in the log, "HTTP 503 · server response: gateway timeout" in the dialog. Upstream attaches the excerpt at its shared HTTP-validation layer (`WebserviceError.httpError` gained `responseBody`); ours is captured on the feed-fetch path, where any status outside the valid 200–399 window reads only a capped 8 KB prefix of the error body (the full response is never buffered, and the feed body stays empty on those statuses). The excerpt is strict-UTF-8 decoded (a binary body yields no excerpt, matching upstream's `String(data:encoding:)` nil), whitespace-collapsed through a byte-level port of RSCore's `collapsingWhitespace` (runs become one space, ends trimmed, non-ASCII untouched), and cut at 500 characters on a char boundary; a multi-byte character split by the read cap is trimmed rather than failing the decode.
+- **Changed:** the Inoreader path gained the same treatment. `NetworkError::HttpStatus` now carries `response_body` (`status_error` reads the same capped prefix), and the "Sync failed" activity detail appends `-- server response: …` exactly where upstream's `AccountError.message` does. Classification logic everywhere keys on the status only, never the body: the 429 pause, the 401/403 write-token retry, and every other status branch are untouched.
+- **Fixed (edge):** an error response whose body previously tripped the 10 MB feed cap, or whose read died mid-body, surfaced as a network error with no recorded status. It now surfaces as the HTTP error it is, with `last_response_code` and `last_check_date` recorded. Pinned by `integration_http_error_excerpt.rs` (collapsed 503 page, empty 500 body, and a >8 KB body) plus unit tests for the collapse, the char-boundary cut, and the non-UTF-8 reject.
+
 ## v4.0.6: the instapaper_ignore strip (2026-10-02)
 
 One more port from the October 2 sync's deferred list: NNW `d55c93376` (#3501), elements marked `class="instapaper_ignore"` are stripped from article bodies at render time. 254 tests; clippy `-D warnings` clean.

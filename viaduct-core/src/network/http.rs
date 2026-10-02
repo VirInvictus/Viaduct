@@ -167,6 +167,90 @@ pub async fn read_body_capped(
     }
 }
 
+/// Upper bound on bytes read from an error response solely for the log
+/// excerpt. Generous for a message a server writes about its own
+/// failure, small enough that reading it never threatens the memory
+/// budget.
+pub const ERROR_BODY_EXCERPT_BYTES: usize = 8 * 1024;
+
+/// Longest excerpt `response_body_excerpt` keeps (NNW `49dbebf67`
+/// `prefix(500)`), in chars.
+const EXCERPT_MAX_CHARS: usize = 500;
+
+/// Port of NNW `String.collapsingWhitespace` (RSCore): runs of whitespace
+/// collapse to a single space, and leading / trailing whitespace
+/// disappears. Byte-level like upstream's implementation — the bytes it
+/// treats as whitespace (space, 0x09..=0x0D) never occur inside a
+/// multi-byte UTF-8 sequence, so non-ASCII passes through untouched.
+fn collapsing_whitespace(s: &str) -> String {
+    fn is_ws(b: u8) -> bool {
+        b == b' ' || (0x09..=0x0D).contains(&b)
+    }
+    let mut out = Vec::with_capacity(s.len());
+    let mut saw_non_space = false;
+    let mut pending_space = false;
+    for &b in s.as_bytes() {
+        if is_ws(b) {
+            if saw_non_space {
+                pending_space = true;
+            }
+            continue;
+        }
+        if pending_space {
+            out.push(b' ');
+            pending_space = false;
+        }
+        saw_non_space = true;
+        out.push(b);
+    }
+    // Trailing `pending_space` is discarded — the trim-trailing half.
+    String::from_utf8(out).expect("byte-level whitespace pass preserves UTF-8")
+}
+
+/// Port of NNW `49dbebf67` `responseBodyForError`: a trimmed,
+/// whitespace-collapsed prefix of an error response's body. The body
+/// often says what the server didn't like. Strict UTF-8 decode, like
+/// upstream's `String(data:encoding: .utf8)` — binary garbage yields
+/// `None` rather than a replacement-character mess. `None` when the
+/// collapsed excerpt would be empty.
+pub fn response_body_excerpt(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let body = std::str::from_utf8(bytes).ok()?;
+    let collapsed = collapsing_whitespace(body);
+    if collapsed.is_empty() {
+        return None;
+    }
+    Some(collapsed.chars().take(EXCERPT_MAX_CHARS).collect())
+}
+
+/// `response_body_excerpt` for bytes cut off at a read cap: a multi-byte
+/// character split at the boundary is trimmed before the strict decode,
+/// since an incomplete trailing sequence is a cap artifact, not
+/// non-UTF-8 body content. An invalid sequence anywhere else still
+/// yields `None`.
+fn excerpt_from_capped_bytes(bytes: &[u8]) -> Option<String> {
+    let usable = match std::str::from_utf8(bytes) {
+        Ok(_) => bytes,
+        Err(e) if e.error_len().is_none() => &bytes[..e.valid_up_to()],
+        Err(_) => return None,
+    };
+    response_body_excerpt(usable)
+}
+
+/// Read at most `ERROR_BODY_EXCERPT_BYTES` of a non-success response
+/// body and shape it for the log excerpt (NNW `49dbebf67`: the error
+/// body rides the thrown error; we never buffer more than the excerpt
+/// needs). A body read failure or a non-UTF-8 body yields `None` — the
+/// status code still carries the failure.
+pub async fn read_error_body_excerpt(response: reqwest::Response) -> Option<String> {
+    let (bytes, _truncated) = read_body_capped(response, ERROR_BODY_EXCERPT_BYTES)
+        .await
+        .ok()?;
+    excerpt_from_capped_bytes(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +271,53 @@ mod tests {
 
         // Restore for any parallel test asserting on the fallback.
         set_browser_user_agent(None);
+    }
+
+    #[test]
+    fn excerpt_collapses_whitespace_runs() {
+        assert_eq!(
+            response_body_excerpt(b"  error:\n\t  quota   exceeded\n"),
+            Some("error: quota exceeded".to_string())
+        );
+        // Non-ASCII passes through the byte-level collapse untouched.
+        assert_eq!(
+            response_body_excerpt("déjà\t\tvu".as_bytes()),
+            Some("déjà vu".to_string())
+        );
+    }
+
+    #[test]
+    fn excerpt_is_none_for_empty_or_blank_bodies() {
+        assert_eq!(response_body_excerpt(b""), None);
+        assert_eq!(response_body_excerpt(b"  \r\n\t "), None);
+    }
+
+    #[test]
+    fn excerpt_rejects_non_utf8_bodies() {
+        // Upstream's `String(data:encoding: .utf8)` returns nil for
+        // binary error bodies; so do we, rather than logging
+        // replacement-character mush.
+        assert_eq!(response_body_excerpt(&[0xFF, 0xFE, b'<', b'>']), None);
+        assert_eq!(response_body_excerpt(&[b'o', b'k', 0x80, b'!']), None);
+    }
+
+    #[test]
+    fn excerpt_truncates_at_a_char_boundary() {
+        // 600 three-byte chars: the 500-char cut must not split one.
+        let body = "雨".repeat(600);
+        let excerpt = response_body_excerpt(body.as_bytes()).expect("utf8 body");
+        assert_eq!(excerpt.chars().count(), 500);
+        assert!(excerpt.chars().all(|c| c == '雨'));
+    }
+
+    #[test]
+    fn excerpt_from_capped_bytes_trims_a_split_trailing_char() {
+        // "ok" plus the first byte of a two-byte char: the incomplete
+        // sequence is a cap artifact, not body content.
+        let mut bytes = b"ok".to_vec();
+        bytes.extend_from_slice(&[0xC3]);
+        assert_eq!(excerpt_from_capped_bytes(&bytes), Some("ok".to_string()));
+        // An invalid sequence before the end is still rejected.
+        assert_eq!(excerpt_from_capped_bytes(&[b'o', 0xFF, b'k']), None);
     }
 }

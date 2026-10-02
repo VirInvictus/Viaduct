@@ -85,6 +85,11 @@ pub struct FetchResult {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub cache_control_max_age: Option<i64>,
+    /// NNW `49dbebf67`: whitespace-collapsed prefix of the body of an
+    /// error response (status outside the valid 200..400 window), for
+    /// error logs and the Activity Log. `body` is empty on those
+    /// statuses — only the excerpt is read.
+    pub error_excerpt: Option<String>,
 }
 
 type FetchSender = broadcast::Sender<std::result::Result<FetchResult, String>>;
@@ -210,6 +215,7 @@ impl Fetcher {
                                     etag: None,
                                     last_modified: None,
                                     cache_control_max_age: None,
+                                    error_excerpt: None,
                                 })
                             } else {
                                 let etag = response
@@ -235,51 +241,80 @@ impl Fetcher {
                                     }
                                 }
 
-                                let body = match crate::network::http::read_body_capped(
-                                    response,
-                                    FEED_BODY_MAX_BYTES,
-                                )
-                                .await
-                                {
-                                    Ok((body, false)) => Ok(body),
-                                    Ok((_partial, true)) => {
+                                // NNW `49dbebf67`: an error response's
+                                // body often says what the server didn't
+                                // like. Statuses outside the valid
+                                // 200...399 window read only a capped
+                                // prefix for the log excerpt; the full
+                                // error body is never buffered.
+                                if !(200..400).contains(&status.as_u16()) {
+                                    let error_excerpt =
+                                        crate::network::http::read_error_body_excerpt(response)
+                                            .await;
+                                    if let Some(excerpt) = &error_excerpt {
                                         warn!(
-                                            url = %url_clone,
-                                            cap_bytes = FEED_BODY_MAX_BYTES,
-                                            "fetch: body over size cap; treating as failed"
-                                        );
-                                        Err("feed body over size cap".to_string())
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            url = %url_clone,
-                                            error = %e,
-                                            "fetch: body read failed"
-                                        );
-                                        Err(e.to_string())
-                                    }
-                                };
-                                match body {
-                                    Ok(body) => {
-                                        debug!(
                                             url = %url_clone,
                                             status = status.as_u16(),
-                                            body_bytes = body.len(),
-                                            encoding = ?content_encoding,
-                                            has_etag = etag.is_some(),
-                                            max_age = ?cache_control_max_age,
-                                            elapsed_ms = send_started.elapsed().as_millis() as u64,
-                                            "fetch: response"
+                                            server_response = %excerpt,
+                                            "fetch: HTTP error response"
                                         );
-                                        Ok(FetchResult {
-                                            status: status.as_u16(),
-                                            body,
-                                            etag,
-                                            last_modified,
-                                            cache_control_max_age,
-                                        })
                                     }
-                                    Err(e) => Err(e),
+                                    Ok(FetchResult {
+                                        status: status.as_u16(),
+                                        body: Vec::new(),
+                                        etag,
+                                        last_modified,
+                                        cache_control_max_age,
+                                        error_excerpt,
+                                    })
+                                } else {
+                                    let body = match crate::network::http::read_body_capped(
+                                        response,
+                                        FEED_BODY_MAX_BYTES,
+                                    )
+                                    .await
+                                    {
+                                        Ok((body, false)) => Ok(body),
+                                        Ok((_partial, true)) => {
+                                            warn!(
+                                                url = %url_clone,
+                                                cap_bytes = FEED_BODY_MAX_BYTES,
+                                                "fetch: body over size cap; treating as failed"
+                                            );
+                                            Err("feed body over size cap".to_string())
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                url = %url_clone,
+                                                error = %e,
+                                                "fetch: body read failed"
+                                            );
+                                            Err(e.to_string())
+                                        }
+                                    };
+                                    match body {
+                                        Ok(body) => {
+                                            debug!(
+                                                url = %url_clone,
+                                                status = status.as_u16(),
+                                                body_bytes = body.len(),
+                                                encoding = ?content_encoding,
+                                                has_etag = etag.is_some(),
+                                                max_age = ?cache_control_max_age,
+                                                elapsed_ms = send_started.elapsed().as_millis() as u64,
+                                                "fetch: response"
+                                            );
+                                            Ok(FetchResult {
+                                                status: status.as_u16(),
+                                                body,
+                                                etag,
+                                                last_modified,
+                                                cache_control_max_age,
+                                                error_excerpt: None,
+                                            })
+                                        }
+                                        Err(e) => Err(e),
+                                    }
                                 }
                             }
                         }
@@ -817,9 +852,18 @@ async fn refresh_one_feed(
                 return;
             }
             if result.status != 200 {
-                warn!("Feed HTTP {}: {}", result.status, feed.url);
+                // NNW `49dbebf67`: the error body rides the log — it
+                // often says what the server didn't like.
+                match result.error_excerpt.as_deref() {
+                    Some(excerpt) => warn!(
+                        "Feed HTTP {}: {} -- server response: {}",
+                        result.status, feed.url, excerpt
+                    ),
+                    None => warn!("Feed HTTP {}: {}", result.status, feed.url),
+                }
                 log_event(crate::network::activity::ActivityKind::HttpError {
                     status: result.status,
+                    response_body: result.error_excerpt,
                 });
                 let _ = account.upsert_feed_settings(new_settings).await;
                 return;

@@ -626,8 +626,18 @@ impl AccountDelegate for InoreaderAccountDelegate {
                         Ok(())
                     }
                     None => {
+                        // NNW `49dbebf67`: the error body rides the
+                        // message — `-- server response: …`, exactly
+                        // upstream's `AccountError.message` append.
+                        let server_response = match &e {
+                            ViaductError::Network(n) => n
+                                .server_response()
+                                .map(|body| format!(" -- server response: {body}")),
+                            _ => None,
+                        };
                         crate::network::activity::ActivityLog::push_sync(format!(
-                            "Sync failed: {e}"
+                            "Sync failed: {e}{}",
+                            server_response.unwrap_or_default()
                         ));
                         Err(e)
                     }
@@ -809,7 +819,10 @@ mod tests {
             Some(600)
         );
         assert_eq!(
-            SyncRateLimiter::retry_after_of(&ViaductError::Network(NetworkError::HttpStatus(500))),
+            SyncRateLimiter::retry_after_of(&ViaductError::Network(NetworkError::HttpStatus {
+                status: 500,
+                response_body: None
+            })),
             None
         );
 

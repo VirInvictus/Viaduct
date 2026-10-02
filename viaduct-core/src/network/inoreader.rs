@@ -294,17 +294,24 @@ fn sync_retry_after_secs(headers: &reqwest::header::HeaderMap) -> u64 {
 
 /// Map a non-success response onto the error type, preserving a real 429's
 /// identity and parsed Retry-After so the sync delegate can arm its pause.
-/// Every other status becomes `HttpStatus` (auth-shaped endpoints map to
+/// Every other status becomes `HttpStatus`, carrying the capped log
+/// excerpt of the error body (NNW `49dbebf67` — the body often says what
+/// the server didn't like; auth-shaped endpoints map to
 /// `NetworkError::Auth` at their own call sites), so only a genuine 429
-/// ever arms the pause.
-fn status_error(resp: &reqwest::Response) -> ViaductError {
+/// ever arms the pause. Classification keys on the status only, never
+/// the body.
+async fn status_error(resp: reqwest::Response) -> ViaductError {
     let status = resp.status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         ViaductError::Network(NetworkError::RateLimited {
             retry_after_secs: sync_retry_after_secs(resp.headers()),
         })
     } else {
-        ViaductError::Network(NetworkError::HttpStatus(status.as_u16()))
+        let response_body = crate::network::http::read_error_body_excerpt(resp).await;
+        ViaductError::Network(NetworkError::HttpStatus {
+            status: status.as_u16(),
+            response_body,
+        })
     }
 }
 
@@ -539,7 +546,7 @@ impl ReaderAPICaller {
             });
         }
         if !resp.status().is_success() {
-            return Err(status_error(&resp));
+            return Err(status_error(resp).await);
         }
         self.note_usage_limits(resp.headers());
         let next_conditional_get = conditional_get_from_response(resp.headers());
@@ -590,7 +597,7 @@ impl ReaderAPICaller {
             });
         }
         if !resp.status().is_success() {
-            return Err(status_error(&resp));
+            return Err(status_error(resp).await);
         }
         self.note_usage_limits(resp.headers());
         let next_conditional_get = conditional_get_from_response(resp.headers());
@@ -668,7 +675,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(status_error(&resp));
+            return Err(status_error(resp).await);
         }
         Ok(())
     }
@@ -714,7 +721,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(status_error(&resp));
+            return Err(status_error(resp).await);
         }
         Ok(())
     }
@@ -788,7 +795,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(status_error(&resp));
+            return Err(status_error(resp).await);
         }
         Ok(())
     }
@@ -811,7 +818,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(status_error(&resp));
+            return Err(status_error(resp).await);
         }
         Ok(())
     }
@@ -855,7 +862,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(status_error(&resp));
+            return Err(status_error(resp).await);
         }
         self.note_usage_limits(resp.headers());
 
@@ -922,7 +929,7 @@ impl ReaderAPICaller {
                 .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
             if !resp.status().is_success() {
-                return Err(status_error(&resp));
+                return Err(status_error(resp).await);
             }
             self.note_usage_limits(resp.headers());
 
@@ -985,7 +992,7 @@ impl ReaderAPICaller {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(status_error(&resp));
+            return Err(status_error(resp).await);
         }
         self.note_usage_limits(resp.headers());
         Ok(())
@@ -1012,7 +1019,7 @@ impl ReaderAPICaller {
             .map_err(|e| ViaductError::Network(NetworkError::Http(e)))?;
 
         if !resp.status().is_success() {
-            return Err(status_error(&resp));
+            return Err(status_error(resp).await);
         }
         Ok(())
     }

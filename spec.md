@@ -1,6 +1,6 @@
 # viaduct: Application Specification
 
-**Version:** 4.0.6  
+**Version:** 4.0.7  
 **Target:** GTK4 ≥ 4.16, WebKitGTK 6.0, Wayland (Hyprland or GNOME). *(libadwaita dropped in v3.0.0; §12 is the post-libadwaita design contract.)*  
 **Language:** Rust (2024 Edition)  
 **Build System:** Cargo workspace (`viaduct-core` + `viaduct`) / Meson wrapper for Flatpak packaging  

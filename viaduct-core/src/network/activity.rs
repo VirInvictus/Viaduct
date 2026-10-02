@@ -38,6 +38,11 @@ pub enum ActivityKind {
     NotModified,
     HttpError {
         status: u16,
+        /// Whitespace-collapsed prefix of the error response's body
+        /// (NNW `49dbebf67`) — the body often says what the server
+        /// didn't like. `None` when it was empty, non-UTF-8, or the
+        /// read failed.
+        response_body: Option<String>,
     },
     NetworkError {
         detail: String,

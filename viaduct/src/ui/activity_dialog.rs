@@ -177,7 +177,15 @@ fn display_subtitle(ev: &ActivityEvent) -> String {
             }
         }
         ActivityKind::NotModified => "Not modified (304)".to_string(),
-        ActivityKind::HttpError { status } => format!("HTTP {status}"),
+        ActivityKind::HttpError {
+            status,
+            response_body,
+        } => match response_body {
+            // NNW `49dbebf67`: the error body often says what the server
+            // didn't like; show it collapsed and dialog-trimmed.
+            Some(body) => format!("HTTP {status} · server response: {}", trim(body)),
+            None => format!("HTTP {status}"),
+        },
         ActivityKind::NetworkError { detail } => format!("Network error · {}", trim(detail)),
         ActivityKind::ParseError { detail } => format!("Parse error · {}", trim(detail)),
         ActivityKind::DbError { detail } => format!("Database error · {}", trim(detail)),
@@ -256,6 +264,28 @@ mod tests {
             deleted: 0,
         }));
         assert_eq!(row, "Updated · no changes");
+    }
+
+    #[test]
+    fn http_error_subtitle_carries_the_server_response() {
+        assert_eq!(
+            display_subtitle(&ev(ActivityKind::HttpError {
+                status: 503,
+                response_body: None
+            })),
+            "HTTP 503"
+        );
+        assert_eq!(
+            display_subtitle(&ev(ActivityKind::HttpError {
+                status: 403,
+                // The excerpt is already whitespace-collapsed by the
+                // capture path; the dialog only trims and bounds it.
+                response_body: Some(
+                    "account suspended: quota exceeded until 2026-10-02".to_string()
+                )
+            })),
+            "HTTP 403 · server response: account suspended: quota exceeded until 2026-10-02"
+        );
     }
 
     #[test]
