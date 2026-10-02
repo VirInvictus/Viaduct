@@ -46,6 +46,15 @@ Post-completion releases (still 2026-09-15, same blitz residue lane):
   feed favicon through viaduct-img:// (was always empty: every theme's
   header drew a broken-image glyph), and Sepia's dark overlay links
   softened from peach e8b88a to copper c89968.
+- v4.0.3 "the vir-gtk final-audit wave and sponsorship hooks" (2213862):
+  the Unreleased clearance release, cut 2026-10-02 per Brandon's call
+  that releases happen whenever fixes land from here on. Contents were
+  already on main: the vir-gtk 1.4.2 consumer wave (lock-only, cargo
+  sources byte-identical under the member bump) and the FUNDING.yml +
+  AppStream donation sponsorship pair. Sync set bumped across all eight
+  carriers; local gate 227 green before commit; release-auditor pre-tag
+  pass caught the meson.build and spec.md carriers before tagging; tag
+  cut verbatim, cat-file verified before push.
 
 Reopen conditions (recorded futures, not open work):
 - The Flathub submission itself: blocked on Brandon's Flathub
