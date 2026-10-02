@@ -35,6 +35,9 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="4.0.6" date="2026-10-02">
+      <description><p>The instapaper_ignore strip: nav chrome marked instapaper_ignore no longer renders</p></description>
+    </release>
     <release version="4.0.5" date="2026-10-02">
       <description><p>The Today queries seek: indexed Today windows, per-branch index seeks</p></description>
     </release>

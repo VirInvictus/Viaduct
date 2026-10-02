@@ -1,5 +1,11 @@
 # viaduct: Patch Notes
 
+## v4.0.6: the instapaper_ignore strip (2026-10-02)
+
+One more port from the October 2 sync's deferred list: NNW `d55c93376` (#3501), elements marked `class="instapaper_ignore"` are stripped from article bodies at render time. 254 tests; clippy `-D warnings` clean.
+
+- **Fixed:** navigational chrome that feeds mark `class="instapaper_ignore"` (the hook Instapaper's own read-later stripper honors; The Atlantic's pullquote asides are the canonical case) rendered in full. Upstream removes those elements from the rendered DOM in main.js, which never runs here: the article pane is JS-off behind the CSP, and ammonia strips the `class` attribute during sanitize. The intent ports as a pre-render transform applied in `render_themed` between `extract_body_fragment` and sanitize. The scanner is hand-rolled in the module's no-regex discipline and matches upstream's `querySelectorAll(".instapaper_ignore")` semantics: the class attribute's whitespace-separated tokens must include the exact `instapaper_ignore` token (case-sensitively), with the first class attribute winning per HTML5's duplicate-attribute rule. Removal takes the whole subtree: same-name nesting is depth-tracked to the matching close tag; comments and script/style/textarea/title raw text cannot forge or hide markup (a `</div>` inside a script string doesn't end a wrapping div); void elements end at the tag; an explicit `/>` ends the element (a deliberate divergence from HTML5, which ignores that solidus: honoring it can only under-remove, never drag siblings out). Malformed markup is left untouched rather than dragged out with the chrome: an ignorable element with no findable close (an unclosed `<p>`/`<li>` relying on implied end tags included), an unterminated tag, or an unterminated quoted attribute stays exactly as it arrived. Pinned by 15 unit tests covering the pullquote shape, token exactness, nesting, raw text, comments, void/self-closing tags, case handling, and the malformed cases.
+
 ## v4.0.5: the Today queries seek (2026-10-02)
 
 One port from the October 2 sync's deferred list, plus the schema work it was gated on: NNW `19930aa3c`, Today queries use an index instead of a full scan. 239 tests; clippy `-D warnings` clean.

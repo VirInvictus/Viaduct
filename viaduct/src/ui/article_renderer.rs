@@ -1031,21 +1031,458 @@ fn insert_paragraph_tags(html: &str) -> String {
     out
 }
 
+/// NNW `d55c93376` (#3501): some feeds carry elements marked
+/// `class="instapaper_ignore"` — navigational chrome the Instapaper
+/// read-later service also strips. Upstream removes them from the
+/// rendered DOM in main.js (`removeInstapaperIgnoreElements`), which
+/// never runs here (the pane is JS-off behind the CSP) and whose class
+/// attribute ammonia strips during sanitize anyway, so the intent
+/// ports as a pre-render transform on the raw body, applied in
+/// `render_themed` next to `extract_body_fragment`.
+///
+/// Matching follows upstream's `querySelectorAll(".instapaper_ignore")`:
+/// a `class` attribute whose whitespace-separated tokens include
+/// exactly `instapaper_ignore` (case-sensitively, like the CSS
+/// selector; only the element's first class attribute counts, matching
+/// HTML5's duplicate-attribute drop). Removal takes the whole subtree:
+/// same-name nesting is depth-tracked to the matching close tag, void
+/// elements end at the tag itself, an explicit `/>` ends the element
+/// (a deliberate divergence from HTML5, which ignores the solidus on
+/// non-void elements: honoring the author's self-closure can only
+/// under-remove, never drag following siblings into the removal), and
+/// the bodies of `script`/`style`/`textarea`/`title` are raw text — a
+/// `</div>` inside a script string doesn't end a wrapping div.
+///
+/// Malformed markup is left untouched: an ignorable element with no
+/// findable close (including an unclosed `<p>`/`<li>` relying on
+/// implied end tags), a tag that never terminates, or an unterminated
+/// quoted attribute stays in the output rather than dragging the rest
+/// of the article with it.
+pub fn remove_instapaper_ignore_elements(html: &str) -> String {
+    if !html.contains(INSTAPAPER_IGNORE_CLASS) {
+        return html.to_string();
+    }
+    let mut out = String::with_capacity(html.len());
+    let mut seg_start = 0usize;
+    let mut scanner = TagScanner::new(html);
+    while let Some(tag) = scanner.next_tag() {
+        let ParsedTag::Start(start) = tag else {
+            continue;
+        };
+        if !start.has_ignore_class {
+            continue;
+        }
+        let Some(end) = find_element_end(html, &start) else {
+            // No findable close: leave the whole element untouched.
+            continue;
+        };
+        out.push_str(&html[seg_start..start.lt]);
+        seg_start = end;
+        // Resume after the removed element. This also drops the raw-text
+        // skip the removed tag may have scheduled: its body is behind us.
+        scanner.seek(end);
+    }
+    out.push_str(&html[seg_start..]);
+    out
+}
+
+/// The class token upstream queries with (`.instapaper_ignore`).
+const INSTAPAPER_IGNORE_CLASS: &str = "instapaper_ignore";
+
+/// A parsed start tag: where it begins (`lt`), its name span, the byte
+/// just past its `>`, whether it self-closes with `/>`, and whether its
+/// class attribute (HTML5: the first one wins) carries the
+/// `instapaper_ignore` token.
+struct StartTag {
+    lt: usize,
+    name_start: usize,
+    name_end: usize,
+    end: usize,
+    self_closing: bool,
+    has_ignore_class: bool,
+}
+
+/// A tag the scanner recognized: a fully attribute-parsed start tag or
+/// a close tag (name span + byte just past its `>`).
+enum ParsedTag {
+    Start(StartTag),
+    Close { name: (usize, usize), end: usize },
+}
+
+impl ParsedTag {
+    fn end(&self) -> usize {
+        match self {
+            ParsedTag::Start(start) => start.end,
+            ParsedTag::Close { end, .. } => *end,
+        }
+    }
+}
+
+/// Byte offset just past the ignorable element's matching close tag, or
+/// `None` when the element never closes. Void elements and explicit
+/// self-closing tags end at the tag itself; raw-text elements
+/// (script/style/textarea/title) end at their close pattern with no
+/// nesting; the rest depth-track same-name start/close pairs through a
+/// fresh [`TagScanner`] so comments and raw-text bodies don't confuse
+/// the count.
+fn find_element_end(html: &str, start: &StartTag) -> Option<usize> {
+    let name = &html[start.name_start..start.name_end];
+    if start.self_closing || is_void_name(name) {
+        return Some(start.end);
+    }
+    if let Some(close_pattern) = raw_text_close_pattern(name) {
+        // Raw text: the first matching close pattern ends the element;
+        // the body never nests.
+        let (_, name_end) = find_tag(html, close_pattern, start.end)?;
+        return find_tag_close(html, name_end);
+    }
+    let mut depth = 1usize;
+    let mut scanner = TagScanner::new_at(html, start.end);
+    while let Some(tag) = scanner.next_tag() {
+        match tag {
+            ParsedTag::Close { name: (s, e), end } => {
+                if html[s..e].eq_ignore_ascii_case(name) {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(end);
+                    }
+                }
+            }
+            ParsedTag::Start(inner) => {
+                let inner_name = &html[inner.name_start..inner.name_end];
+                if inner_name.eq_ignore_ascii_case(name)
+                    && !inner.self_closing
+                    && !is_void_name(inner_name)
+                {
+                    depth += 1;
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse the start tag beginning at `lt` (guaranteed: `bytes[lt] ==
+/// b'<'` followed by an ASCII letter). Walks the attribute region
+/// quote-aware — a `>` inside a quoted value does not close the tag —
+/// recording the real end, the `/>` flag, and the class-attribute
+/// verdict. `None` when the tag never terminates (EOF inside the tag
+/// or a quoted value): the DOM drops such a token along with the rest
+/// of the input, so the caller treats the remainder as exhausted.
+fn parse_start_tag(html: &str, lt: usize) -> Option<StartTag> {
+    let bytes = html.as_bytes();
+    let mut j = lt + 1;
+    let name_start = j;
+    while j < bytes.len() && is_name_byte(bytes[j]) {
+        j += 1;
+    }
+    let name_end = j;
+    let mut self_closing = false;
+    let mut class_seen = false;
+    let mut has_ignore_class = false;
+    while j < bytes.len() {
+        match bytes[j] {
+            b'>' => {
+                return Some(StartTag {
+                    lt,
+                    name_start,
+                    name_end,
+                    end: j + 1,
+                    self_closing,
+                    has_ignore_class,
+                });
+            }
+            b'/' => {
+                // `/>` closes the tag; a stray `/` followed by anything
+                // else is HTML5's parse-error recovery: dropped, the
+                // self-closing flag lost.
+                if bytes.get(j + 1) == Some(&b'>') {
+                    self_closing = true;
+                }
+                j += 1;
+            }
+            b if b.is_ascii_whitespace() => j += 1,
+            _ => {
+                // Attribute name, then an optional `= value`.
+                let attr_start = j;
+                while j < bytes.len()
+                    && !bytes[j].is_ascii_whitespace()
+                    && bytes[j] != b'='
+                    && bytes[j] != b'>'
+                    && bytes[j] != b'/'
+                {
+                    j += 1;
+                }
+                let attr = &html[attr_start..j];
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j >= bytes.len() || bytes[j] != b'=' {
+                    if attr.eq_ignore_ascii_case("class") && !class_seen {
+                        class_seen = true;
+                    }
+                    continue;
+                }
+                j += 1;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                let value = match bytes.get(j) {
+                    Some(&q @ (b'"' | b'\'')) => {
+                        let vstart = j + 1;
+                        let Some(rel) = html[vstart..].find(q as char) else {
+                            return None; // EOF inside the quoted value.
+                        };
+                        let vend = vstart + rel;
+                        j = vend + 1;
+                        &html[vstart..vend]
+                    }
+                    _ => {
+                        let vstart = j;
+                        while j < bytes.len() && !bytes[j].is_ascii_whitespace() && bytes[j] != b'>'
+                        {
+                            j += 1;
+                        }
+                        &html[vstart..j]
+                    }
+                };
+                if attr.eq_ignore_ascii_case("class") && !class_seen {
+                    class_seen = true;
+                    has_ignore_class = class_tokens_contain(value, INSTAPAPER_IGNORE_CLASS);
+                }
+            }
+        }
+    }
+    None // EOF inside the tag: the DOM drops the token and the rest.
+}
+
+/// What begins at `lt` (`bytes[lt] == b'<'`): a real tag, markup to
+/// skip (comment, doctype, bogus comment), or plain text.
+enum ScanStep {
+    Tag(ParsedTag),
+    Skip(usize),
+    Exhausted,
+}
+
+/// Classify and consume the construct at `lt`, mirroring the HTML5
+/// tokenizer for the constructs that matter here: comments run to
+/// `-->`; doctypes and bogus comments (`<!`, `<?`, `</` with no name)
+/// run to the first `>`; a real start tag is fully parsed for its
+/// class attribute. Anything that runs off the end of the input
+/// mid-construct consumes the rest (the DOM drops it all).
+fn scan_step(html: &str, lt: usize) -> ScanStep {
+    let bytes = html.as_bytes();
+    let Some(&b1) = bytes.get(lt + 1) else {
+        return ScanStep::Skip(lt + 1);
+    };
+    if b1 == b'!' {
+        if html[lt + 2..].starts_with("--") {
+            // Comment: content is not markup, and `<!--` inside a
+            // comment doesn't nest.
+            return match html[lt + 4..].find("-->") {
+                Some(rel) => ScanStep::Skip(lt + 4 + rel + 3),
+                None => ScanStep::Exhausted,
+            };
+        }
+        // Doctype, CDATA, other bang constructs: bogus comment to `>`.
+        return match find_tag_close(html, lt + 1) {
+            Some(end) => ScanStep::Skip(end),
+            None => ScanStep::Exhausted,
+        };
+    }
+    if b1 == b'?' {
+        return match find_tag_close(html, lt + 1) {
+            Some(end) => ScanStep::Skip(end),
+            None => ScanStep::Exhausted,
+        };
+    }
+    if b1 == b'/' {
+        let nstart = lt + 2;
+        let mut j = nstart;
+        while j < bytes.len() && is_name_byte(bytes[j]) {
+            j += 1;
+        }
+        if j == nstart {
+            // `</` with no name: bogus comment to `>`.
+            return match find_tag_close(html, nstart) {
+                Some(end) => ScanStep::Skip(end),
+                None => ScanStep::Exhausted,
+            };
+        }
+        // Attributes on a close tag are a parse error the tokenizer
+        // still consumes, quote-aware.
+        return match close_tag_end(html, j) {
+            Some(end) => ScanStep::Tag(ParsedTag::Close {
+                name: (nstart, j),
+                end,
+            }),
+            None => ScanStep::Exhausted,
+        };
+    }
+    if b1.is_ascii_alphabetic() {
+        return match parse_start_tag(html, lt) {
+            Some(start) => ScanStep::Tag(ParsedTag::Start(start)),
+            None => ScanStep::Exhausted,
+        };
+    }
+    ScanStep::Skip(lt + 1)
+}
+
+/// Byte offset just past the `>` closing a close tag whose attribute
+/// region starts at `from`, honoring quoted values. `None` at EOF.
+fn close_tag_end(html: &str, from: usize) -> Option<usize> {
+    let bytes = html.as_bytes();
+    let mut j = from;
+    while j < bytes.len() {
+        match bytes[j] {
+            q @ (b'"' | b'\'') => {
+                let rel = html[j + 1..].find(q as char)?;
+                j += rel + 2;
+            }
+            b'>' => return Some(j + 1),
+            _ => j += 1,
+        }
+    }
+    None
+}
+
+/// Sequential tag walker: yields real tags from an HTML string,
+/// skipping comments, doctypes/bogus comments, and the raw-text bodies
+/// of script/style/textarea/title (their contents are text, not
+/// markup, so a `</div>` inside a script string must not end a
+/// wrapping element). This is the piece that keeps element-end
+/// searches DOM-faithful without a full parser.
+struct TagScanner<'a> {
+    html: &'a str,
+    pos: usize,
+    /// Close pattern (`</script`) whose body the next
+    /// [`TagScanner::next_tag`] must skip before scanning for real tags.
+    raw_until: Option<&'static str>,
+}
+
+impl<'a> TagScanner<'a> {
+    fn new(html: &'a str) -> Self {
+        Self::new_at(html, 0)
+    }
+
+    fn new_at(html: &'a str, pos: usize) -> Self {
+        Self {
+            html,
+            pos,
+            raw_until: None,
+        }
+    }
+
+    /// Jump to `pos`. Used after removing an element: the element's
+    /// body (raw text included) is behind the caller now, so any
+    /// pending raw-text skip is dropped with it.
+    fn seek(&mut self, pos: usize) {
+        self.pos = pos;
+        self.raw_until = None;
+    }
+
+    fn next_tag(&mut self) -> Option<ParsedTag> {
+        let html = self.html;
+        if let Some(pattern) = self.raw_until.take() {
+            self.pos = skip_raw_text(html, self.pos, pattern);
+        }
+        while let Some(rel) = html.as_bytes()[self.pos..].iter().position(|&b| b == b'<') {
+            let lt = self.pos + rel;
+            match scan_step(html, lt) {
+                ScanStep::Tag(tag) => {
+                    self.pos = tag.end();
+                    if let ParsedTag::Start(start) = &tag {
+                        let name = &html[start.name_start..start.name_end];
+                        // Raw-text bodies are skipped from the next call
+                        // on, `/>` or not: HTML5 ignores the solidus here
+                        // too, and the body is text either way.
+                        if let Some(pattern) = raw_text_close_pattern(name) {
+                            self.raw_until = Some(pattern);
+                        }
+                    }
+                    return Some(tag);
+                }
+                ScanStep::Skip(to) => self.pos = to,
+                ScanStep::Exhausted => {
+                    self.pos = html.len();
+                    return None;
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Byte offset where a raw-text body ends: just past its close tag, or
+/// end-of-input when it never closes (the DOM consumes the rest).
+fn skip_raw_text(html: &str, from: usize, pattern: &str) -> usize {
+    match find_tag(html, pattern, from) {
+        Some((_, name_end)) => find_tag_close(html, name_end).unwrap_or(html.len()),
+        None => html.len(),
+    }
+}
+
+/// The `</name` search pattern for a raw-text element (whose body is
+/// text, not markup), or `None` for any other name.
+fn raw_text_close_pattern(name: &str) -> Option<&'static str> {
+    if name.eq_ignore_ascii_case("script") {
+        Some("</script")
+    } else if name.eq_ignore_ascii_case("style") {
+        Some("</style")
+    } else if name.eq_ignore_ascii_case("textarea") {
+        Some("</textarea")
+    } else if name.eq_ignore_ascii_case("title") {
+        Some("</title")
+    } else {
+        None
+    }
+}
+
+/// HTML void elements: no close tag exists, the element ends at the
+/// start tag itself.
+fn is_void_name(name: &str) -> bool {
+    [
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+        "source", "track", "wbr",
+    ]
+    .iter()
+    .any(|v| name.eq_ignore_ascii_case(v))
+}
+
+/// A tag-name byte: ASCII alphanumeric plus the `-`/`:`/`_` of custom
+/// and namespaced element names (`<gpt-ad>`, `<o:p>`).
+fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b':' || b == b'_'
+}
+
+/// CSS class-list semantics, as upstream's `.instapaper_ignore`
+/// selector applies them: the value split on ASCII whitespace must
+/// contain exactly `token`, case-sensitively.
+fn class_tokens_contain(value: &str, token: &str) -> bool {
+    value.split_ascii_whitespace().any(|t| t == token)
+}
+
 /// Render an article with the NNW page-wrapper + theme. Two-pass macro
 /// substitution (matches NNW): inner pass fills the article fields into
 /// the theme template; outer pass fills the result, the theme stylesheet,
 /// and the article's title and base URL into `page.html`. The body is
 /// run through `extract_body_fragment` (some feeds embed a whole HTML
-/// document as item content) and `sanitize_and_rewrite_image_srcs` so
-/// external `img` URLs become `viaduct-img://` references and CSP can
-/// lock the pane down to our scheme alone.
+/// document as item content), `remove_instapaper_ignore_elements`
+/// (NNW `d55c93376` #3501: nav chrome marked `instapaper_ignore` goes;
+/// upstream's main.js is dead under our CSP), and
+/// `sanitize_and_rewrite_image_srcs` so external `img` URLs become
+/// `viaduct-img://` references and CSP can lock the pane down to our
+/// scheme alone. The instapaper pass must precede sanitize: ammonia
+/// strips the `class` attribute the scanner keys on.
 pub fn render_themed(
     view: &webkit6::WebView,
     theme: Theme,
     mut subs: ArticleSubstitutions,
     base_uri: Option<&str>,
 ) {
-    subs.body = sanitize_and_rewrite_image_srcs(&extract_body_fragment(&subs.body));
+    subs.body = sanitize_and_rewrite_image_srcs(&remove_instapaper_ignore_elements(
+        &extract_body_fragment(&subs.body),
+    ));
     let title_for_outer = escape_html(&subs.title);
     let inner_subs = subs.into_map();
     let inner_html = render_with_macros(theme.template, &inner_subs);
@@ -1326,6 +1763,126 @@ mod tests {
             extract_body_fragment(html),
             "<header><h1>Site</h1></header><p>content</p>"
         );
+    }
+
+    // --- remove_instapaper_ignore_elements (NNW `d55c93376`, #3501) ---
+
+    #[test]
+    fn instapaper_ignore_element_is_removed_whole() {
+        let html =
+            r#"<div class="instapaper_ignore"><p>nav</p><a href="/">menu</a></div><p>body</p>"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "<p>body</p>");
+    }
+
+    #[test]
+    fn instapaper_ignore_token_among_others_is_removed() {
+        // The coco.html pullquote shape upstream fixed for (#3501).
+        let html = r#"<aside class="pullquote instapaper_ignore">quote</aside><p>text</p>"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "<p>text</p>");
+        let html = r#"<aside class='instapaper_ignore pullquote'>quote</aside><p>text</p>"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "<p>text</p>");
+    }
+
+    #[test]
+    fn instapaper_ignore_match_is_exact_token_case_sensitive() {
+        // The CSS class selector upstream queries with matches whole
+        // tokens, case-sensitively: prefixes, suffixes, and case
+        // variants are different classes.
+        for html in [
+            r#"<div class="instapaper_ignore-x">a</div>b"#,
+            r#"<div class="xinstapaper_ignore">a</div>b"#,
+            r#"<div class="Instapaper_Ignore">a</div>b"#,
+        ] {
+            assert_eq!(remove_instapaper_ignore_elements(html), html);
+        }
+    }
+
+    #[test]
+    fn multiple_ignore_elements_are_removed() {
+        let html = "<p>a</p><nav class=\"instapaper_ignore\">n1</nav><p>b</p>\
+                    <div class=\"instapaper_ignore\">n2</div><p>c</p>";
+        assert_eq!(
+            remove_instapaper_ignore_elements(html),
+            "<p>a</p><p>b</p><p>c</p>"
+        );
+    }
+
+    #[test]
+    fn nested_ignore_elements_are_removed_once() {
+        let html =
+            r#"<div class="instapaper_ignore"><div class="instapaper_ignore">x</div>y</div>keep"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "keep");
+    }
+
+    #[test]
+    fn same_name_nesting_needs_the_matching_close() {
+        // The inner same-name div must not end the outer element early:
+        // "tail" is inside the ignored subtree, "keep" is not.
+        let html = r#"<div class="instapaper_ignore"><div>x</div>tail</div>keep"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "keep");
+    }
+
+    #[test]
+    fn close_tag_inside_script_text_does_not_end_the_element() {
+        let html =
+            r#"<div class="instapaper_ignore"><script>var s = "</div>";</script></div><p>keep</p>"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "<p>keep</p>");
+    }
+
+    #[test]
+    fn class_inside_comment_is_not_matched() {
+        let html = r#"<!-- <div class="instapaper_ignore">x</div> --><p>keep</p>"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), html);
+    }
+
+    #[test]
+    fn void_and_self_closing_ignore_elements_end_at_the_tag() {
+        let html = r#"<img class="instapaper_ignore" src="https://x/i.png">keep"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "keep");
+        let html = r#"<hr class="instapaper_ignore"/>keep"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "keep");
+    }
+
+    #[test]
+    fn tag_and_attribute_names_are_case_insensitive() {
+        let html = r#"<DIV CLASS="instapaper_ignore">x</DIV>keep"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "keep");
+    }
+
+    #[test]
+    fn unquoted_class_value_is_matched() {
+        let html = r#"<div class=instapaper_ignore>x</div>keep"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), "keep");
+    }
+
+    #[test]
+    fn unterminated_ignore_element_is_left_untouched() {
+        let html = r#"<div class="instapaper_ignore"><p>cruft and more cruft"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), html);
+    }
+
+    #[test]
+    fn unterminated_class_quote_is_left_untouched() {
+        let html = r#"<p>a</p><div class="instapaper_ignore>text"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), html);
+    }
+
+    #[test]
+    fn well_formed_sibling_survives_a_malformed_neighbor() {
+        // The unterminated element stays (leaving untouched beats
+        // guessing); a later well-formed one is still removed.
+        let html =
+            r#"<div class="instapaper_ignore">unclosed <aside class="instapaper_ignore">x</aside>"#;
+        assert_eq!(
+            remove_instapaper_ignore_elements(html),
+            r#"<div class="instapaper_ignore">unclosed "#
+        );
+    }
+
+    #[test]
+    fn body_without_the_token_is_returned_verbatim() {
+        let html = r#"<p>plain <b>article</b> &amp; nothing else</p>"#;
+        assert_eq!(remove_instapaper_ignore_elements(html), html);
     }
 
     #[test]
