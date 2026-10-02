@@ -1,5 +1,12 @@
 # viaduct: Patch Notes
 
+## v4.0.5: the Today queries seek (2026-10-02)
+
+One port from the October 2 sync's deferred list, plus the schema work it was gated on: NNW `19930aa3c`, Today queries use an index instead of a full scan. 239 tests; clippy `-D warnings` clean.
+
+- **Added:** two Today-window indexes, `articles(date_published, article_id)` and `statuses(date_arrived, article_id)`, created idempotently at schema init (the `authorsLookup_article_id_idx` pattern: additive-only, safe on existing databases). They are the account-wide analogs of upstream's `articles_feedID_datePublished_articleID` minus the feedID prefix our Today queries don't constrain, plus the statuses twin upstream never needed (their arrival fallback is gated on `datePublished is null`, which stays seekable on the articles index alone; ours ORs the two windows independently). The trailing `article_id` mirrors upstream's trailing `articleID`: covering for the join key.
+- **Changed:** `fetch_today` and `smart_feed_counts` build their window through a shared `today_window_where()` helper, `(a.article_id IN (SELECT article_id FROM statuses WHERE date_arrived >= ?) OR a.date_published >= ?)`. Upstream's fix duplicated the `feedID` test into both OR branches so SQLite's multi-index OR seeks per branch; our OR spans two tables, where a textual duplication still scans, so the duplicated branch constraint rides the join key as an IN subquery instead. EXPLAIN QUERY PLAN shows MULTI-INDEX OR with a SEARCH per branch (covering `statuses_date_arrived_idx` inside the subquery, `articles_date_published_idx` for the publication branch) where both queries previously full-scanned on every Today click. Measured on a synthetic 200,000-article library: the count query drops from ~37 ms (full scan) to ~0.01 ms, and the one-time index build at first open after upgrading is ~0.05 s; ongoing write cost is one extra index maintenance per articles write (the statuses index only churns on insert, since status flips update `read`/`starred` only). Selection semantics are unchanged (arrival OR publication on/after local midnight; NULL `date_published` matches neither date test), pinned by the ported `TodayQueriesTests` matrix: the union window, no OR double-count, read-filter interaction, and LIMIT behavior on a seeded database.
+
 ## v4.0.4: the Slashdot window (2026-10-02)
 
 Five ports from the October 2 NetNewsWire sync (`dc74019c2` to `eb398b9ab`, +135 commits), most of them triggered by Slashdot's own feed. 237 tests; clippy `-D warnings` clean.

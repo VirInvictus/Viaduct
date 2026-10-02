@@ -308,6 +308,23 @@ pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS authorsLookup_article_id_idx
             ON authorsLookup (article_id);
 
+        -- v4.0.5 (NNW 19930aa3c): the Today queries (`fetch_today` /
+        -- `smart_feed_counts`) OR two date windows across the articles ↔
+        -- statuses join; before these indexes the planner full-scanned one
+        -- side of the join on every Today click. Analog of upstream's
+        -- `articles_feedID_datePublished_articleID` minus the feedID prefix
+        -- (our Today queries are account-wide), plus the statuses twin
+        -- upstream never needed (their fallback branch is gated on
+        -- `datePublished is null` and stays seekable on the articles index
+        -- alone; ours tests `date_arrived` as an independent window). The
+        -- trailing `article_id` mirrors upstream's trailing `articleID`: it
+        -- makes each index covering for the join key / the IN-subquery the
+        -- rewritten WHERE feeds it.
+        CREATE INDEX IF NOT EXISTS articles_date_published_idx
+            ON articles (date_published, article_id);
+        CREATE INDEX IF NOT EXISTS statuses_date_arrived_idx
+            ON statuses (date_arrived, article_id);
+
         CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(
             article_id UNINDEXED,
             title,
@@ -851,12 +868,37 @@ fn local_midnight_utc_seconds() -> i64 {
     }
 }
 
+/// The "Today" window filter shared by `fetch_today` and
+/// `smart_feed_counts`. An article is "today" when EITHER its arrival OR
+/// its publication timestamp falls on/after the local-midnight cutoff —
+/// a wider union than NNW's `datePublished > ? or (datePublished is
+/// null and dateArrived > ?)` fallback shape; that divergence predates
+/// this port and the rewrite preserves it exactly.
+///
+/// NNW `19930aa3c` duplicated the `feedID in (...)` test into both
+/// branches of the date OR so SQLite's multi-index OR seeks
+/// `articles_feedID_datePublished_articleID` per branch instead of
+/// scanning every article in the feeds. Our OR spans two tables, so a
+/// plain textual duplication would still cross tables and scan; the
+/// branch constraint rides the join key instead, as an `IN (subquery)`:
+/// the arrival branch seeks `statuses_date_arrived_idx` inside the
+/// subquery, the publication branch seeks `articles_date_published_idx`
+/// directly (EXPLAIN QUERY PLAN: MULTI-INDEX OR with a SEARCH per
+/// branch). `statuses.article_id` is the PK and the join is INNER, so
+/// `a.article_id IN (today's arrivals)` is exactly `s.date_arrived >=
+/// ?` on the joined row — same rows, seeks instead of scans.
+fn today_window_where() -> &'static str {
+    "(a.article_id IN (SELECT article_id FROM statuses WHERE date_arrived >= ?) \
+     OR a.date_published >= ?)"
+}
+
 fn fetch_today(conn: &mut Connection, sort: SortOrder, limit: i64) -> Result<Vec<Article>> {
     let today_start = local_midnight_utc_seconds();
     let sql = format!(
         "SELECT a.* FROM articles a \
          INNER JOIN statuses s ON a.article_id = s.article_id \
-         WHERE s.date_arrived >= ? OR a.date_published >= ? {}{}",
+         WHERE {} {}{}",
+        today_window_where(),
         sort.order_by_clause_aliased(),
         limit_clause(limit)
     );
@@ -1039,11 +1081,13 @@ fn smart_feed_counts(conn: &mut Connection) -> Result<SmartFeedCounts> {
     let today_start = local_midnight_utc_seconds();
 
     let today_unread: i64 = conn.query_row(
-        "SELECT COUNT(*)
-         FROM articles a
-         INNER JOIN statuses s ON a.article_id = s.article_id
-         WHERE s.read = 0
-           AND (s.date_arrived >= ? OR a.date_published >= ?)",
+        &format!(
+            "SELECT COUNT(*)
+             FROM articles a
+             INNER JOIN statuses s ON a.article_id = s.article_id
+             WHERE s.read = 0 AND {}",
+            today_window_where()
+        ),
         params![today_start, today_start],
         |row| row.get(0),
     )?;
@@ -1518,6 +1562,141 @@ mod tests {
         assert_eq!(
             counts.starred_unread, 0,
             "starred_unread must INNER JOIN articles too"
+        );
+    }
+
+    /// Port of NNW `19930aa3c`'s `TodayQueriesTests` (v4.0.5): the
+    /// per-branch index-seek rewrite of the Today window must select
+    /// exactly the same rows as the old single-OR form. An article is
+    /// "today" when EITHER its arrival OR its publication timestamp is
+    /// on/after local midnight; `date_published` is NULL for some feeds,
+    /// which must neither match the publication branch nor block the
+    /// arrival branch; an article qualifying through BOTH branches
+    /// counts once. 25 h ago is always before today's local midnight,
+    /// and `Utc::now()` is always on/after it, so the window boundaries
+    /// are deterministic regardless of when the test runs.
+    #[test]
+    fn today_queries_select_the_union_window_without_double_counting() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        let now = Utc::now();
+        let before_window = now - Duration::hours(25);
+
+        // Four boundary articles (upstream's per-feed trio plus the
+        // always-excluded one):
+        // - "arrived-only": NULL date_published, arrived now.
+        // - "published-only": published now, arrived 25 h ago.
+        // - "both-windows": published now, arrived now.
+        // - "neither-window": published 25 h ago, arrived 25 h ago.
+        let mut arrived_only = item("arrived-only", "Arrived only", "body");
+        arrived_only.date_published = None;
+        let mut published_only = item("published-only", "Published only", "body");
+        published_only.date_published = Some(now);
+        let mut both_windows = item("both-windows", "Both windows", "body");
+        both_windows.date_published = Some(now);
+        let mut neither = item("neither-window", "Neither window", "body");
+        neither.date_published = Some(before_window);
+
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![arrived_only, published_only, both_windows, neither],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .expect("update_feed");
+
+        // Backdate the arrivals of "published-only" and "neither-window"
+        // (update_feed stamps insert time, which is inside the window).
+        for unique_id in ["published-only", "neither-window"] {
+            conn.execute(
+                "UPDATE statuses SET date_arrived = ? WHERE article_id = ?",
+                params![
+                    before_window.timestamp(),
+                    article_id_for(feed_id, unique_id)
+                ],
+            )
+            .expect("backdate arrival");
+        }
+
+        let titles = |articles: &[Article]| {
+            let mut t: Vec<String> = articles
+                .iter()
+                .map(|a| a.title.clone().unwrap_or_default())
+                .collect();
+            t.sort();
+            t
+        };
+
+        // The fetch returns exactly the three in-window articles (the
+        // NULL-published one arrives via the arrival branch; "both-windows"
+        // appears once despite matching both branches).
+        let today = fetch_today(&mut conn, SortOrder::default(), 0).expect("fetch_today");
+        assert_eq!(
+            titles(&today),
+            vec![
+                "Arrived only".to_string(),
+                "Both windows".to_string(),
+                "Published only".to_string()
+            ]
+        );
+
+        // All four are unread right after ingest, so the Today badge
+        // counts the same three (no OR double-count in the COUNT form).
+        let counts = smart_feed_counts(&mut conn).expect("smart_feed_counts");
+        assert_eq!(counts.today_unread, 3);
+        assert_eq!(counts.all_unread, 4);
+
+        // Marking the publication-branch-only article read drops the
+        // Today badge without touching the fetch window.
+        conn.execute(
+            "UPDATE statuses SET read = 1 WHERE article_id = ?",
+            params![article_id_for(feed_id, "published-only")],
+        )
+        .expect("mark read");
+        let counts = smart_feed_counts(&mut conn).expect("smart_feed_counts re-run");
+        assert_eq!(counts.today_unread, 2);
+        assert_eq!(counts.all_unread, 3);
+
+        // LIMIT applies after the window filter (upstream's
+        // todayArticlesWithLimit): fewer rows, all still in-window.
+        let limited = fetch_today(&mut conn, SortOrder::default(), 2).expect("fetch_today limit");
+        assert_eq!(limited.len(), 2);
+        let window: std::collections::HashSet<&str> =
+            ["Arrived only", "Both windows", "Published only"]
+                .into_iter()
+                .collect();
+        assert!(
+            limited
+                .iter()
+                .all(|a| window.contains(a.title.as_deref().unwrap_or_default()))
+        );
+    }
+
+    /// v4.0.5: the Today-window indexes (`articles_date_published_idx`,
+    /// `statuses_date_arrived_idx`) are created by the schema init and
+    /// re-running the init on an existing DB is a no-op, not an error —
+    /// the additive-migration contract every `CREATE INDEX IF NOT
+    /// EXISTS` in `setup_schema` carries.
+    #[test]
+    fn schema_init_creates_today_window_indexes_idempotently() {
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        setup_schema(&conn).expect("initial schema");
+        let index_count = |conn: &Connection| -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN \
+                 ('articles_date_published_idx', 'statuses_date_arrived_idx')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count indexes")
+        };
+        assert_eq!(index_count(&conn), 2, "both Today-window indexes exist");
+        setup_schema(&conn).expect("re-run schema on existing DB");
+        assert_eq!(
+            index_count(&conn),
+            2,
+            "re-running the init must not duplicate or fail"
         );
     }
 
