@@ -579,11 +579,23 @@ fn parse_rss(data: &[u8], feed_url: &str, is_rdf: bool) -> Result<ParsedFeed> {
                         current_item_date,
                     );
 
+                    // v4.1.0: derive the plain-text body at ingest so the
+                    // store's `content_text` (FTS search, smart-feed
+                    // BodyContains, the title-sort excerpt) is populated
+                    // for RSS items, which previously left it NULL.
+                    let body = current_item_body.take();
+                    let text = body.as_deref().map(|h| {
+                        crate::parser::html::strip_html_to_text(
+                            h,
+                            crate::parser::html::MAX_CONTENT_TEXT_CHARS,
+                        )
+                    });
+
                     items.push(ParsedItem {
                         id: unique_id,
                         title: current_item_title.take(),
-                        content_html: current_item_body.take(),
-                        content_text: None,
+                        content_html: body,
+                        content_text: text,
                         url: current_item_permalink.take(),
                         external_url: current_item_link.take(),
                         summary: None,
@@ -1295,11 +1307,24 @@ fn parse_atom(data: &[u8], feed_url: &str) -> Result<ParsedFeed> {
                         current_item_date,
                     );
 
+                    // v4.1.0: same ingest-time plain-text derivation as
+                    // the RSS path (the xhtml capture's re-serialized
+                    // inner XML strips to its text like any markup).
+                    // `<summary>` stays HTML on purpose: it is the
+                    // article pane's render fallback, not a text field.
+                    let body = current_item_body.take();
+                    let text = body.as_deref().map(|h| {
+                        crate::parser::html::strip_html_to_text(
+                            h,
+                            crate::parser::html::MAX_CONTENT_TEXT_CHARS,
+                        )
+                    });
+
                     items.push(ParsedItem {
                         id: unique_id,
                         title: current_item_title.take(),
-                        content_html: current_item_body.take(),
-                        content_text: None,
+                        content_html: body,
+                        content_text: text,
                         url: current_item_permalink.take(),
                         external_url: current_item_link.take(),
                         summary: current_item_summary.take(),
@@ -2242,5 +2267,48 @@ mod tests {
             author.url.as_deref(),
             Some("https://example.com/blog/about/")
         );
+    }
+
+    #[test]
+    fn rss_items_derive_plain_text_at_ingest() {
+        // v4.1.0 (NNW 70c3ec809): the store's `content_text` is what FTS
+        // search, smart-feed BodyContains, and the title-sort excerpt
+        // read; RSS items previously left it NULL. The derived text is
+        // stripped (tags dropped, words not fused across tags) and the
+        // raw HTML still rides `content_html` untouched.
+        let xml = br#"<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <title>Site</title>
+  <item>
+    <title>Post</title>
+    <description><![CDATA[<p>Alpha <b>bold</b> words.</p><script>var x = 1;</script><p>Beta sentence.</p>]]></description>
+  </item>
+</channel></rss>"#;
+        let feed = parse_rss(xml, "https://example.com/feed", false).unwrap();
+        let item = feed.items.first().expect("item");
+        assert_eq!(
+            item.content_text.as_deref(),
+            Some("Alpha bold words. Beta sentence.")
+        );
+        let body = item.content_html.as_deref().unwrap_or("");
+        assert!(body.contains("<b>bold</b>"), "html body lost: {body}");
+    }
+
+    #[test]
+    fn atom_entries_derive_plain_text_at_ingest() {
+        // Same derivation on the Atom path, including through the xhtml
+        // capture shape whose body is re-serialized inner XML.
+        let xml = br#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Blog</title>
+  <entry>
+    <id>entry-1</id>
+    <title>Post</title>
+    <content type="html">&lt;p&gt;Gamma &lt;em&gt;marked&lt;/em&gt; text.&lt;/p&gt;</content>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        let item = feed.items.first().expect("entry");
+        assert_eq!(item.content_text.as_deref(), Some("Gamma marked text."));
     }
 }

@@ -116,6 +116,98 @@ pub fn extract_metadata(data: &[u8], url_string: &str) -> HtmlMetadata {
     }
 }
 
+/// v4.1.0: cap applied when deriving `content_text` from an item's
+/// HTML body at ingest (RSS / Atom items; JSON Feed carries a native
+/// `content_text` and never goes through the stripper). 64 KiB of
+/// plain text is far past any sort key, search snippet, or preview
+/// that consumes the field, while bounding the per-article storage
+/// the derivation adds to the database.
+pub const MAX_CONTENT_TEXT_CHARS: usize = 65_536;
+
+/// Derives the plain text of an HTML body: tags, comments, doctypes,
+/// and `<script>`/`<style>` bodies are dropped; every tag boundary
+/// emits one space so adjacent elements cannot fuse words
+/// (`<p>Part 1</p><p>Part 2` reads "Part 1 Part 2", not
+/// "Part 1Part 2"); whitespace runs collapse to single spaces and the
+/// ends trim; output stops at `max_chars` characters. Entities are
+/// left as they appear in the input (bodies arriving through
+/// quick-xml text events are already entity-decoded; CDATA bodies
+/// keep whatever the feed wrote) — stable keys are what the consumers
+/// need, not decoded ones.
+///
+/// The scan follows the same tokenizer rules as `extract_metadata`:
+/// quoted/unquoted attribute values, raw-text elements, and malformed
+/// input are handled identically, and a tag whose quoted value runs
+/// off the end of the input ends the scan with the text collected so
+/// far. This is the ingest-time twin of upstream's at-sort-time
+/// `ArticleStringFormatter.truncatedSummary` strip (NNW `70c3ec809`):
+/// the plain text has to exist in the store for the SQL-level title
+/// sort to excerpt it.
+pub fn strip_html_to_text(html: &str, max_chars: usize) -> String {
+    let data = html.as_bytes();
+    let end = data.len();
+    let mut out = String::new();
+    let mut chars = 0usize;
+    let mut pending_space = false;
+    let mut pos = 0usize;
+
+    while pos < end {
+        if data[pos] == b'<' && pos + 1 < end {
+            let next = data[pos + 1];
+            let is_tag = next == b'/' || next == b'!' || next == b'?' || next.is_ascii_alphabetic();
+            if is_tag {
+                if data[pos..].starts_with(b"<!--") {
+                    pos = skip_past(data, pos, b"-->");
+                } else if next == b'!' || next == b'?' || next == b'/' {
+                    // Comment remainder, doctype, processing
+                    // instruction, or close tag: all end at `>`.
+                    pos = skip_past(data, pos, b">");
+                } else {
+                    let (name, attrs, after, aborted) = scan_start_tag(data, pos);
+                    pos = after;
+                    if aborted {
+                        break;
+                    }
+                    if (name.eq_ignore_ascii_case(b"script") || name.eq_ignore_ascii_case(b"style"))
+                        && !attrs
+                            .iter()
+                            .any(|(k, _)| k.eq_ignore_ascii_case("self-closing"))
+                    {
+                        let lower_name: Vec<u8> = name.to_ascii_lowercase();
+                        pos = skip_raw_text(data, pos, &lower_name);
+                    }
+                }
+                pending_space = true;
+                continue;
+            }
+        }
+
+        // Text: ASCII whitespace collapses into a pending space; any
+        // other byte is copied through on its char boundary.
+        if data[pos].is_ascii_whitespace() {
+            pending_space = true;
+            pos += 1;
+            continue;
+        }
+        if pending_space && !out.is_empty() {
+            if chars >= max_chars {
+                break;
+            }
+            out.push(' ');
+            chars += 1;
+        }
+        pending_space = false;
+        if chars >= max_chars {
+            break;
+        }
+        let ch = html[pos..].chars().next().unwrap_or('\u{fffd}');
+        out.push(ch);
+        chars += 1;
+        pos += ch.len_utf8();
+    }
+    out
+}
+
 /// Applies extract_metadata's link filters: a usable link tag has a
 /// non-empty `rel` and an `href` or `src`.
 fn link_tag(attrs: HashMap<String, String>) -> Option<HtmlTag> {
@@ -424,6 +516,83 @@ mod tests {
         assert_eq!(
             metadata.tags[0].attributes.get("href").map(String::as_str),
             Some("https://real.example/feed.xml")
+        );
+    }
+
+    // ---- v4.1.0: strip_html_to_text (ingest-time content_text) ----
+
+    #[test]
+    fn strips_tags_and_collapses_whitespace() {
+        assert_eq!(
+            strip_html_to_text("  <p>Hello <b>cruel</b> world.</p>\n\n<p>Second.</p>", 4096),
+            "Hello cruel world. Second."
+        );
+    }
+
+    #[test]
+    fn tag_boundaries_never_fuse_words() {
+        // Two adjacent block elements with no whitespace between them:
+        // the tag boundary emits exactly one space, like upstream's
+        // strip-with-space rather than strip-with-nothing.
+        assert_eq!(
+            strip_html_to_text("<p>Part 1</p><p>Part 2</p>", 4096),
+            "Part 1 Part 2"
+        );
+        // Inline tags do not double up spaces with surrounding text.
+        assert_eq!(strip_html_to_text("a <em>b</em> c", 4096), "a b c");
+    }
+
+    #[test]
+    fn script_style_and_comment_bodies_are_dropped() {
+        assert_eq!(
+            strip_html_to_text(
+                "<p>keep</p><script>var drop = \"this\";</script><style>.drop { x: y }</style><p>also</p>",
+                4096
+            ),
+            "keep also"
+        );
+        assert_eq!(
+            strip_html_to_text("a<!-- <b>gone</b> -->b", 4096),
+            "a b",
+            "comment bodies never leak and their boundary spaces collapse"
+        );
+    }
+
+    #[test]
+    fn text_like_markup_outside_tags_survives() {
+        // A `<` that does not open a tag is text (the "a < b" shape);
+        // entities are left exactly as the feed wrote them.
+        assert_eq!(strip_html_to_text("a &lt; b", 4096), "a &lt; b");
+        assert_eq!(
+            strip_html_to_text("1 < 2 and 3 > 2", 4096),
+            "1 < 2 and 3 > 2"
+        );
+    }
+
+    #[test]
+    fn output_stops_at_the_character_cap() {
+        let html = "<p>".repeat(10) + &"x".repeat(100);
+        let out = strip_html_to_text(&html, 10);
+        assert_eq!(out.chars().count(), 10);
+        assert!(out.chars().all(|c| c == 'x'));
+
+        // The cap counts characters, not bytes: multibyte text cuts on
+        // a char boundary.
+        let multibyte = "<p>".to_string() + &"é".repeat(50);
+        let out = strip_html_to_text(&multibyte, 10);
+        assert_eq!(out, "é".repeat(10));
+    }
+
+    #[test]
+    fn empty_and_malformed_inputs_degrade_cleanly() {
+        assert_eq!(strip_html_to_text("", 4096), "");
+        assert_eq!(strip_html_to_text("<p></p>", 4096), "");
+        // An unterminated tag ends the scan; text before it survives.
+        assert_eq!(strip_html_to_text("keep <p class=\"broken", 4096), "keep");
+        // Unterminated raw-text element swallows the rest.
+        assert_eq!(
+            strip_html_to_text("keep <script>gone forever", 4096),
+            "keep"
         );
     }
 }
