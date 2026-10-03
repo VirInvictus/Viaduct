@@ -35,7 +35,7 @@ use crate::ui::timeline::FeedNameMap;
 /// apply. Consumed by the article pane's per-feed rendering special
 /// cases (NNW #5460).
 pub type FeedUrlMap = Rc<RefCell<HashMap<String, String>>>;
-use crate::ui::tree::TreeController;
+use crate::ui::tree::{TreeController, TreeNode};
 
 /// Single-flight + dirty flag for unread-count rounds. Distilled from
 /// NNW `04e1a054a` (`Account._fetchAllUnreadCounts`) and `655883214`
@@ -361,6 +361,37 @@ impl SidebarView {
         opml.folders.iter().map(|f| f.name.clone()).collect()
     }
 
+    /// The whole in-memory OPML tree, for callers that need more than
+    /// the folder-name list — the Add Feed dialog's already-subscribed
+    /// check (NNW `7ea15d7f7`) walks folders and standalone feeds.
+    /// `None` before the startup OPML load lands.
+    pub fn opml_snapshot(&self) -> Option<Rc<crate::database::opml::OpmlFile>> {
+        let delegate = self.imp().delegate.get()?;
+        delegate.borrow().opml_file.borrow().clone()
+    }
+
+    /// NNW `b4361413f` (#4221): the folder the Add Feed dialog
+    /// preselects mirrors the current sidebar selection. A selected
+    /// folder selects itself; a selected feed selects its containing
+    /// folder (`containerForNode`: feed → `node.parent`); a
+    /// standalone feed, a smart feed, a group row, or no selection
+    /// means top-level (`None`).
+    pub fn selected_add_feed_folder(&self) -> Option<String> {
+        let selection = self.selection();
+        let item = selection.selected_item()?;
+        let row = item.downcast_ref::<gtk::TreeListRow>()?;
+        let node = row.item().and_downcast::<TreeNode>()?;
+        let selected = node
+            .represented_object()?
+            .downcast_ref::<SidebarItem>()?
+            .clone();
+        let parent = node
+            .parent()
+            .and_then(|p| p.represented_object())
+            .and_then(|obj| obj.downcast_ref::<SidebarItem>().cloned());
+        initial_add_feed_folder(&selected, parent.as_ref())
+    }
+
     /// Flip the sync button between its icon and an in-progress spinner.
     /// Paired with refresh start / completion in `ViaductWindow::act_refresh`.
     pub fn set_refresh_in_progress(&self, on: bool) {
@@ -618,6 +649,29 @@ fn display_name_for_feed(feed: &crate::models::Feed) -> String {
     feed.url.clone()
 }
 
+/// Pure decision table behind `selected_add_feed_folder` (NNW
+/// `b4361413f`: `containerForNode` plus
+/// `AddFeedDefaultContainer.substituteContainerIfNeeded`). `parent`
+/// is the tree parent's item, already flattened: the generic root row
+/// downcasts to `None`, which is also what NNW's account container
+/// maps to here — viaduct's account model has no
+/// `.disallowFeedInRootFolder` behavior (local and Inoreader both
+/// allow top-level feeds), so `substituteContainerIfNeeded` never
+/// substitutes and the account means top-level. NNW falls back to its
+/// last-used default container for smart-feed rows; viaduct's dialog
+/// has no last-used memory, so they fall back to top-level like every
+/// other non-container selection.
+fn initial_add_feed_folder(selected: &SidebarItem, parent: Option<&SidebarItem>) -> Option<String> {
+    match selected {
+        SidebarItem::Folder(folder) => Some(folder.name.clone()),
+        SidebarItem::Feed(_) => match parent {
+            Some(SidebarItem::Folder(folder)) => Some(folder.name.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Walk the sidebar list view's child widget tree from the click
 /// coordinates up to the first ancestor that has `viaduct-sidebar-item`
 /// data attached during the row factory's `connect_bind`. Used by the
@@ -639,6 +693,78 @@ fn pick_sidebar_item_at(listview: &gtk::Widget, x: f64, y: f64) -> Option<Sideba
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{Feed, Folder};
+
+    fn feed(id: &str) -> Feed {
+        Feed {
+            id: id.to_string(),
+            url: format!("https://example.com/{id}.xml"),
+            name: None,
+            edited_name: None,
+            home_page_url: None,
+        }
+    }
+
+    fn folder(name: &str, feed_ids: &[&str]) -> Folder {
+        Folder {
+            name: name.to_string(),
+            feeds: feed_ids.iter().map(|id| feed(id)).collect(),
+        }
+    }
+
+    #[test]
+    fn initial_folder_selected_folder_selects_itself() {
+        let selected = SidebarItem::Folder(folder("News", &["f1"]));
+        assert_eq!(
+            initial_add_feed_folder(&selected, None).as_deref(),
+            Some("News")
+        );
+        // NNW ignores the parent for container rows; a folder row
+        // selects itself regardless of what sits above it.
+        let parent = Some(SidebarItem::Folder(folder("Other", &[])));
+        assert_eq!(
+            initial_add_feed_folder(&selected, parent.as_ref()).as_deref(),
+            Some("News")
+        );
+    }
+
+    #[test]
+    fn initial_folder_feed_selects_its_containing_folder() {
+        let selected = SidebarItem::Feed(feed("f1"));
+        let parent = Some(SidebarItem::Folder(folder("News", &["f1"])));
+        assert_eq!(
+            initial_add_feed_folder(&selected, parent.as_ref()).as_deref(),
+            Some("News")
+        );
+    }
+
+    #[test]
+    fn initial_folder_non_container_selections_fall_back_to_top_level() {
+        // Standalone feed: the tree parent is the generic root, which
+        // downcasts to no SidebarItem (NNW: parent container is the
+        // account, and our accounts allow top-level feeds).
+        let selected = SidebarItem::Feed(feed("f1"));
+        assert_eq!(initial_add_feed_folder(&selected, None), None);
+        // Smart feeds and group rows have no container in the tree.
+        let smart = SidebarItem::SmartFeed("Today".to_string());
+        assert_eq!(initial_add_feed_folder(&smart, None), None);
+        let group = SidebarItem::SmartFeedGroup;
+        assert_eq!(initial_add_feed_folder(&group, None), None);
+        let custom = SidebarItem::CustomSmartFeed(crate::smart_feeds::SmartFeed {
+            id: "sf-1".to_string(),
+            name: "SF".to_string(),
+            rules: Default::default(),
+            created_at: chrono::Utc::now(),
+        });
+        assert_eq!(initial_add_feed_folder(&custom, None), None);
+        // A feed whose parent is a non-folder row is not a real
+        // containing folder either.
+        let group_parent = Some(SidebarItem::SmartFeedGroup);
+        assert_eq!(
+            initial_add_feed_folder(&selected, group_parent.as_ref()),
+            None
+        );
+    }
 
     #[test]
     fn unread_count_flight_collapses_a_burst_into_one_round_plus_followup() {

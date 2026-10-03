@@ -21,6 +21,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use viaduct_core::network::feed_discovery;
 
+use crate::database::opml::OpmlFile;
+use crate::models::Feed;
 use crate::ui::rows;
 use crate::ui::window::ViaductWindow;
 
@@ -51,6 +53,14 @@ pub fn present(parent: &ViaductWindow) {
         Some("Where the feed will live in the sidebar"),
         &combo_strs,
     );
+    // NNW `b4361413f` (#4221): the initial folder mirrors the current
+    // sidebar selection (selected feed → its folder; folder → itself;
+    // otherwise top-level). Index +1 skips the "None" row.
+    let initial_folder_index = parent
+        .selected_add_feed_folder_public()
+        .and_then(|name| folder_names.iter().position(|n| *n == name))
+        .map_or(0, |idx| (idx + 1) as u32);
+    folder_drop_down.set_selected(initial_folder_index);
 
     // NewsFlash #905 analog: reader-on-by-default per feed at creation
     // time. Same row copy as the feed-settings dialog so the two
@@ -144,6 +154,18 @@ pub fn present(parent: &ViaductWindow) {
             };
             let reader_on = reader_switch.is_active();
 
+            // NNW `7ea15d7f7` (#3758), site 1: an exact match on the
+            // entered URL short-circuits before discovery — no network
+            // round trip for a feed that's already subscribed.
+            if let Some(opml) = parent.opml_snapshot_public()
+                && let Some(existing) = existing_feed_with_url(&opml, url_input.trim())
+            {
+                let names = containing_folder_names(&opml, &existing.url);
+                status_label.add_css_class("error");
+                status_label.set_text(&already_subscribed_error_text(&names));
+                return;
+            }
+
             *busy.borrow_mut() = true;
             add_btn.set_sensitive(false);
             status_label.set_text("Looking up the feed…");
@@ -197,6 +219,21 @@ pub fn present(parent: &ViaductWindow) {
                 let Some(parent) = parent_for_task.upgrade() else {
                     return;
                 };
+                // NNW `7ea15d7f7` (#3758), site 2: discovery may
+                // canonicalize the URL (redirects, HTML link
+                // resolution), so re-check the resolved feed URL before
+                // the add — the entered URL is not the only key a
+                // subscription can exist under.
+                if let Some(opml) = parent.opml_snapshot_public()
+                    && let Some(existing) = existing_feed_with_url(&opml, &discovered.feed_url)
+                {
+                    let names = containing_folder_names(&opml, &existing.url);
+                    status_inner.add_css_class("error");
+                    status_inner.set_text(&already_subscribed_error_text(&names));
+                    *busy_inner.borrow_mut() = false;
+                    add_btn_inner.set_sensitive(true);
+                    return;
+                }
                 let account = parent.account();
                 let feed_url = discovered.feed_url.clone();
                 let home_page_url = discovered.home_page_url.clone();
@@ -293,4 +330,160 @@ pub fn present(parent: &ViaductWindow) {
 /// we just walk the in-memory sidebar tree the window already has.
 fn list_folder_names(parent: &ViaductWindow) -> Vec<String> {
     parent.list_folder_names_public()
+}
+
+/// Port of NNW `Account.existingFeed(withURL:)` (`7ea15d7f7`): the
+/// already-subscribed lookup. Exact URL match; standalone feeds first,
+/// then every folder — the same walk `Account::remove_feed` uses.
+fn existing_feed_with_url<'a>(opml: &'a OpmlFile, url: &str) -> Option<&'a Feed> {
+    opml.standalone_feeds
+        .iter()
+        .find(|f| f.url == url)
+        .or_else(|| {
+            opml.folders
+                .iter()
+                .flat_map(|folder| folder.feeds.iter())
+                .find(|f| f.url == url)
+        })
+}
+
+/// Port of NNW `Account.existingContainers(withFeed:)`, collapsed to
+/// the part the message can show: the names of the folders containing
+/// the feed, sorted. Top-level membership contributes no name (NNW's
+/// `compactMap { ($0 as? Folder)?.nameForDisplay }` drops the account
+/// the same way), so a feed that lives only at top level yields an
+/// empty list and the generic message. Sorted with byte-order `sort`:
+/// NNW uses `localizedStandardCompare`, which has no stdlib-only Rust
+/// equivalent.
+fn containing_folder_names(opml: &OpmlFile, feed_url: &str) -> Vec<String> {
+    let mut names: Vec<String> = opml
+        .folders
+        .iter()
+        .filter(|folder| folder.feeds.iter().any(|f| f.url == feed_url))
+        .map(|folder| folder.name.clone())
+        .collect();
+    names.sort();
+    names
+}
+
+/// NNW's `quotedNames.formatted(.list(type: .and))` for the en-US
+/// shape the app ships: `“A”`, `“A” and “B”`, `“A”, “B”, and “C”`.
+fn format_name_list(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|n| format!("“{n}”")).collect();
+    match quoted.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {}", rest.join(", "), last),
+    }
+}
+
+/// The already-subscribed status text (NNW `alreadySubscribedErrorText`,
+/// with the follow-up `8795b7926` wording: "added", not "subscribed").
+/// No containing folder resolves to the generic text, exactly upstream.
+fn already_subscribed_error_text(folder_names: &[String]) -> String {
+    if folder_names.is_empty() {
+        return "Can’t add this feed because you’ve already added it.".to_string();
+    }
+    format!(
+        "Can’t add this feed because you’ve already added it in {}.",
+        format_name_list(folder_names)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Folder;
+
+    fn feed(id: &str, url: &str) -> Feed {
+        Feed {
+            id: id.to_string(),
+            url: url.to_string(),
+            name: None,
+            edited_name: None,
+            home_page_url: None,
+        }
+    }
+
+    /// Folders deliberately in reverse alphabetical order so the
+    /// sorted result is distinguishable from OPML order. The same feed
+    /// URL can legitimately live in two containers (`add_feed`'s
+    /// dedupe is container-scoped), so both names must appear.
+    fn opml() -> OpmlFile {
+        OpmlFile {
+            folders: vec![
+                Folder {
+                    name: "Zeta".to_string(),
+                    feeds: vec![feed("f1", "https://example.com/feed.xml")],
+                },
+                Folder {
+                    name: "alpha".to_string(),
+                    feeds: vec![
+                        feed("f2", "https://example.org/atom.xml"),
+                        feed("f3", "https://example.com/feed.xml"),
+                    ],
+                },
+            ],
+            standalone_feeds: vec![feed("f4", "https://standalone.example/rss.xml")],
+        }
+    }
+
+    #[test]
+    fn existing_feed_lookup_finds_standalone_folder_nested_and_nothing() {
+        let opml = opml();
+        let found = existing_feed_with_url(&opml, "https://standalone.example/rss.xml")
+            .expect("standalone feed should match");
+        assert_eq!(found.id, "f4");
+        let found = existing_feed_with_url(&opml, "https://example.org/atom.xml")
+            .expect("folder-nested feed should match");
+        assert_eq!(found.id, "f2");
+        assert!(existing_feed_with_url(&opml, "https://example.com/other.xml").is_none());
+    }
+
+    #[test]
+    fn containing_folders_list_every_copy_sorted() {
+        let opml = opml();
+        // Same URL subscribed in two folders: both names, sorted
+        // (byte-order sorts "Zeta" before lowercase "alpha").
+        assert_eq!(
+            containing_folder_names(&opml, "https://example.com/feed.xml"),
+            vec!["Zeta".to_string(), "alpha".to_string()]
+        );
+        // Top-level-only membership contributes no folder name — the
+        // generic message path.
+        assert!(containing_folder_names(&opml, "https://standalone.example/rss.xml").is_empty());
+        assert!(containing_folder_names(&opml, "https://example.com/other.xml").is_empty());
+    }
+
+    #[test]
+    fn name_list_matches_nnw_list_formatting() {
+        assert_eq!(format_name_list(&[]), "");
+        assert_eq!(format_name_list(&["News".to_string()]), "“News”");
+        assert_eq!(
+            format_name_list(&["News".to_string(), "Reading".to_string()]),
+            "“News” and “Reading”"
+        );
+        assert_eq!(
+            format_name_list(&[
+                "A".to_string(),
+                "B".to_string(),
+                "C".to_string(),
+                "D".to_string()
+            ]),
+            "“A”, “B”, “C”, and “D”"
+        );
+    }
+
+    #[test]
+    fn already_subscribed_text_names_folders_only_when_known() {
+        assert_eq!(
+            already_subscribed_error_text(&[]),
+            "Can’t add this feed because you’ve already added it."
+        );
+        assert_eq!(
+            already_subscribed_error_text(&["News".to_string(), "Reading".to_string()]),
+            "Can’t add this feed because you’ve already added it in “News” and “Reading”."
+        );
+    }
 }

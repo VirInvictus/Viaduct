@@ -388,6 +388,20 @@ impl ViaductWindow {
         self.imp().sidebar_view.get().list_folder_names()
     }
 
+    /// NNW `b4361413f` (#4221): the folder the Add Feed dialog
+    /// preselects mirrors the current sidebar selection. Thin
+    /// pass-through to the `SidebarView` accessor.
+    pub fn selected_add_feed_folder_public(&self) -> Option<String> {
+        self.imp().sidebar_view.get().selected_add_feed_folder()
+    }
+
+    /// Snapshot of the in-memory OPML tree for the Add Feed dialog's
+    /// already-subscribed check (NNW `7ea15d7f7`). `None` before the
+    /// startup load lands; the check then no-ops and the add proceeds.
+    pub fn opml_snapshot_public(&self) -> Option<std::rc::Rc<crate::database::opml::OpmlFile>> {
+        self.imp().sidebar_view.get().opml_snapshot()
+    }
+
     fn wire_models(&self) {
         let imp = self.imp();
 
