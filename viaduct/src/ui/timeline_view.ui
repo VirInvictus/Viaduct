@@ -15,6 +15,19 @@
         <attribute name="target">oldest-first</attribute>
       </item>
     </section>
+    <section>
+      <attribute name="label" translatable="yes">Sort by title</attribute>
+      <item>
+        <attribute name="label" translatable="yes">A to Z</attribute>
+        <attribute name="action">win.timeline-sort</attribute>
+        <attribute name="target">title-ascending</attribute>
+      </item>
+      <item>
+        <attribute name="label" translatable="yes">Z to A</attribute>
+        <attribute name="action">win.timeline-sort</attribute>
+        <attribute name="target">title-descending</attribute>
+      </item>
+    </section>
   </menu>
   <template class="ViaductTimelineView" parent="GtkWidget">
     <child>

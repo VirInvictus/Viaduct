@@ -115,12 +115,13 @@ pub fn install(window: &ViaductWindow, app: &gtk::Application) {
     // v2.6.22: stateful timeline-sort action backing the
     // `view-sort-descending-symbolic` MenuButton in the timeline
     // header. Initial state pulled from `timeline-sort-order`
-    // GSetting; on activate the parameter ("newest-first" /
-    // "oldest-first") is the next state. We propagate the change
-    // back to the GSetting so the choice persists across runs and
-    // any external dconf flip syncs the action state. The window's
-    // sidebar-selection handler reads the GSetting fresh each cycle
-    // (`current_timeline_sort()`), so a flip + reload-current-
+    // GSetting; on activate the parameter is the next state (one of
+    // "newest-first" / "oldest-first" / "title-ascending" /
+    // "title-descending", the four nicks since v4.1.0). We propagate
+    // the change back to the GSetting so the choice persists across
+    // runs and any external dconf flip syncs the action state. The
+    // window's sidebar-selection handler reads the GSetting fresh each
+    // cycle (`current_timeline_sort()`), so a flip + reload-current-
     // timeline picks up the new sort order on the very next click.
     register_stateful_timeline_sort(window);
 
@@ -183,8 +184,9 @@ where
 }
 
 /// v2.6.22: install the `win.timeline-sort` stateful action.
-/// Parameter type `"s"` (a string nick — "newest-first" or
-/// "oldest-first"). Initial state read from the `timeline-sort-order`
+/// Parameter type `"s"` (a string nick — "newest-first" /
+/// "oldest-first" / "title-ascending" / "title-descending" since
+/// v4.1.0). Initial state read from the `timeline-sort-order`
 /// GSetting; activation writes the new state back to the GSetting
 /// and re-fetches the timeline so the user sees the new order
 /// immediately. External flips of the GSetting (dconf, another

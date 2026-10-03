@@ -28,6 +28,8 @@
   <enum id="io.github.virinvictus.Viaduct.TimelineSortOrder">
     <value nick="newest-first" value="0"/>
     <value nick="oldest-first" value="1"/>
+    <value nick="title-ascending" value="2"/>
+    <value nick="title-descending" value="3"/>
   </enum>
 
   <schema id="io.github.virinvictus.Viaduct" path="/io/github/virinvictus/Viaduct/">
@@ -186,12 +188,16 @@
       <default>"newest-first"</default>
       <summary>Timeline article sort order</summary>
       <description>
-        Direction the article timeline is sorted. "newest-first" lists the
+        How the article timeline is sorted. "newest-first" lists the
         most recently published article at the top (default; matches NNW
         and most other readers); "oldest-first" reverses for catch-up
-        reading on a fresh feed. The setting is read every time the
-        timeline reloads so flipping it in the timeline header bar
-        re-sorts immediately.
+        reading on a fresh feed. "title-ascending" and
+        "title-descending" (NNW 70c3ec809) sort alphabetically on the
+        displayed title, with untitled articles falling back to the
+        start of their body text; ties in both title modes break
+        newest-first. The setting is read every time the timeline
+        reloads so flipping it in the timeline header bar re-sorts
+        immediately.
       </description>
     </key>
 

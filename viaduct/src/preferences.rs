@@ -229,12 +229,20 @@ pub fn font_ui(settings: &gio::Settings) -> String {
 /// the headless `SortOrder` enum the DB worker consumes. Defaults to
 /// `NewestFirst` for any unrecognized nick (forward compat if the
 /// schema gains a new value but the binary is older).
+///
+/// v4.1.0: the enum gains the title modes (NNW `70c3ec809`): nick
+/// `title-ascending` / `title-descending` sort alphabetically on the
+/// displayed title, untitled articles falling back to their body
+/// excerpt. Appending to the enum keeps dconf values for the two
+/// original nicks meaningful, so pre-upgrade choices survive.
 pub fn timeline_sort_order(
     settings: &gio::Settings,
 ) -> viaduct_core::database::articles::SortOrder {
     use viaduct_core::database::articles::SortOrder;
     match settings.string(keys::TIMELINE_SORT_ORDER).as_str() {
         "oldest-first" => SortOrder::OldestFirst,
+        "title-ascending" => SortOrder::TitleAscending,
+        "title-descending" => SortOrder::TitleDescending,
         _ => SortOrder::NewestFirst,
     }
 }
@@ -285,3 +293,56 @@ pub fn resolve_article_theme(
 // propagated the article theme's accent into the GTK chrome (v1.2.0), which
 // fought the owned Kanagawa stylesheet. The chrome is now consistently
 // Kanagawa; the article pane keeps its per-theme accent via `render_themed`.
+
+#[cfg(test)]
+mod tests {
+    use super::keys;
+    use gtk::gio;
+    use gtk::prelude::SettingsExt;
+    use viaduct_core::database::articles::SortOrder;
+
+    /// The dialog tests' memory-backend harness, duplicated rather than
+    /// widened across a module boundary for one call site. Asserts instead
+    /// of returning `Option`, so a schema-loading regression fails loudly
+    /// here rather than silently skipping the test.
+    fn test_settings() -> gio::Settings {
+        let source = gio::SettingsSchemaSource::from_directory(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("manifest has a parent")
+                .join("data"),
+            None,
+            true,
+        )
+        .expect("app schema directory loads");
+        let schema = source
+            .lookup(super::APP_ID, true)
+            .expect("timeline-sort-order schema key exists");
+        gio::Settings::new_full(&schema, Some(&gio::memory_settings_backend_new()), None)
+    }
+
+    /// Every nick the schema declares maps to the matching `SortOrder`.
+    /// The forward-compat wildcard (`_ => NewestFirst`) is deliberately
+    /// not exercised: the typed API rejects unknown nicks for enum keys,
+    /// and that arm exists for a newer binary's nick read by this binary,
+    /// which cannot be written through `set_string` at all.
+    #[gtk::test]
+    fn timeline_sort_order_maps_every_schema_nick() {
+        let settings = test_settings();
+        for (nick, expected) in [
+            ("newest-first", SortOrder::NewestFirst),
+            ("oldest-first", SortOrder::OldestFirst),
+            ("title-ascending", SortOrder::TitleAscending),
+            ("title-descending", SortOrder::TitleDescending),
+        ] {
+            settings
+                .set_string(keys::TIMELINE_SORT_ORDER, nick)
+                .expect("nick is schema-valid");
+            assert_eq!(
+                super::timeline_sort_order(&settings),
+                expected,
+                "nick {nick} maps to the wrong variant"
+            );
+        }
+    }
+}

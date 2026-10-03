@@ -53,17 +53,94 @@ fn limit_clause(limit: i64) -> String {
 /// instead of clustering at the NULL end of the list. We keep `rowid`
 /// as the tiebreaker (arrival order) rather than NNW's `articleID`
 /// hash order, which is more meaningful for a local-only store.
+///
+/// v4.1.0: the title variants port NNW `70c3ec809` ("Sort by the
+/// displayed title text so untitled articles sort by their body
+/// excerpt") as a SQL-level sort key: the trimmed `title`, falling
+/// back to a 300-character `content_text` excerpt, then `summary`,
+/// compared case-insensitively (`COLLATE NOCASE`). The excerpt tier
+/// reads plain text derived from the HTML body at ingest
+/// (`parser::html::strip_html_to_text`), the twin of upstream's
+/// at-sort-time `strippingHTML` — without the ingest derivation the
+/// tier is empty for RSS, whose items only ever carried `content_html`.
+/// Divergences from upstream, accepted at the "SQL level where
+/// practical" call: `NOCASE` folds ASCII case only (no locale-aware or
+/// diacritic-insensitive collation exists in SQLite), entities stay as
+/// the feed wrote them rather than being decoded after the strip, and
+/// collation is byte-level `NOCASE` rather than locale-aware. Title
+/// ties break newest-first-then-rowid in *both* directions, matching
+/// upstream's hardcoded `.orderedDescending` date tiebreak. The
+/// timeline cap applies in sort order (the first/last N titles), the
+/// same shape `OldestFirst` has always had: the cap follows the
+/// `ORDER BY`, it never re-scopes the visible set by date.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SortOrder {
     #[default]
     NewestFirst,
     OldestFirst,
+    TitleAscending,
+    TitleDescending,
+}
+
+/// v4.1.0 (NNW `70c3ec809`): the title sort key. The displayed title,
+/// falling back to the body excerpt (`content_text`, capped at 300
+/// characters like upstream's `truncatedSummary`), then `summary`.
+/// `NULLIF(TRIM(...), '')` makes whitespace-only and empty values fall
+/// through to the next source, so only an article with no title and no
+/// readable text sorts as NULL. The `COLLATE NOCASE` rides the whole
+/// expression: it is the collation SQLite uses to compare the key.
+///
+/// `TRIM` here takes an explicit charset — the six ASCII whitespace
+/// characters — because one-argument `TRIM` strips only spaces, while
+/// the Rust twin of this key (`title_sort_key`, used by the
+/// `fetch_by_feeds` merge) trims the same six on both ends: keeping
+/// the two sets identical is what makes a feed view and a folder view
+/// order the same article identically. Trim also runs *before* the
+/// 300-character cut on both sides.
+///
+/// Macros rather than consts because `concat!` only composes literals,
+/// and every rendered clause must stay a `&'static str`.
+macro_rules! title_sort_key {
+    ($p:literal) => {
+        concat!(
+            "COALESCE(NULLIF(TRIM(",
+            $p,
+            "title, ' \t\n\u{0b}\u{0c}\r'), ''), NULLIF(SUBSTR(TRIM(",
+            $p,
+            "content_text, ' \t\n\u{0b}\u{0c}\r'), 1, 300), ''), NULLIF(TRIM(",
+            $p,
+            "summary, ' \t\n\u{0b}\u{0c}\r'), '')) COLLATE NOCASE"
+        )
+    };
+}
+
+/// The full `ORDER BY` tail for a title sort: the key in `$dir`, then
+/// upstream's hardcoded tiebreak — logical date newest-first (both
+/// directions), then rowid — so equal titles stay deterministic.
+macro_rules! title_order_clause {
+    ($p:literal, $dir:literal) => {
+        concat!(
+            "ORDER BY ",
+            title_sort_key!($p),
+            " ",
+            $dir,
+            ", COALESCE(",
+            $p,
+            "date_published, ",
+            $p,
+            "date_modified) DESC, ",
+            $p,
+            "rowid DESC"
+        )
+    };
 }
 
 impl SortOrder {
     /// Render to the SQL `ORDER BY` tail. Includes the `rowid`
     /// secondary key so two articles with the same logical date still
-    /// have a deterministic order.
+    /// have a deterministic order. Title sorts tie on the logical date
+    /// newest-first in both directions (upstream `70c3ec809` hardcodes
+    /// `.orderedDescending` for the title tiebreak), then rowid.
     pub fn order_by_clause(&self) -> &'static str {
         match self {
             SortOrder::NewestFirst => {
@@ -72,6 +149,8 @@ impl SortOrder {
             SortOrder::OldestFirst => {
                 "ORDER BY COALESCE(date_published, date_modified) ASC, rowid ASC"
             }
+            SortOrder::TitleAscending => title_order_clause!("", "ASC"),
+            SortOrder::TitleDescending => title_order_clause!("", "DESC"),
         }
     }
 
@@ -85,6 +164,8 @@ impl SortOrder {
             SortOrder::OldestFirst => {
                 "ORDER BY COALESCE(a.date_published, a.date_modified) ASC, a.rowid ASC"
             }
+            SortOrder::TitleAscending => title_order_clause!("a.", "ASC"),
+            SortOrder::TitleDescending => title_order_clause!("a.", "DESC"),
         }
     }
 }
@@ -725,16 +806,75 @@ fn fetch_by_feeds(
     // Comparator branches on `sort` since `Reverse` only flips for
     // newest-first. Keyed on the same logical date as the SQL ORDER BY
     // (v2.8.1): `date_published`, falling back to `date_modified`.
+    // v4.1.0: title sorts merge on the Rust twin of the SQL title key;
+    // the stable sort keeps SQL chunk order for exact ties, which is
+    // already title-then-date-then-rowid within each chunk.
+    // `sort_by_cached_key` because the title key allocates (trim +
+    // lowercase + String); computing it once per element keeps the
+    // merge O(n log n) comparisons over precomputed keys.
     match sort {
         SortOrder::NewestFirst => {
             articles.sort_by_key(|a| std::cmp::Reverse(a.date_published.or(a.date_modified)))
         }
         SortOrder::OldestFirst => articles.sort_by_key(|a| a.date_published.or(a.date_modified)),
+        SortOrder::TitleAscending => articles.sort_by_cached_key(|a| {
+            (
+                title_sort_key(a),
+                std::cmp::Reverse(a.date_published.or(a.date_modified)),
+            )
+        }),
+        SortOrder::TitleDescending => articles.sort_by_cached_key(|a| {
+            (
+                std::cmp::Reverse(title_sort_key(a)),
+                std::cmp::Reverse(a.date_published.or(a.date_modified)),
+            )
+        }),
     }
     if limit > 0 {
         articles.truncate(limit as usize);
     }
     Ok(articles)
+}
+
+/// v4.1.0: Rust twin of the SQL title sort key (`title_sort_key!`),
+/// used by the `fetch_by_feeds` merge where the comparison happens in
+/// memory. Same source precedence — trimmed `title`, `content_text`
+/// excerpt capped at 300 chars, `summary`, then the empty string — with
+/// `to_lowercase()` standing in for `COLLATE NOCASE` (Unicode-full
+/// here, ASCII-only in SQLite; the merge re-sorts globally, so the
+/// fold width only ever decides which of two case-variant equal keys
+/// stays in SQL chunk order). The trim set is the same six ASCII
+/// whitespace characters the SQL `TRIM(x, …)` charset names: keeping
+/// the two identical is what makes a feed view and a folder view order
+/// the same article identically.
+fn title_sort_key(a: &Article) -> String {
+    fn trim6(s: &str) -> &str {
+        s.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\u{0b}' | '\u{0c}' | '\r'))
+    }
+    fn nonempty(s: &str) -> Option<&str> {
+        let trimmed = trim6(s);
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+    fn excerpt(s: &str) -> String {
+        let trimmed = trim6(s);
+        match trimmed.char_indices().nth(300) {
+            Some((idx, _)) => trimmed[..idx].to_string(),
+            None => trimmed.to_string(),
+        }
+    }
+    let key = a
+        .title
+        .as_deref()
+        .and_then(nonempty)
+        .map(str::to_string)
+        .or_else(|| a.content_text.as_deref().and_then(nonempty).map(excerpt))
+        .or_else(|| a.summary.as_deref().and_then(nonempty).map(str::to_string))
+        .unwrap_or_default();
+    key.to_lowercase()
 }
 
 fn fetch_by_article_id(conn: &mut Connection, article_id: &str) -> Result<Option<Article>> {
@@ -2226,5 +2366,575 @@ mod tests {
         // Logical-date order: 1h, 3h (via date_modified), 5h. Before the
         // coalesce, "modified-only" had a NULL key and sorted last.
         assert_eq!(titles, vec!["recent", "modified-only", "oldest"]);
+    }
+
+    // ---- v4.1.0: title sort (NNW 70c3ec809) ----
+
+    /// Seed helper for the title-sort tests: full control over the four
+    /// fields the sort key reads (title / content_text / summary / the
+    /// logical date). `content_text` stays exactly what is given —
+    /// unlike `item()`, nothing derives it from `content_html`.
+    fn sort_item(
+        id: &str,
+        title: Option<&str>,
+        content_text: Option<&str>,
+        summary: Option<&str>,
+        published: Option<chrono::DateTime<Utc>>,
+    ) -> ParsedItem {
+        ParsedItem {
+            id: id.to_string(),
+            title: title.map(str::to_string),
+            content_html: None,
+            content_text: content_text.map(str::to_string),
+            url: None,
+            external_url: None,
+            summary: summary.map(str::to_string),
+            image_url: None,
+            date_published: published,
+            date_modified: None,
+            authors: Vec::new(),
+            attachments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn title_sort_orders_displayed_titles_case_insensitively() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        let base = Utc::now();
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![
+                sort_item(
+                    "z",
+                    Some("  Zebra  "),
+                    None,
+                    None,
+                    Some(base - Duration::hours(1)),
+                ),
+                sort_item(
+                    "a",
+                    Some("apple"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(2)),
+                ),
+                sort_item(
+                    "b",
+                    Some("Banana"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(3)),
+                ),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        // `COLLATE NOCASE` folds case for the comparison; the stored
+        // title keeps its original spacing (TRIM shapes the key only).
+        let titles_asc: Vec<String> =
+            fetch_by_feed(&mut conn, feed_id, SortOrder::TitleAscending, 0)
+                .unwrap()
+                .into_iter()
+                .filter_map(|a| a.title)
+                .collect();
+        assert_eq!(titles_asc, vec!["apple", "Banana", "  Zebra  "]);
+
+        let titles_desc: Vec<String> =
+            fetch_by_feed(&mut conn, feed_id, SortOrder::TitleDescending, 0)
+                .unwrap()
+                .into_iter()
+                .filter_map(|a| a.title)
+                .collect();
+        assert_eq!(titles_desc, vec!["  Zebra  ", "Banana", "apple"]);
+    }
+
+    #[test]
+    fn title_sort_falls_back_to_excerpt_then_summary() {
+        // NNW 70c3ec809: an untitled article sorts by the start of its
+        // body; a bodyless one by its summary; one with nothing readable
+        // sorts as NULL (first ascending, last descending, like the
+        // empty string does upstream).
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        let base = Utc::now();
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![
+                sort_item(
+                    "n1",
+                    None,
+                    Some("walnut body"),
+                    None,
+                    Some(base - Duration::hours(1)),
+                ),
+                sort_item(
+                    "n2",
+                    Some(""),
+                    None,
+                    Some("mango summary"),
+                    Some(base - Duration::hours(2)),
+                ),
+                sort_item(
+                    "n3",
+                    None,
+                    Some("   "),
+                    Some("kiwi summary"),
+                    Some(base - Duration::hours(3)),
+                ),
+                sort_item("n4", None, None, None, Some(base - Duration::hours(4))),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        let mut labels = |sort: SortOrder| -> Vec<String> {
+            fetch_by_feed(&mut conn, feed_id, sort, 0)
+                .unwrap()
+                .into_iter()
+                .map(|a| {
+                    a.summary
+                        .or(a.content_text)
+                        .unwrap_or_else(|| "none".to_string())
+                })
+                .collect()
+        };
+        assert_eq!(
+            labels(SortOrder::TitleAscending),
+            vec![
+                "none".to_string(),
+                "kiwi summary".to_string(),
+                "mango summary".to_string(),
+                "walnut body".to_string()
+            ]
+        );
+        assert_eq!(
+            labels(SortOrder::TitleDescending),
+            vec!["walnut body", "mango summary", "kiwi summary", "none"]
+        );
+    }
+
+    #[test]
+    fn title_sort_excerpt_caps_at_300_characters_then_ties_by_date() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        let base = Utc::now();
+        // long1 and long2 share their first 300 characters, so the SQL
+        // excerpt key cannot tell them apart: the tie falls to the
+        // logical date, newest first. `other` differs inside the window
+        // and sorts by its excerpt.
+        let long1 = "x".repeat(320);
+        let long2 = format!("{}{}", "x".repeat(300), "y".repeat(20));
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![
+                sort_item(
+                    "long1",
+                    None,
+                    Some(&long1),
+                    None,
+                    Some(base - Duration::hours(2)),
+                ),
+                sort_item(
+                    "long2",
+                    None,
+                    Some(&long2),
+                    None,
+                    Some(base - Duration::hours(1)),
+                ),
+                sort_item(
+                    "other",
+                    None,
+                    Some(&"a".repeat(50)),
+                    None,
+                    Some(base - Duration::hours(3)),
+                ),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        let bodies: Vec<String> = fetch_by_feed(&mut conn, feed_id, SortOrder::TitleAscending, 0)
+            .unwrap()
+            .into_iter()
+            .filter_map(|a| a.content_text)
+            .collect();
+        assert_eq!(bodies, vec!["a".repeat(50), long2, long1]);
+    }
+
+    #[test]
+    fn title_sort_ties_break_newest_first_in_both_directions() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        let base = Utc::now();
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![
+                sort_item(
+                    "old-same",
+                    Some("Same"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(2)),
+                ),
+                sort_item(
+                    "new-same",
+                    Some("Same"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(1)),
+                ),
+                sort_item(
+                    "alpha",
+                    Some("Alpha"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(3)),
+                ),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        let mut order = |sort: SortOrder| -> Vec<i64> {
+            fetch_by_feed(&mut conn, feed_id, sort, 0)
+                .unwrap()
+                .into_iter()
+                .map(|a| a.date_published.unwrap().timestamp())
+                .collect()
+        };
+        // Upstream hardcodes `.orderedDescending` for the title tiebreak,
+        // so equal titles sit newest-first under A to Z and Z to A alike.
+        assert_eq!(
+            order(SortOrder::TitleAscending)[1],
+            (base - Duration::hours(1)).timestamp()
+        );
+        assert_eq!(
+            order(SortOrder::TitleAscending)[2],
+            (base - Duration::hours(2)).timestamp()
+        );
+        assert_eq!(
+            order(SortOrder::TitleDescending)[0],
+            (base - Duration::hours(1)).timestamp()
+        );
+        assert_eq!(
+            order(SortOrder::TitleDescending)[1],
+            (base - Duration::hours(2)).timestamp()
+        );
+    }
+
+    #[test]
+    fn title_sort_runs_on_the_joined_queries() {
+        // The unread / starred / today queries order through the `a.`
+        // aliased clause across the articles ↔ statuses join; this pins
+        // that the title key renders and executes there (an ambiguous or
+        // misspelled column would fail the prepare, not silently sort).
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/feed";
+        let base = Utc::now();
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![
+                sort_item(
+                    "c",
+                    Some("Cherry"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(1)),
+                ),
+                sort_item(
+                    "a",
+                    Some("Apple"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(2)),
+                ),
+                sort_item(
+                    "b",
+                    Some("banana"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(3)),
+                ),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        let unread: Vec<String> = fetch_unread(&mut conn, SortOrder::TitleAscending, 0)
+            .unwrap()
+            .into_iter()
+            .filter_map(|a| a.title)
+            .collect();
+        assert_eq!(unread, vec!["Apple", "banana", "Cherry"]);
+
+        conn.execute(
+            "UPDATE statuses SET read = 1 WHERE article_id = ?",
+            params![article_id_for(feed_id, "a")],
+        )
+        .unwrap();
+        let unread_after: Vec<String> = fetch_unread(&mut conn, SortOrder::TitleAscending, 0)
+            .unwrap()
+            .into_iter()
+            .filter_map(|a| a.title)
+            .collect();
+        assert_eq!(unread_after, vec!["banana", "Cherry"]);
+
+        conn.execute(
+            "UPDATE statuses SET starred = 1 WHERE article_id = ?",
+            params![article_id_for(feed_id, "c")],
+        )
+        .unwrap();
+        let starred: Vec<String> = fetch_starred(&mut conn, SortOrder::TitleDescending, 0)
+            .unwrap()
+            .into_iter()
+            .filter_map(|a| a.title)
+            .collect();
+        assert_eq!(starred, vec!["Cherry"]);
+
+        // Today shares the OR-window WHERE with the aliased title clause,
+        // and like the Today smart feed generally it is not read-filtered,
+        // so the read article still appears — ordered by title with the
+        // rest.
+        let today: Vec<String> = fetch_today(&mut conn, SortOrder::TitleAscending, 0)
+            .unwrap()
+            .into_iter()
+            .filter_map(|a| a.title)
+            .collect();
+        assert_eq!(today, vec!["Apple", "banana", "Cherry"]);
+    }
+
+    #[test]
+    fn fetch_by_feeds_merges_title_order_across_feeds() {
+        let mut conn = in_memory();
+        let feed_a = "https://example.com/a";
+        let feed_b = "https://example.com/b";
+        let base = Utc::now();
+        update_feed(
+            &mut conn,
+            feed_a,
+            vec![
+                sort_item(
+                    "f",
+                    Some("Fig"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(1)),
+                ),
+                sort_item(
+                    "c",
+                    Some("Cherry"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(2)),
+                ),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+        update_feed(
+            &mut conn,
+            feed_b,
+            vec![
+                sort_item(
+                    "e",
+                    Some("Elderberry"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(3)),
+                ),
+                sort_item(
+                    "d",
+                    Some("Date"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(4)),
+                ),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        let mut titles = |sort: SortOrder, limit: i64| -> Vec<String> {
+            fetch_by_feeds(
+                &mut conn,
+                &[feed_a.to_string(), feed_b.to_string()],
+                sort,
+                limit,
+            )
+            .unwrap()
+            .into_iter()
+            .filter_map(|a| a.title)
+            .collect()
+        };
+        // The merge comparator re-sorts the concatenated chunks globally,
+        // so the interleaved per-feed rows come out in one title order.
+        assert_eq!(
+            titles(SortOrder::TitleAscending, 0),
+            vec!["Cherry", "Date", "Elderberry", "Fig"]
+        );
+        assert_eq!(
+            titles(SortOrder::TitleDescending, 0),
+            vec!["Fig", "Elderberry", "Date", "Cherry"]
+        );
+        // The cap applies in sort order, as it always has for the date
+        // sorts: the first/last N titles, not a date-scoped subset.
+        assert_eq!(
+            titles(SortOrder::TitleAscending, 3),
+            vec!["Cherry", "Date", "Elderberry"]
+        );
+    }
+
+    #[test]
+    fn title_sort_key_rust_twin_matches_sql_precedence() {
+        let mk = |title: Option<&str>, content_text: Option<&str>, summary: Option<&str>| Article {
+            article_id: "id".to_string(),
+            feed_id: "feed".to_string(),
+            title: title.map(str::to_string),
+            content_html: None,
+            content_text: content_text.map(str::to_string),
+            url: None,
+            external_url: None,
+            summary: summary.map(str::to_string),
+            image_url: None,
+            date_published: None,
+            date_modified: None,
+            authors: Vec::new(),
+            attachments: Vec::new(),
+        };
+
+        // Title wins, trimmed and folded.
+        assert_eq!(
+            title_sort_key(&mk(Some("  Mixed Case "), None, None)),
+            "mixed case"
+        );
+        // Untitled falls to the content_text excerpt, trimmed and capped.
+        let body = format!("{}tail", "b".repeat(320));
+        assert_eq!(
+            title_sort_key(&mk(None, Some(&body), None)),
+            "b".repeat(300)
+        );
+        // Whitespace-only content falls through to the summary.
+        assert_eq!(
+            title_sort_key(&mk(None, Some("   "), Some("Summary"))),
+            "summary"
+        );
+        // The trim set is the six ASCII whitespace characters, matching
+        // the SQL TRIM charset: leading newlines trim like spaces do.
+        assert_eq!(
+            title_sort_key(&mk(None, Some("\n\n spaced \r"), None)),
+            "spaced"
+        );
+        // Nothing readable: the empty string, like the SQL NULL/'' key.
+        assert_eq!(title_sort_key(&mk(None, None, None)), "");
+        // The cap cuts on a char boundary, not mid-codepoint.
+        let multibyte = "é".repeat(400);
+        assert_eq!(
+            title_sort_key(&mk(None, Some(&multibyte), None)),
+            "é".repeat(300)
+        );
+    }
+
+    #[test]
+    fn title_sort_orders_identically_in_feed_and_folder_views() {
+        // The SQL key (single-feed view) and the Rust twin (the
+        // fetch_by_feeds merge) must trim the same whitespace set, or a
+        // body with leading newlines orders differently depending on
+        // which view shows it: pre-alignment, the one-argument SQL TRIM
+        // stripped only spaces, so the raw key "\n\n alpha body" (0x0A
+        // sorts before every letter) landed first in the feed view while
+        // the merged folder view interleaved it alphabetically.
+        let mut conn = in_memory();
+        let feed_a = "https://example.com/a";
+        let feed_b = "https://example.com/b";
+        let base = Utc::now();
+        update_feed(
+            &mut conn,
+            feed_a,
+            vec![
+                sort_item(
+                    "x",
+                    None,
+                    Some("\n\n alpha body"),
+                    None,
+                    Some(base - Duration::hours(2)),
+                ),
+                sort_item(
+                    "a2",
+                    None,
+                    Some("aardvark"),
+                    None,
+                    Some(base - Duration::hours(3)),
+                ),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+        update_feed(
+            &mut conn,
+            feed_b,
+            vec![sort_item(
+                "y",
+                None,
+                Some("alpha body"),
+                None,
+                Some(base - Duration::hours(1)),
+            )],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+
+        // Single-feed view: the newline-prefixed body trims to
+        // "alpha body", so it sorts after "aardvark" rather than first.
+        let feed_view: Vec<Option<String>> =
+            fetch_by_feed(&mut conn, feed_a, SortOrder::TitleAscending, 0)
+                .unwrap()
+                .into_iter()
+                .map(|a| a.content_text)
+                .collect();
+        assert_eq!(
+            feed_view,
+            vec![
+                Some("aardvark".to_string()),
+                Some("\n\n alpha body".to_string())
+            ]
+        );
+
+        // Folder view: the same pair lands in the same relative order.
+        // Both x and y key as "alpha body", so the tie breaks
+        // newest-first: y (1h) before x (2h), after "aardvark".
+        let folder_view: Vec<Option<String>> = fetch_by_feeds(
+            &mut conn,
+            &[feed_a.to_string(), feed_b.to_string()],
+            SortOrder::TitleAscending,
+            0,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|a| a.content_text)
+        .collect();
+        assert_eq!(
+            folder_view,
+            vec![
+                Some("aardvark".to_string()),
+                Some("alpha body".to_string()),
+                Some("\n\n alpha body".to_string())
+            ]
+        );
     }
 }
