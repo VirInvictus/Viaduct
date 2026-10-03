@@ -35,6 +35,9 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="4.2.0" date="2026-10-02">
+      <description><p>Add Feed: the folder picker opens on the sidebar's current selection, and subscribing to a feed that's already added names the folder(s) it lives in</p></description>
+    </release>
     <release version="4.1.0" date="2026-10-02">
       <description><p>Sort Articles By: title sorting with a body-excerpt fallback for untitled articles; RSS and Atom bodies are now stored as text, which lights up full-text search and BodyContains smart feeds for those feeds</p></description>
     </release>
