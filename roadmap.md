@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.0.4.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.2.0.
 
 ---
 
@@ -365,6 +365,19 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [x] **Add-feed "open in Reader View by default" toggle** *(shipped v3.1.0, 2026-08-08)*. We already persisted `reader_view_always_enabled` per feed; NewsFlash exposes the equivalent as a checkbox in its add-feed dialog (#905). A `rows::switch_row` in `add_feed_dialog.rs` (same copy as the feed-settings dialog) now sets it at creation time, upserted before the feed's first refresh so the refresher's settings writes can't race the fresh row. Default off, matching the DB default. Verified live: dialog renders and the switch defaults off.
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
+
+## Upstream Sync Candidates (October 4, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `8c322c287` (+5 commits over `eb398b9ab`, Oct 2 – Oct 4; the first weekly-automation window). A quiet post-release weekend upstream: **nothing ports and no new candidates are recorded.** The triage, kept so nobody re-derives it:
+
+- `24b2b1f56` (#4860, render youtube.com-linked articles with netnewswire.com as base URL so embeds play): exists to make in-pane YouTube embeds work under a JS-enabled WebView. Our article pane is JS-off with ammonia-stripped markup under the §7.4 lockdown and plays video through the dedicated dialog WebView instead, so there is no in-pane embed for a Referer trick to fix.
+- `8c322c287` (#5451, "Loading..." → "Loading…"): upstream's WebKit `loadingHTML` placeholder. Our loading/empty states are GTK-side status pages with their own copy; no counterpart string exists.
+- `851437935` / `47b9f61da` (wording sweeps: "ingest" rename, "syndication feed" → "feed"): landed in iOS and Feedly files; no viaduct counterpart copy.
+- `193da682b` (iOS MainTimelineModernViewController rename) and the Feedly folder-reconciliation cluster: iOS churn and a remote we don't support per §7.3.
+
+Also riding this window: the roadmap "Updated as of" stamp was found still at v4.0.4 (the v4.0.5–v4.2.0 releases bumped every other carrier but this one) and re-synced to v4.2.0.
+
+---
 
 ## Upstream Sync Candidates (October 2, 2026)
 

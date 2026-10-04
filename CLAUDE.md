@@ -31,6 +31,25 @@ Current version: **v4.2.0**; the version-by-version prose in this file stops at 
 
 A full clone of NetNewsWire lives at `.netnewswire/` in this repo. **It is already there: do not re-clone, re-download, or `git submodule add` it.** Treat it as read-only reference material.
 
+> **Note on Latest Upstream Sync (October 4, 2026):**
+> The `.netnewswire` reference folder has been fast-forwarded to `8c322c287`
+> (+5 commits over the prior `eb398b9ab` sync; Oct 2 – Oct 4, the first
+> weekly-automation window). A quiet post-release weekend: **nothing ports.**
+> *   **Skipped:** the YouTube base-URL special case (`24b2b1f56`, #4860:
+>     renders youtube.com-linked articles with netnewswire.com as base URL so
+>     embeds play) exists to make in-pane embeds work in a JS-enabled WebView;
+>     our pane is JS-off with ammonia-stripped markup per §7.4 and plays video
+>     through the dedicated dialog WebView, so there is no in-pane embed to
+>     fix. The ellipsis loading-placeholder fix (`8c322c287`, #5451) targets
+>     upstream's WebKit `loadingHTML`, which we have no counterpart for (our
+>     loading/empty states are GTK status pages). The "ingest"/"syndication
+>     feed" wording sweeps (`851437935`, `47b9f61da`) landed in iOS and Feedly
+>     files. The remaining commits are an iOS view-controller rename and the
+>     Feedly folder-reconciliation cluster (§7.3 remote, out of scope).
+>
+> **Companion clones:** `.newsflash` and `.liferea` were not reviewed
+> (weekly-sync charter: NNW only).
+
 > **Note on Latest Upstream Sync (October 2, 2026):**
 > The `.netnewswire` reference folder has been fast-forwarded to `eb398b9ab`
 > (+135 commits over the prior `dc74019c2` sync; Sep 15 – Oct 2, the
