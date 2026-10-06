@@ -1,5 +1,15 @@
 # viaduct: Patch Notes
 
+## Unreleased
+
+- **vir-gtk adopted at 1.4.3** (consumer wave, lock bump only): a
+  presented `Alert` now keeps answering after the caller drops the
+  Alert value - the response state anchors to the dialog window, where
+  1.4.2 let it die with the struct and left fire-and-forget dialogs
+  with dead buttons (found live in Quire's discard guard). No Viaduct
+  code changes; workspace suite 288 green. `data/cargo-sources.json`
+  regenerated against the moved lock in the same commit.
+
 ## v4.2.0: the Add Feed UX pair (2026-10-02)
 
 The two Add Feed dialog refinements from the October 2 sync's deferred list (NNW `b4361413f` #4221, `7ea15d7f7` #3758, plus `8795b7926`'s wording pass). The existing discovery flow is untouched. 288 tests; clippy `-D warnings` clean.
