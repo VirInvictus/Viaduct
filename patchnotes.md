@@ -1,14 +1,12 @@
 # viaduct: Patch Notes
 
-## Unreleased
+## v4.2.1: CJK text-autospace, a Tiqoe Dark sync, and the vir-gtk 1.4.3 wave (2026-10-09)
 
-- **vir-gtk adopted at 1.4.3** (consumer wave, lock bump only): a
-  presented `Alert` now keeps answering after the caller drops the
-  Alert value - the response state anchors to the dialog window, where
-  1.4.2 let it die with the struct and left fire-and-forget dialogs
-  with dead buttons (found live in Quire's discard guard). No Viaduct
-  code changes; workspace suite 288 green. `data/cargo-sources.json`
-  regenerated against the moved lock in the same commit.
+Two ports from the October 9 NetNewsWire sync (`8c322c287` to `7cd2e4f31`, +231 commits), plus the sitting vir-gtk consumer wave. 288 tests; clippy `-D warnings` clean.
+
+- **Added:** `text-autospace: normal` on the article title, dateline, and body classes (NNW `22162140b`): on WebKit builds with the property, mixed CJK and Latin text gets the customary hair space between scripts instead of the scripts jamming together. Upstream ships the rule in its base article stylesheet (`Shared/Article Rendering/stylesheet.css`), which we don't bundle, so it rides the pane override stylesheet; where the property is unsupported the declaration drops out inertly.
+- **Changed:** the bundled Tiqoe Dark theme is synced to upstream's latest (NNW `34e4d0683` comment typo, `558a7cac9` PBS Newshour funding-invite hide for Reader View, `1da8eb594` `overflow-x: auto` for WordPress math blocks and SVG wrappers): byte-identical with upstream. The other seven themes verified unchanged this window.
+- **Changed:** vir-gtk adopted at 1.4.3 (consumer wave, lock bump only): a presented `Alert` now keeps answering after the caller drops the Alert value; the response state anchors to the dialog window, where 1.4.2 let it die with the struct and left fire-and-forget dialogs with dead buttons (found live in Quire's discard guard). No Viaduct code changes; `data/cargo-sources.json` regenerated against the moved lock.
 
 ## v4.2.0: the Add Feed UX pair (2026-10-02)
 

@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.2.0.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.2.1.
 
 ---
 
@@ -365,6 +365,29 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [x] **Add-feed "open in Reader View by default" toggle** *(shipped v3.1.0, 2026-08-08)*. We already persisted `reader_view_always_enabled` per feed; NewsFlash exposes the equivalent as a checkbox in its add-feed dialog (#905). A `rows::switch_row` in `add_feed_dialog.rs` (same copy as the feed-settings dialog) now sets it at creation time, upserted before the feed's first refresh so the refresher's settings writes can't race the fresh row. Default off, matching the DB default. Verified live: dialog renders and the switch defaults off.
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
+
+## Upstream Sync Candidates (October 9, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `7cd2e4f31` (+231 commits over `8c322c287`, Oct 4 – Oct 9; the `mac-7.2b` / `iOS-7.2` line plus 7.0.4 backports); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `CLAUDE.md` §2 for the sync note. The bulk is iOS/Mac UI churn and build scripts; none of RSParser, ArticlesDatabase, Account, RSWeb, or RSDatabase moved. Two ports shipped in v4.2.1.
+
+### Ported from NetNewsWire
+
+- [x] **CJK text-autospace** (NNW `22162140b`) *(shipped v4.2.1)*. `text-autospace: normal` on `.articleTitle` / `.articleDateline` / `.articleDatelineTitle` / `.articleBody`, from upstream's base article stylesheet (`Shared/Article Rendering/stylesheet.css`, which we don't bundle) into our `VIADUCT_PANE_OVERRIDE_CSS`, the tab-size precedent. Inserts the customary hair space between CJK and Latin scripts; inert where WebKit lacks the property.
+- [x] **Tiqoe Dark stylesheet sync** (NNW `34e4d0683`, `558a7cac9`, `1da8eb594`) *(shipped v4.2.1)*. Byte-identical fast-forward: a PBS Newshour funding-invite hide for Reader View, `overflow-x: auto` for WordPress math blocks and SVG wrappers, and a comment typo. The other seven themes verified unchanged this window (newsfax/promenade keep only their recorded newsfoot divergences). Watch: these fixes are Tiqoe-scoped upstream; when they generalize to core.css or the other themes, our copies follow.
+
+### Deferred candidates (not yet ported)
+
+- [ ] **UnreadCountDisplay preference** (NNW `c71be4919`, `6f7830904` + the Mac `UnreadCountView` and iOS views). Upstream added a three-mode setting for how unread counts render: the number, a dot, or nothing. Our counterpart surface: a new GSetting (following the `preferences.rs` conventions and the gschema's existing enums), a combo row in the preferences dialog, and `TreeNode`/sidebar-row rendering honoring the mode (the badge label becomes a dot or disappears; folder/group aggregation is untouched, only presentation). Small feature with a design-adjacent edge (what a dot means on rows with zero unread), hence deferred rather than ported as a fix.
+
+### Watch / inapplicable (this window)
+
+- FeedFinder non-feed-extension filter (`383e46f28`, #5471): stops NNW's keyword-guess heuristic from downloading .pdf/.mov candidate links; our discovery follows typed `rel=alternate` links only, so there is no heuristic to filter. If a keyword-heuristic discovery mode is ever adopted (upstream's `HTMLFeedFinder` guesses feed URLs from any matching link), bring this filter with it.
+- Substack footnote popovers (`f28d204c1`, newsfoot.js) and the runaway-JavaScript fix (`5b0957be4`, main.js): JS never runs under the §7.4 CSP.
+- WKWebView fullscreen (`302c0b84e`): Apple platform plumbing.
+- SyncStatusTable test removal (`8cff640ec`): tests-only, no source change.
+- iOS 17 deployment floor (`4a2c62cc6`): packaging.
+
+---
 
 ## Upstream Sync Candidates (October 4, 2026)
 

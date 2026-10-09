@@ -82,6 +82,13 @@ html {\n\
 pre, code {\n\
   tab-size: 4;\n\
 }\n\
+/* NNW `22162140b`: `text-autospace: normal` inserts the customary hair\n\
+ * space between CJK and Latin characters. Upstream ships it in core.css,\n\
+ * which we don't bundle, so the rule rides the pane override. On WebKit\n\
+ * builds without the property the declaration drops out. */\n\
+.articleTitle, .articleDateline, .articleDatelineTitle, .articleBody {\n\
+  text-autospace: normal;\n\
+}\n\
 /* v2.0.0-pre6: thinner scrollbar driven by `currentColor` so the\n\
  * thumb adopts the page's text color (which respects\n\
  * `prefers-color-scheme` already) — closer to libadwaita's overlay\n\

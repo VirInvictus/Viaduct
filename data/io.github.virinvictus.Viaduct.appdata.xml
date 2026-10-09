@@ -35,6 +35,9 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="4.2.1" date="2026-10-09">
+      <description><p>CJK text-autospace, a Tiqoe Dark sync, and the vir-gtk 1.4.3 wave</p></description>
+    </release>
     <release version="4.2.0" date="2026-10-02">
       <description><p>Add Feed: the folder picker opens on the sidebar's current selection, and subscribing to a feed that's already added names the folder(s) it lives in</p></description>
     </release>
