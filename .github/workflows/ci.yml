@@ -27,7 +27,11 @@ jobs:
     # Fedora carries a new-enough GTK, and the same container pattern is
     # already proven in Atrium and Colophon. rusqlite is bundled, so it
     # compiles from source and needs only a C toolchain.
-    container: fedora:43
+    # Fedora's own registry rather than Docker Hub: the Hub's anonymous
+    # pull rate limit is shared across all GitHub runner IPs and started
+    # 429ing the job before a single step could run (2026-10-09, the
+    # v4.3.0 release push). Same image, canonical source, no limit.
+    container: registry.fedoraproject.org/fedora:43
     steps:
       - name: Install system dependencies
         # --disablerepo=fedora-cisco-openh264: webkitgtk6.0-devel pulls
