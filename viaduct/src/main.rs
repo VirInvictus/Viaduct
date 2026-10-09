@@ -83,6 +83,18 @@ fn main() -> glib::ExitCode {
         // installed.
         tracing::warn!(?err, "failed to install bundled icons");
     }
+    // Register the bundled icon GResource (compiled in `build.rs`). The
+    // Conservatory lesson: under an overridden XDG root or a theme that
+    // ships none of the stock names, the header/pane buttons rendered
+    // image-missing boxes because every theme search path was hidden.
+    // The bundle backstops the fallthrough; a theme that carries a name
+    // still wins, so kora-style setups render exactly as before.
+    match gtk::gio::Resource::from_data(&glib::Bytes::from_static(
+        include_bytes!(concat!(env!("OUT_DIR"), "/viaduct-icons.gresource")).as_slice(),
+    )) {
+        Ok(resource) => gtk::gio::resources_register(&resource),
+        Err(err) => tracing::warn!(?err, "failed to load bundled icon resource"),
+    }
 
     info!(version = env!("CARGO_PKG_VERSION"), "Starting viaduct");
 

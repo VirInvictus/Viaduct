@@ -35,6 +35,22 @@ Viaduct is built with the following open-source libraries:
 - **tracing-subscriber**: Log emission/filtering on top of `tracing`. (MIT License)
 - **WebKitGTK (webkit6)**: The Rust bindings and the WebKitGTK 6.0 library rendering the article pane. (LGPL-2.1+; bindings MIT/Apache)
 
+## Bundled Icons
+
+Shipped as a GResource compiled into the binary (`data/icons/viaduct.gresource.xml`,
+source SVGs in `data/icons/hicolor/symbolic/actions/`):
+
+- **Ten stock symbolics** (`checkbox-checked`, `view-sort-descending`, `edit-undo`,
+  `view-paged`, `send-to`, `format-justify-fill`, `font-x-generic`, `audio-x-generic`,
+  `image-x-generic`, `video-x-generic`), copied unmodified from GNOME's
+  `adwaita-icon-theme`, which licenses its artwork under the GNU LGPL version 3
+  or CC-BY-SA 3.0 United States, at the recipient's choice; this project takes
+  the LGPL-3.0 option. They backstop icon lookups in environments whose icon
+  theme ships none of these names; a theme that carries a name keeps rendering
+  its own glyph.
+- The five `viaduct-*` symbolics installed at runtime (`viaduct/src/icons.rs`)
+  are drawn in-repo.
+
 ## Bundled Fonts
 
 Shipped in `data/fonts/` and installed at first run so the article pane can resolve them:

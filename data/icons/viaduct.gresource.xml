@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <!-- The stock icon names viaduct requests, bundled into the binary so they
+       resolve in every environment and icon theme (the Conservatory lesson:
+       GtkApplication appends <resource base>/icons to the default IconTheme's
+       resource path, and a themed lookup wins over the bundle, so themes that
+       carry a name keep rendering their own glyph and the bundle only
+       backstops the fallthrough). Copied from adwaita-icon-theme, LGPL-3.0
+       or CC-BY-SA-3.0; see ATTRIBUTIONS.md. -->
+  <gresource prefix="/io/github/virinvictus/Viaduct/icons/scalable/actions/">
+    <file alias="checkbox-checked-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/checkbox-checked-symbolic.svg</file>
+    <file alias="view-sort-descending-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/view-sort-descending-symbolic.svg</file>
+    <file alias="edit-undo-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/edit-undo-symbolic.svg</file>
+    <file alias="view-paged-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/view-paged-symbolic.svg</file>
+    <file alias="send-to-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/send-to-symbolic.svg</file>
+    <file alias="format-justify-fill-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/format-justify-fill-symbolic.svg</file>
+    <file alias="font-x-generic-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/font-x-generic-symbolic.svg</file>
+    <file alias="audio-x-generic-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/audio-x-generic-symbolic.svg</file>
+    <file alias="image-x-generic-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/image-x-generic-symbolic.svg</file>
+    <file alias="video-x-generic-symbolic.svg" preprocess="xml-stripblanks">hicolor/symbolic/actions/video-x-generic-symbolic.svg</file>
+  </gresource>
+</gresources>

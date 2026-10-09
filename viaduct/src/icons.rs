@@ -65,6 +65,23 @@ fn install_bundled_into(dir: &std::path::Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// The stock names the GResource bundle must cover (the ten the audit
+    /// found missing under a hidden theme; see ATTRIBUTIONS.md and
+    /// `data/icons/viaduct.gresource.xml`). The bundle is the fallthrough
+    /// backstop: a theme that carries a name still wins.
+    const BUNDLED_STOCK_NAMES: &[&str] = &[
+        "checkbox-checked-symbolic",
+        "view-sort-descending-symbolic",
+        "edit-undo-symbolic",
+        "view-paged-symbolic",
+        "send-to-symbolic",
+        "format-justify-fill-symbolic",
+        "font-x-generic-symbolic",
+        "audio-x-generic-symbolic",
+        "image-x-generic-symbolic",
+        "video-x-generic-symbolic",
+    ];
+
     /// The install is idempotent across runs and rewrites when the
     /// bundled artwork changes (bytes compared, not mtimes).
     #[test]
@@ -88,5 +105,26 @@ mod tests {
             assert_eq!(on_disk, svg.as_bytes(), "{stem} matches the bundle");
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Every stock name the audit found theme-dependent has an entry in the
+    /// GResource manifest. Reading the XML keeps the bundle and this list
+    /// from drifting apart: adding or renaming an alias breaks this test.
+    #[test]
+    fn gresource_manifest_covers_the_bundled_stock_names() {
+        let manifest = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../data/icons/viaduct.gresource.xml"
+        ))
+        .expect("gresource manifest readable");
+        for name in BUNDLED_STOCK_NAMES {
+            let alias = format!("alias=\"{name}.svg\"");
+            assert!(manifest.contains(&alias), "bundle must carry {name}");
+        }
+        assert_eq!(
+            manifest.matches("alias=\"").count(),
+            BUNDLED_STOCK_NAMES.len(),
+            "every manifest alias must be accounted for in BUNDLED_STOCK_NAMES"
+        );
     }
 }

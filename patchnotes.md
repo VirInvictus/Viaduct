@@ -1,5 +1,11 @@
 # viaduct: Patch Notes
 
+## v4.2.2: icons that survive any icon theme (2026-10-09)
+
+The Conservatory audit ported home. With the desktop's icon theme out of reach (a throwaway-XDG launch, which is exactly this repo's GUI-test recipe, or any theme that ships none of the stock names), every requested glyph that GTK's compiled-in set doesn't carry rendered as the image-missing box: the sidebar header's mark-all-read button, the timeline sort menu, the article pane's undo / reader / send-to / font buttons, and the attachment type glyphs. The five bundled `viaduct-*` sidebar glyphs were never affected (the v4.0.2 runtime install lands in the XDG hicolor tree every theme falls through to). 289 tests; clippy `-D warnings` clean.
+
+- **Fixed:** the ten stock symbolics the chrome requests now ride a GResource compiled into the binary: `data/icons/viaduct.gresource.xml` is compiled by `build.rs` via `glib-compile-resources` and registered in `main.rs` before the first widget (the Amberol pattern, as adopted by Conservatory). The bundle is the fallthrough backstop only: a theme that carries a name keeps rendering its own glyph, so kora-style desktops are pixel-identical to before. Artwork: unmodified copies from `adwaita-icon-theme` (LGPL-3.0, recorded in `ATTRIBUTIONS.md`), and a unit test pins the manifest against the audited name list so the bundle and the code can't drift apart.
+
 ## v4.2.1: CJK text-autospace, a Tiqoe Dark sync, and the vir-gtk 1.4.3 wave (2026-10-09)
 
 Two ports from the October 9 NetNewsWire sync (`8c322c287` to `7cd2e4f31`, +231 commits), plus the sitting vir-gtk consumer wave. 288 tests; clippy `-D warnings` clean.
