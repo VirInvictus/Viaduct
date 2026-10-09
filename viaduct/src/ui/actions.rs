@@ -124,6 +124,7 @@ pub fn install(window: &ViaductWindow, app: &gtk::Application) {
     // cycle (`current_timeline_sort()`), so a flip + reload-current-
     // timeline picks up the new sort order on the very next click.
     register_stateful_timeline_sort(window);
+    register_stateful_show_read(window);
 
     // Accelerators. NNW-exact where available; roadmap's additions stacked
     // on top as alternates so both muscle memories work.
@@ -237,6 +238,61 @@ fn register_stateful_timeline_sort(window: &ViaductWindow) {
                 let nick = s.string(crate::preferences::keys::TIMELINE_SORT_ORDER);
                 if let Some(action) = action_weak.upgrade() {
                     action.set_state(&nick.as_str().to_variant());
+                }
+            },
+        );
+    }
+
+    window.add_action(&action);
+}
+
+/// The `win.show-read` stateful boolean backing the timeline menu's
+/// "Show read articles" check item (the NNW readFilter toggle, the
+/// Mac `readFilteredButton`). Default true = today's behavior (read
+/// articles visible, dimmed); off hides them from feed and folder
+/// timelines. The window's fetch paths read the GSetting fresh on every
+/// fetch (`current_show_read()`), so a flip + reload-current-timeline
+/// applies immediately; external dconf flips sync the check mark back.
+fn register_stateful_show_read(window: &ViaductWindow) {
+    let initial: glib::Variant = crate::preferences::settings()
+        .map(|s| s.boolean(crate::preferences::keys::TIMELINE_SHOW_READ))
+        .to_variant();
+
+    let action = gio::SimpleAction::new_stateful("show-read", None, &initial);
+
+    // Menu check items activate with a NULL parameter; flip the stored
+    // state through the standard change-state chain.
+    action.connect_activate(|action, _parameter| {
+        let current = action.state().and_then(|v| v.get::<bool>()).unwrap_or(true);
+        action.change_state(&(!current).to_variant());
+    });
+
+    let weak = window.downgrade();
+    action.connect_change_state(move |action, value| {
+        let Some(value) = value else { return };
+        let show = value.get::<bool>().unwrap_or(true);
+        action.set_state(value);
+        if let Some(s) = crate::preferences::settings()
+            && s.boolean(crate::preferences::keys::TIMELINE_SHOW_READ) != show
+            && let Err(e) = s.set_boolean(crate::preferences::keys::TIMELINE_SHOW_READ, show)
+        {
+            tracing::warn!(?e, "failed to write timeline-show-read");
+        }
+        if let Some(w) = weak.upgrade() {
+            w.reload_current_timeline();
+        }
+    });
+
+    if let Some(settings) = crate::preferences::settings() {
+        let action_weak = action.downgrade();
+        settings.connect_changed(
+            Some(crate::preferences::keys::TIMELINE_SHOW_READ),
+            move |s, _| {
+                if let Some(action) = action_weak.upgrade() {
+                    action.set_state(
+                        &s.boolean(crate::preferences::keys::TIMELINE_SHOW_READ)
+                            .to_variant(),
+                    );
                 }
             },
         );

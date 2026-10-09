@@ -316,6 +316,19 @@ impl TimelineView {
         }
     }
 
+    /// "This selection has nothing fetched yet": shown when a real feed,
+    /// folder, or smart feed is selected but the fetch came back empty
+    /// (typically a just-subscribed feed that has never synced). The
+    /// default state's "Select a feed" advice would be wrong here.
+    pub fn set_no_articles_state(&self) {
+        let status = self.imp().timeline_empty_status.get();
+        status.set_icon_name(Some("view-refresh-symbolic"));
+        status.set_title("No articles yet");
+        status.set_description(Some(
+            "Nothing has been fetched for this selection. Hit Sync Now (or press Ctrl+R) to fetch articles.",
+        ));
+    }
+
     /// Bulk-fetch read/starred status for every node currently in the
     /// store and copy it onto the nodes. Called after every repopulate.
     pub fn refresh_statuses(&self, account: Arc<Account>) {

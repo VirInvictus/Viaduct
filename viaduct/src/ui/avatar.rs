@@ -64,6 +64,11 @@ mod imp {
             picture.set_content_fit(gtk::ContentFit::Cover);
             picture.add_css_class("viaduct-avatar-image");
             picture.set_overflow(gtk::Overflow::Hidden);
+            // A favicon texture's intrinsic size (often 32-128px) must not
+            // become the widget's natural size: the avatar is a 24px slot.
+            // can_shrink lets the Picture draw at whatever the (clamped)
+            // allocation is instead of demanding its intrinsic size.
+            picture.set_can_shrink(true);
 
             let stack = gtk::Stack::new();
             stack.set_transition_type(gtk::StackTransitionType::None);
@@ -83,7 +88,22 @@ mod imp {
         }
     }
 
-    impl WidgetImpl for Avatar {}
+    impl WidgetImpl for Avatar {
+        // Cap measured size at the size request: without this, a loaded
+        // favicon's intrinsic size becomes the natural width and the row's
+        // icon slot (via the sidebar's icon stack) eats title width.
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            let (min, nat, min_base, nat_base) = self.parent_measure(orientation, for_size);
+            let cap = match orientation {
+                gtk::Orientation::Horizontal => self.obj().width_request(),
+                _ => self.obj().height_request(),
+            };
+            if cap < 0 {
+                return (min, nat, min_base, nat_base);
+            }
+            (min.min(cap), nat.min(cap), min_base, nat_base)
+        }
+    }
 
     impl Avatar {
         fn draw(&self, cr: &gtk::cairo::Context, w: i32, h: i32) {

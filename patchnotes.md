@@ -1,5 +1,16 @@
 # viaduct: Patch Notes
 
+## v4.3.0: the bug-hunt harvest (2026-10-09)
+
+Six fixes from Brandon's seeded-bench bug hunt against the running app, plus the NetNewsWire read-filter parity the hunt surfaced. 290 tests; clippy `-D warnings` clean.
+
+- **Fixed:** sidebar titles truncated far too early, from five stacked causes: a recycled row's stale feed stamp let a late favicon paint into a group header's invisible icon slot and ate its width; the homogeneous icon stack paid hidden-page widths; avatars' natural size followed the favicon's intrinsic pixels instead of the 24px slot; the desktop GTK theme rendered tree-expander indent icons at 16px instead of 8px (now owned in the app stylesheet); and section headers were allowed to ellipsize at all. Headers never truncate now, rows carry full-name tooltips, and the sidebar header bar no longer renders the ellipsized window title.
+- **Changed:** timeline titles always render complete, wrapping onto as many lines as they need. No ellipsis, no width caps.
+- **Changed:** selected rows use Conservatory's lifted-selection idiom: raised surface with a 2px accent edge on the leading side, replacing the solid dragonRed wash that read as permanent garish chrome.
+- **Fixed:** Preferences rendered four empty group husks when the GSettings schema couldn't resolve, silently and with no log output. `settings()` now falls back to resolving the schema explicitly from the source tree's `gschemas.compiled` (the `GSETTINGS_SCHEMA_DIR` env path fails silently under env overrides and init-order surprises, which is also what disabled refresh-on-startup in test launches), the failure paths warn, and the no-schema dialog is one honest explanation instead of husks.
+- **Added:** first-run timeline population. Startup lands on the first feed instead of the always-empty "Smart Feeds" header, a first sync auto-populates the timeline, and a selected-but-empty feed now says "No articles yet, hit Sync Now" instead of the misleading "Select a feed" advice.
+- **Added:** the "Show read articles" toggle in the timeline sort menu (NNW `readFilter` parity, the `timeline-show-read` GSetting, default on). Off hides read articles from feed and folder timelines via new read-filtered fetch paths (a statuses-PK correlated subquery; missing status rows count as unread, per NNW). Mark-read operations still fetch everything regardless; the smart feeds keep their own semantics.
+
 ## v4.2.2: icons that survive any icon theme (2026-10-09)
 
 The Conservatory audit ported home. With the desktop's icon theme out of reach (a throwaway-XDG launch, which is exactly this repo's GUI-test recipe, or any theme that ships none of the stock names), every requested glyph that GTK's compiled-in set doesn't carry rendered as the image-missing box: the sidebar header's mark-all-read button, the timeline sort menu, the article pane's undo / reader / send-to / font buttons, and the attachment type glyphs. The five bundled `viaduct-*` sidebar glyphs were never affected (the v4.0.2 runtime install lands in the XDG hicolor tree every theme falls through to). 289 tests; clippy `-D warnings` clean.

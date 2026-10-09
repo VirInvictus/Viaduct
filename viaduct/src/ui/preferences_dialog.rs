@@ -22,10 +22,14 @@ use crate::preferences::keys;
 use crate::ui::rows;
 use crate::ui::window::ViaductWindow;
 
-/// Build and present the preferences dialog. When the schema isn't installed
-/// (dev environment without `glib-compile-schemas` having run), the dialog
-/// renders a single explanatory row and the toggles remain inert.
+/// Build and present the preferences dialog. When the schema isn't resolvable
+/// (no installed schema and no dev `gschemas.compiled`), the dialog renders a
+/// single explanatory group instead of husking out five empty ones.
 pub fn present(parent: &ViaductWindow) {
+    let Some(settings) = crate::preferences::settings() else {
+        present_unavailable(parent);
+        return;
+    };
     let appearance = rows::group(Some("Appearance"), None);
     let typography = rows::group(
         Some("Typography"),
@@ -42,39 +46,31 @@ pub fn present(parent: &ViaductWindow) {
     let notifications = rows::group(Some("Notifications"), None);
     let playback = rows::group(Some("Video playback"), None);
 
-    if let Some(settings) = crate::preferences::settings() {
-        appearance.add(&color_scheme_row(&settings));
-        appearance.add(&article_theme_row(&settings));
-        typography.add(&font_row(
-            &settings,
-            keys::FONT_UI,
-            "App font",
-            "Sidebar, timeline, header bars, dialogs.",
-        ));
-        typography.add(&font_row(
-            &settings,
-            keys::FONT_SERIF,
-            "Reading font",
-            "Article body in the reading pane. Layered after the article theme.",
-        ));
-        typography.add(&font_row(
-            &settings,
-            keys::FONT_MONOSPACE,
-            "Monospace font",
-            "Code and pre blocks (article pane + chrome).",
-        ));
-        sync.add(&refresh_on_startup_row(&settings));
-        sync.add(&refresh_interval_row(&settings));
-        sync.add(&run_in_background_row(&settings, parent));
-        notifications.add(&notifications_row(&settings));
-        playback.add(&video_playback_row(&settings));
-    } else {
-        appearance.add(&rows::row(
-            "Settings unavailable",
-            Some("GSettings schema isn’t installed. Run `glib-compile-schemas data/` and retry."),
-            None,
-        ));
-    }
+    appearance.add(&color_scheme_row(&settings));
+    appearance.add(&article_theme_row(&settings));
+    typography.add(&font_row(
+        &settings,
+        keys::FONT_UI,
+        "App font",
+        "Sidebar, timeline, header bars, dialogs.",
+    ));
+    typography.add(&font_row(
+        &settings,
+        keys::FONT_SERIF,
+        "Reading font",
+        "Article body in the reading pane. Layered after the article theme.",
+    ));
+    typography.add(&font_row(
+        &settings,
+        keys::FONT_MONOSPACE,
+        "Monospace font",
+        "Code and pre blocks (article pane + chrome).",
+    ));
+    sync.add(&refresh_on_startup_row(&settings));
+    sync.add(&refresh_interval_row(&settings));
+    sync.add(&run_in_background_row(&settings, parent));
+    notifications.add(&notifications_row(&settings));
+    playback.add(&video_playback_row(&settings));
 
     // Phase 20c: a plain modal window rather than an in-window
     // `adw::PreferencesDialog` sheet. `AdwPreferencesPage` scrolled and
@@ -109,6 +105,55 @@ pub fn present(parent: &ViaductWindow) {
         .modal(true)
         .default_width(600)
         .default_height(700)
+        .child(&outer)
+        .build();
+    crate::ui::close_on_escape(&window);
+    window.present();
+}
+
+/// The no-schema path: one honest explanatory page instead of the four empty
+/// group husks the old else-branch produced (the Appearance group got a
+/// note; the other four rendered headers and descriptions with zero rows,
+/// which read as a broken dialog).
+fn present_unavailable(parent: &ViaductWindow) {
+    let group = rows::group(Some("Preferences unavailable"), None);
+    group.add(&rows::row(
+        "Settings could not be loaded",
+        Some(
+            "The GSettings schema isn't installed. If you're running from the source tree, rebuild once (cargo build) so build.rs compiles the schema, then relaunch. This run will use default values for every preference.",
+        ),
+        None,
+    ));
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(24)
+        .margin_top(24)
+        .margin_bottom(24)
+        .margin_start(24)
+        .margin_end(24)
+        .valign(gtk::Align::Start)
+        .build();
+    content.append(group.widget());
+
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&content)
+        .build();
+
+    let outer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    outer.append(&gtk::HeaderBar::new());
+    outer.append(&scroller);
+
+    let window = gtk::Window::builder()
+        .title("Preferences")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(600)
+        .default_height(400)
         .child(&outer)
         .build();
     crate::ui::close_on_escape(&window);

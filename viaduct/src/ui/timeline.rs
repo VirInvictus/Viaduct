@@ -157,14 +157,15 @@ pub fn setup_timeline_list_view(
         let title_label = gtk::Label::new(None);
         title_label.set_hexpand(true);
         title_label.set_halign(gtk::Align::Start);
-        title_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        // Cap the title's natural width (≈ 32 average glyph widths) so a
-        // row containing a 100-character smart-feed title can't request
-        // a 900 px natural width and inflate the timeline pane through
-        // the AdwNavigationSplitView's sidebar-width-fraction up to its
-        // max. Title still ellipsizes via EllipsizeMode::End at the cap.
-        title_label.set_max_width_chars(32);
-        title_label.set_width_chars(20);
+        // Brandon's call: timeline titles always show complete, wrapping
+        // onto as many lines as they need. No ellipsis, no width caps (the
+        // old natural-width caps guarded the retired AdwNavigationSplitView
+        // pane-fraction sizing; the GtkPaned shell sizes the pane by
+        // allocation, and a wrapped label's minimum is just its longest
+        // word).
+        title_label.set_wrap(true);
+        title_label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        title_label.set_ellipsize(gtk::pango::EllipsizeMode::None);
 
         // Media indicator: small icon when the article has attachments
         // (podcast/video enclosures, MRSS media). Count badge appears when

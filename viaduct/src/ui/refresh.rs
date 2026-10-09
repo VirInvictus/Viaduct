@@ -204,6 +204,15 @@ impl ViaductWindow {
                 window.refresh_unread_counts();
                 if window.is_visible() {
                     window.show_refresh_toast(&tally);
+                    // First-run affordance: the startup selection is the
+                    // "Smart Feeds" group header, whose timeline is empty
+                    // by design. After a cycle that actually brought
+                    // articles in, land on the first feed so the fetched
+                    // articles are visible without the user having to know
+                    // to click a feed.
+                    if tally.total_new_articles() > 0 && window.selection_is_group_header() {
+                        window.select_first_feed();
+                    }
                     // Re-fetch the timeline for the currently-selected sidebar
                     // item so newly-fetched articles appear without the user
                     // having to click around. Without this, the timeline shows

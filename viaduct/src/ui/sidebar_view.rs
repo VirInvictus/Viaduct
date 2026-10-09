@@ -292,6 +292,48 @@ impl SidebarView {
             .expect("SidebarView used before bootstrap")
     }
 
+    /// True when the current selection is one of the two non-navigable
+    /// group headers (the startup default). Their fetch maps to an empty
+    /// timeline by design, so post-refresh auto-population keys on this.
+    pub fn selection_is_group_header(&self) -> bool {
+        matches!(
+            crate::ui::sidebar::selected_sidebar_item(&self.selection()),
+            Some(SidebarItem::SmartFeedGroup) | Some(SidebarItem::CustomSmartFeedsGroup)
+        )
+    }
+
+    /// Select the first real feed row (feeds only; a folder's aggregated
+    /// view is the folder row's own business). Returns false when the tree
+    /// carries no feeds, in which case the caller keeps the current
+    /// selection. Used by the post-refresh auto-population path so a first
+    /// sync actually lands the user on visible articles instead of the
+    /// always-empty group-header timeline.
+    pub fn select_first_feed(&self) -> bool {
+        let selection = self.selection();
+        let Some(model) = selection.model() else {
+            return false;
+        };
+        for i in 0..model.n_items() {
+            let Some(row_obj) = model.item(i) else {
+                continue;
+            };
+            let Some(row) = row_obj.downcast_ref::<gtk::TreeListRow>() else {
+                continue;
+            };
+            let is_feed = row
+                .item()
+                .and_downcast::<TreeNode>()
+                .and_then(|node| node.represented_object())
+                .and_then(|obj| obj.downcast_ref::<SidebarItem>().cloned())
+                .is_some_and(|item| matches!(item, SidebarItem::Feed(_)));
+            if is_feed {
+                selection.set_selected(i);
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn search_btn(&self) -> gtk::ToggleButton {
         self.imp().search_btn.get()
     }

@@ -28,7 +28,7 @@ pub fn init(settings: Option<gtk::gio::Settings>) {
 /// `base_css` plus its own classes, written against the `--c-*` custom
 /// properties (Viaduct is the one consumer on the var() mechanism; the
 /// properties block is installed at the crate tier in [`apply`]). Everything
-/// here either disagrees with the base (transparent lists, solid selection,
+/// here either disagrees with the base (transparent lists, lifted selection,
 /// card-toned entries, painted destructive text) or is Viaduct-only.
 const APP_SHEET: &str = "\
 /* viaduct-specific overrides and classes over the vir-gtk base sheet. */
@@ -36,8 +36,22 @@ const APP_SHEET: &str = "\
 .subtitle { color: var(--c-fg-dim); font-size: 90%; }
 list, listview { background-color: transparent; }
 row.activatable:hover { background-color: var(--c-grid); }
-row:selected { background-color: var(--c-accent); color: var(--c-on-accent); }
-row:selected label { color: var(--c-on-accent); }
+/* The lifted selection (Conservatory's idiom): a selected row raises to
+ * the raised surface and gains a 2px accent edge on its leading side. A
+ * solid dragonRed wash read as permanent garish chrome, not a highlight. */
+row:selected {
+  background-color: var(--c-bg-raised);
+  color: var(--c-fg);
+  box-shadow: inset 2px 0 0 var(--c-accent);
+}
+row:selected label { color: var(--c-fg); }
+listview > row { transition: background-color 150ms ease; }
+/* TreeExpander indent/expander geometry: foreign GTK themes size these
+ * builtin icons differently (a theme without a rule leaves them at the
+ * 16px initial instead of Default's 8px, doubling every indent level and
+ * starving row titles of width). Own the Default-theme values. */
+treeexpander { border-spacing: 4px; }
+treeexpander indent { -gtk-icon-size: 8px; }
 entry, spinbutton {
   background-color: var(--c-bg-card);
   color: var(--c-fg);
@@ -70,7 +84,6 @@ button.destructive-action {
   padding: 0 7px;
   font-size: 80%;
 }
-row:selected .viaduct-unread-badge { background-color: var(--c-on-accent); color: var(--c-accent); }
 .viaduct-row-read { opacity: 0.55; }
 .viaduct-timeline-thumb { border-radius: 3px; }
 .viaduct-avatar-image { border-radius: 999px; }

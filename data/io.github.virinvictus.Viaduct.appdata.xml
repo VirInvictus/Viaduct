@@ -35,6 +35,9 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="4.3.0" date="2026-10-09">
+      <description><p>The bug-hunt harvest: full sidebar titles, lifted selection, honest empty states, and the read filter</p></description>
+    </release>
     <release version="4.2.2" date="2026-10-09">
       <description><p>Icons that survive any icon theme</p></description>
     </release>

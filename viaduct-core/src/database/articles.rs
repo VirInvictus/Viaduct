@@ -179,6 +179,17 @@ pub enum ArticlesDbOp {
         i64,
         oneshot::Sender<Result<Vec<Article>>>,
     ),
+    /// Read-filtered variant of `FetchByFeed` backing the timeline's
+    /// "Show read articles" toggle. `include_read = false` hides articles
+    /// whose status row marks them read; a missing status row counts as
+    /// unread, per NNW's `defaultReadFilterType` semantics.
+    FetchByFeedFiltered(
+        String,
+        SortOrder,
+        i64,
+        bool,
+        oneshot::Sender<Result<Vec<Article>>>,
+    ),
     /// Bulk variant of `FetchByFeed`. One SQL query with an `IN (?, ?, …)`
     /// clause replaces the previous N-round-trip fan-out used by folder
     /// aggregate views. Empty input is a no-op.
@@ -186,6 +197,14 @@ pub enum ArticlesDbOp {
         Vec<String>,
         SortOrder,
         i64,
+        oneshot::Sender<Result<Vec<Article>>>,
+    ),
+    /// Read-filtered variant of `FetchByFeeds`; see `FetchByFeedFiltered`.
+    FetchByFeedsFiltered(
+        Vec<String>,
+        SortOrder,
+        i64,
+        bool,
         oneshot::Sender<Result<Vec<Article>>>,
     ),
     FetchByArticleId(String, oneshot::Sender<Result<Option<Article>>>),
@@ -473,11 +492,19 @@ pub(crate) fn handle_op(conn: &mut Connection, op: ArticlesDbOp) {
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchByFeed(feed_id, sort, limit, tx) => {
-            let res = fetch_by_feed(conn, &feed_id, sort, limit);
+            let res = fetch_by_feed(conn, &feed_id, sort, limit, true);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::FetchByFeedFiltered(feed_id, sort, limit, include_read, tx) => {
+            let res = fetch_by_feed(conn, &feed_id, sort, limit, include_read);
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchByFeeds(feed_ids, sort, limit, tx) => {
-            let res = fetch_by_feeds(conn, &feed_ids, sort, limit);
+            let res = fetch_by_feeds(conn, &feed_ids, sort, limit, true);
+            let _ = tx.send(res);
+        }
+        ArticlesDbOp::FetchByFeedsFiltered(feed_ids, sort, limit, include_read, tx) => {
+            let res = fetch_by_feeds(conn, &feed_ids, sort, limit, include_read);
             let _ = tx.send(res);
         }
         ArticlesDbOp::FetchByArticleId(article_id, tx) => {
@@ -747,9 +774,19 @@ fn fetch_by_feed(
     feed_id: &str,
     sort: SortOrder,
     limit: i64,
+    include_read: bool,
 ) -> Result<Vec<Article>> {
+    // The read filter is a correlated subquery on the statuses PK (one
+    // index seek per row, single-table — the multi-index-OR lesson), not a
+    // join, so the existing SELECT * shape and row mapper stay untouched.
+    // Missing status rows read as unread (COALESCE 0), matching NNW.
+    let read_filter = if include_read {
+        ""
+    } else {
+        " AND COALESCE((SELECT read FROM statuses WHERE statuses.article_id = articles.article_id), 0) = 0 "
+    };
     let sql = format!(
-        "SELECT * FROM articles WHERE feed_id = ? {}{}",
+        "SELECT * FROM articles WHERE feed_id = ?{read_filter}{}{}",
         sort.order_by_clause(),
         limit_clause(limit)
     );
@@ -777,17 +814,23 @@ fn fetch_by_feeds(
     feed_ids: &[String],
     sort: SortOrder,
     limit: i64,
+    include_read: bool,
 ) -> Result<Vec<Article>> {
     if feed_ids.is_empty() {
         return Ok(Vec::new());
     }
+    let read_filter = if include_read {
+        ""
+    } else {
+        " AND COALESCE((SELECT read FROM statuses WHERE statuses.article_id = articles.article_id), 0) = 0 "
+    };
     let mut articles: Vec<Article> = Vec::new();
     for chunk in feed_ids.chunks(500) {
         let placeholders: String = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT * FROM articles WHERE feed_id IN ({placeholders}) {}{}",
+            "SELECT * FROM articles WHERE feed_id IN ({placeholders}){read_filter}{}{}",
             sort.order_by_clause(),
             limit_clause(limit)
         );
@@ -1861,7 +1904,8 @@ mod tests {
 
         // The user starred article "b" sometime in the past; "a" was
         // never touched, so it has no status row.
-        let articles = fetch_by_feed(&mut conn, feed_id, SortOrder::default(), 0).expect("fetch");
+        let articles =
+            fetch_by_feed(&mut conn, feed_id, SortOrder::default(), 0, true).expect("fetch");
         let starred_id = articles
             .iter()
             .find(|a| a.title.as_deref() == Some("Second"))
@@ -1881,7 +1925,8 @@ mod tests {
 
         // The mark-read path: gather current statuses, build rows, write.
         let current = fetch_statuses_by_ids(&mut conn, &ids).expect("statuses");
-        let articles = fetch_by_feed(&mut conn, feed_id, SortOrder::default(), 0).expect("fetch");
+        let articles =
+            fetch_by_feed(&mut conn, feed_id, SortOrder::default(), 0, true).expect("fetch");
         let rows = mark_read_statuses(articles, &current);
         assert_eq!(rows.len(), 2);
         upsert_statuses(&mut conn, rows).expect("upsert mark-read");
@@ -1934,18 +1979,19 @@ mod tests {
         .unwrap();
 
         // Single feed: cap to the 2 newest; 0 means everything.
-        let all = fetch_by_feed(&mut conn, feed_a, SortOrder::NewestFirst, 0).unwrap();
+        let all = fetch_by_feed(&mut conn, feed_a, SortOrder::NewestFirst, 0, true).unwrap();
         assert_eq!(all.len(), 3);
-        let capped = fetch_by_feed(&mut conn, feed_a, SortOrder::NewestFirst, 2).unwrap();
+        let capped = fetch_by_feed(&mut conn, feed_a, SortOrder::NewestFirst, 2, true).unwrap();
         assert_eq!(capped.len(), 2);
         assert_eq!(capped[0].title.as_deref(), Some("A3"));
 
         // Folder aggregate: 5 rows across two feeds, cap 3 applies to
         // the merged result.
         let ids = vec![feed_a.to_string(), feed_b.to_string()];
-        let merged = fetch_by_feeds(&mut conn, &ids, SortOrder::NewestFirst, 0).unwrap();
+        let merged = fetch_by_feeds(&mut conn, &ids, SortOrder::NewestFirst, 0, true).unwrap();
         assert_eq!(merged.len(), 5);
-        let capped_merge = fetch_by_feeds(&mut conn, &ids, SortOrder::NewestFirst, 3).unwrap();
+        let capped_merge =
+            fetch_by_feeds(&mut conn, &ids, SortOrder::NewestFirst, 3, true).unwrap();
         assert_eq!(capped_merge.len(), 3);
         assert_eq!(capped_merge[0].title.as_deref(), Some("B2"));
 
@@ -2358,11 +2404,12 @@ mod tests {
         )
         .expect("update_feed");
 
-        let titles: Vec<String> = fetch_by_feed(&mut conn, feed_id, SortOrder::NewestFirst, 0)
-            .expect("fetch")
-            .into_iter()
-            .filter_map(|a| a.title)
-            .collect();
+        let titles: Vec<String> =
+            fetch_by_feed(&mut conn, feed_id, SortOrder::NewestFirst, 0, true)
+                .expect("fetch")
+                .into_iter()
+                .filter_map(|a| a.title)
+                .collect();
         // Logical-date order: 1h, 3h (via date_modified), 5h. Before the
         // coalesce, "modified-only" had a NULL key and sorted last.
         assert_eq!(titles, vec!["recent", "modified-only", "oldest"]);
@@ -2436,7 +2483,7 @@ mod tests {
         // `COLLATE NOCASE` folds case for the comparison; the stored
         // title keeps its original spacing (TRIM shapes the key only).
         let titles_asc: Vec<String> =
-            fetch_by_feed(&mut conn, feed_id, SortOrder::TitleAscending, 0)
+            fetch_by_feed(&mut conn, feed_id, SortOrder::TitleAscending, 0, true)
                 .unwrap()
                 .into_iter()
                 .filter_map(|a| a.title)
@@ -2444,7 +2491,7 @@ mod tests {
         assert_eq!(titles_asc, vec!["apple", "Banana", "  Zebra  "]);
 
         let titles_desc: Vec<String> =
-            fetch_by_feed(&mut conn, feed_id, SortOrder::TitleDescending, 0)
+            fetch_by_feed(&mut conn, feed_id, SortOrder::TitleDescending, 0, true)
                 .unwrap()
                 .into_iter()
                 .filter_map(|a| a.title)
@@ -2494,7 +2541,7 @@ mod tests {
         .unwrap();
 
         let mut labels = |sort: SortOrder| -> Vec<String> {
-            fetch_by_feed(&mut conn, feed_id, sort, 0)
+            fetch_by_feed(&mut conn, feed_id, sort, 0, true)
                 .unwrap()
                 .into_iter()
                 .map(|a| {
@@ -2561,11 +2608,12 @@ mod tests {
         )
         .unwrap();
 
-        let bodies: Vec<String> = fetch_by_feed(&mut conn, feed_id, SortOrder::TitleAscending, 0)
-            .unwrap()
-            .into_iter()
-            .filter_map(|a| a.content_text)
-            .collect();
+        let bodies: Vec<String> =
+            fetch_by_feed(&mut conn, feed_id, SortOrder::TitleAscending, 0, true)
+                .unwrap()
+                .into_iter()
+                .filter_map(|a| a.content_text)
+                .collect();
         assert_eq!(bodies, vec!["a".repeat(50), long2, long1]);
     }
 
@@ -2606,7 +2654,7 @@ mod tests {
         .unwrap();
 
         let mut order = |sort: SortOrder| -> Vec<i64> {
-            fetch_by_feed(&mut conn, feed_id, sort, 0)
+            fetch_by_feed(&mut conn, feed_id, sort, 0, true)
                 .unwrap()
                 .into_iter()
                 .map(|a| a.date_published.unwrap().timestamp())
@@ -2774,6 +2822,7 @@ mod tests {
                 &[feed_a.to_string(), feed_b.to_string()],
                 sort,
                 limit,
+                true,
             )
             .unwrap()
             .into_iter()
@@ -2798,6 +2847,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fetch_by_feed_honors_read_filter() {
+        let mut conn = in_memory();
+        let feed_id = "https://example.com/rss";
+        let base = Utc::now();
+        update_feed(
+            &mut conn,
+            feed_id,
+            vec![
+                sort_item(
+                    "unread-1",
+                    Some("Still Unread"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(1)),
+                ),
+                sort_item(
+                    "read-1",
+                    Some("Already Read"),
+                    None,
+                    None,
+                    Some(base - Duration::hours(2)),
+                ),
+            ],
+            false,
+            DEFAULT_RETENTION_DAYS,
+        )
+        .unwrap();
+        // Mark the second article read. The id is the NNW-calculated
+        // MD5 of "{feed_id} {unique_id}".
+        let read_id = article_id_for(feed_id, "read-1");
+        upsert_statuses(
+            &mut conn,
+            vec![ArticleStatus {
+                article_id: read_id,
+                read: true,
+                starred: false,
+                date_arrived: base,
+            }],
+        )
+        .unwrap();
+
+        let mut titles = |include_read: bool| -> Vec<String> {
+            fetch_by_feed(&mut conn, feed_id, SortOrder::NewestFirst, 0, include_read)
+                .unwrap()
+                .into_iter()
+                .filter_map(|a| a.title)
+                .collect()
+        };
+        // Show-read (the timeline default): both, the read one dimmed
+        // upstream. The article with no status row at all counts as
+        // unread and survives the filter in both modes.
+        assert_eq!(titles(true), vec!["Still Unread", "Already Read"]);
+        assert_eq!(titles(false), vec!["Still Unread"]);
+    }
     #[test]
     fn title_sort_key_rust_twin_matches_sql_precedence() {
         let mk = |title: Option<&str>, content_text: Option<&str>, summary: Option<&str>| Article {
@@ -2902,7 +3006,7 @@ mod tests {
         // Single-feed view: the newline-prefixed body trims to
         // "alpha body", so it sorts after "aardvark" rather than first.
         let feed_view: Vec<Option<String>> =
-            fetch_by_feed(&mut conn, feed_a, SortOrder::TitleAscending, 0)
+            fetch_by_feed(&mut conn, feed_a, SortOrder::TitleAscending, 0, true)
                 .unwrap()
                 .into_iter()
                 .map(|a| a.content_text)
@@ -2923,6 +3027,7 @@ mod tests {
             &[feed_a.to_string(), feed_b.to_string()],
             SortOrder::TitleAscending,
             0,
+            true,
         )
         .unwrap()
         .into_iter()

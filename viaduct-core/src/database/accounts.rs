@@ -196,6 +196,31 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// Timeline variant of [`Self::fetch_articles_by_feed`] for the
+    /// "Show read articles" toggle: `include_read = false` hides articles
+    /// whose status row marks them read (missing status rows are unread,
+    /// per NNW). The mark-read callers must keep using the unfiltered
+    /// method — they need every article regardless of state.
+    pub async fn fetch_articles_by_feed_filtered(
+        &self,
+        feed_id: String,
+        sort: crate::database::articles::SortOrder,
+        limit: i64,
+        include_read: bool,
+    ) -> Result<Vec<Article>> {
+        let (tx, rx) = oneshot::channel();
+        self.dispatch_read(ArticlesDbOp::FetchByFeedFiltered(
+            feed_id,
+            sort,
+            limit,
+            include_read,
+            tx,
+        ))
+        .await?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
     /// Bulk fetch articles for many feeds at once. One SQL query (with
     /// an `IN (?, ?, …)` clause, chunked at 500 IDs to stay under
     /// SQLite's parameter limit) instead of N round-trips. Used by the
@@ -211,6 +236,28 @@ impl Account {
         let (tx, rx) = oneshot::channel();
         self.dispatch_read(ArticlesDbOp::FetchByFeeds(feed_ids, sort, limit, tx))
             .await?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
+    /// Read-filtered bulk variant; see
+    /// [`Self::fetch_articles_by_feed_filtered`].
+    pub async fn fetch_articles_by_feeds_filtered(
+        &self,
+        feed_ids: Vec<String>,
+        sort: crate::database::articles::SortOrder,
+        limit: i64,
+        include_read: bool,
+    ) -> Result<Vec<Article>> {
+        let (tx, rx) = oneshot::channel();
+        self.dispatch_read(ArticlesDbOp::FetchByFeedsFiltered(
+            feed_ids,
+            sort,
+            limit,
+            include_read,
+            tx,
+        ))
+        .await?;
         rx.await
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }

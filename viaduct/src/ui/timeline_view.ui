@@ -28,6 +28,12 @@
         <attribute name="target">title-descending</attribute>
       </item>
     </section>
+    <section>
+      <item>
+        <attribute name="label" translatable="yes">Show read articles</attribute>
+        <attribute name="action">win.show-read</attribute>
+      </item>
+    </section>
   </menu>
   <template class="ViaductTimelineView" parent="GtkWidget">
     <child>

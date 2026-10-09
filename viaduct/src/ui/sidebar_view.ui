@@ -53,8 +53,18 @@
         <property name="orientation">vertical</property>
         <child>
           <!-- Outermost pane header bar: hosts the window controls (Phase
-               20a decision). show-title-buttons stays default True. -->
+               20a decision). show-title-buttons stays default True.
+               title-widget is an explicit zero-size widget: the default
+               title (the window title "viaduct") ellipsizes to "viad..."
+               in the center slot of a 260px pane, and NNW's sidebar header
+               shows no title text either. -->
           <object class="GtkHeaderBar">
+            <property name="title-widget">
+              <object class="GtkBox">
+                <property name="width-request">0</property>
+                <property name="height-request">0</property>
+              </object>
+            </property>
             <child type="start">
               <object class="GtkButton" id="mark_all_read_btn">
                 <property name="icon-name">checkbox-checked-symbolic</property>

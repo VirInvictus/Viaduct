@@ -35,6 +35,7 @@ pub mod keys {
     pub const VIDEO_PLAYBACK_MODE: &str = "video-playback-mode";
     pub const RUN_IN_BACKGROUND: &str = "run-in-background";
     pub const TIMELINE_SORT_ORDER: &str = "timeline-sort-order";
+    pub const TIMELINE_SHOW_READ: &str = "timeline-show-read";
     pub const WELCOME_SHOWN: &str = "welcome-shown";
 }
 
@@ -57,9 +58,60 @@ pub fn settings() -> Option<gio::Settings> {
     }
     CELL.with(|cell| {
         cell.get_or_init(|| {
-            let source = gio::SettingsSchemaSource::default()?;
-            source.lookup(APP_ID, true)?;
-            Some(gio::Settings::new(APP_ID))
+            // Preferred path: the schema is installed (system or
+            // GSETTINGS_SCHEMA_DIR, which GLib folds into the default
+            // source).
+            if let Some(source) = gio::SettingsSchemaSource::default()
+                && source.lookup(APP_ID, true).is_some()
+            {
+                return Some(gio::Settings::new(APP_ID));
+            }
+            // Dev fallback: resolve the schema explicitly from the source
+            // tree's data/ (build.rs's gschemas.compiled). GLib reads
+            // GSETTINGS_SCHEMA_DIR exactly once at default-source init, so
+            // a stale env value or an init-order surprise silently defeats
+            // it; this path is immune to both. (The October 2026 bug hunt:
+            // Preferences rendered as empty husks and refresh silently
+            // never ran because of exactly that failure, with zero log
+            // output.)
+            let manifest_dir = env!("CARGO_MANIFEST_DIR");
+            let schema_dir = std::path::Path::new(manifest_dir)
+                .parent()
+                .map(|p| p.join("data"))
+                .unwrap_or_else(|| std::path::Path::new(manifest_dir).join("data"));
+            if !schema_dir.join("gschemas.compiled").exists() {
+                tracing::warn!(
+                    ?schema_dir,
+                    "GSettings schema not installed and no dev gschemas.compiled; \
+                     preferences fall back to defaults"
+                );
+                return None;
+            }
+            let dev_source = match gio::SettingsSchemaSource::from_directory(
+                &schema_dir,
+                gio::SettingsSchemaSource::default().as_ref(),
+                true,
+            ) {
+                Ok(source) => source,
+                Err(err) => {
+                    tracing::warn!(?err, ?schema_dir, "dev schema dir failed to load");
+                    return None;
+                }
+            };
+            match dev_source.lookup(APP_ID, true) {
+                Some(schema) => {
+                    tracing::info!(?schema_dir, "GSettings schema resolved from the dev tree");
+                    Some(gio::Settings::new_full(
+                        &schema,
+                        None as Option<&gio::SettingsBackend>,
+                        None,
+                    ))
+                }
+                None => {
+                    tracing::warn!(?schema_dir, "dev schema dir lacks our schema id");
+                    None
+                }
+            }
         })
         .clone()
     })

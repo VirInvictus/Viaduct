@@ -352,6 +352,10 @@ pub fn setup_sidebar_list_view(
         // switched at bind time.
         let icon_stack = gtk::Stack::new();
         icon_stack.set_transition_type(gtk::StackTransitionType::None);
+        // Non-homogeneous: a homogeneous stack measures every page, so a
+        // loaded favicon on the (often invisible) avatar page would widen
+        // every row — headers included — and starve the title label.
+        icon_stack.set_hhomogeneous(false);
 
         let icon_image = gtk::Image::new();
         icon_image.set_pixel_size(16);
@@ -435,7 +439,15 @@ pub fn setup_sidebar_list_view(
 
         // Reset transient row state so reused rows don't bleed across feeds.
         avatar.set_custom_image(None);
+        // Clear the favicon stale-row stamp too: a row recycled from a
+        // feed to a group header must not still answer the guard in
+        // spawn_favicon_fetch, or the feed's late-arriving favicon paints
+        // into this row's (invisible) avatar page and inflates it.
+        avatar.set_widget_name("");
         warning_icon.set_visible(false);
+        // Recycled rows restore truncation; the header binds below opt out.
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_tooltip_text(None);
 
         // Extract domain data to bind
         let rep_obj = node.represented_object();
@@ -459,6 +471,10 @@ pub fn setup_sidebar_list_view(
                 match sidebar_item {
                     SidebarItem::SmartFeedGroup => {
                         label.set_text("Smart Feeds");
+                        // Section headers are fixed strings with real room:
+                        // never ellipsize them (NNW un-indents and protects
+                        // its top-level rows for the same reason).
+                        label.set_ellipsize(gtk::pango::EllipsizeMode::None);
                         // Section-header styling — bold, slightly smaller,
                         // dimmed. The slot carries a link emblem:
                         // GtkListView wants something in the icon slot.
@@ -468,22 +484,26 @@ pub fn setup_sidebar_list_view(
                     }
                     SidebarItem::SmartFeed(name) => {
                         label.set_text(name);
+                        label.set_tooltip_text(Some(name));
                         icon_image.set_icon_name(Some(smart_feed_icon(name)));
                         icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::CustomSmartFeedsGroup => {
                         label.set_text("My Smart Feeds");
+                        label.set_ellipsize(gtk::pango::EllipsizeMode::None);
                         label.add_css_class("viaduct-sidebar-heading");
                         icon_image.set_icon_name(Some("viaduct-smart-feeds-symbolic"));
                         icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::CustomSmartFeed(sf) => {
                         label.set_text(&sf.name);
+                        label.set_tooltip_text(Some(&sf.name));
                         icon_image.set_icon_name(Some("system-search-symbolic"));
                         icon_stack.set_visible_child_name("icon");
                     }
                     SidebarItem::Folder(folder) => {
                         label.set_text(&folder.name);
+                        label.set_tooltip_text(Some(&folder.name));
                         icon_image.set_icon_name(Some("folder-symbolic"));
                         icon_stack.set_visible_child_name("icon");
                     }
@@ -494,6 +514,7 @@ pub fn setup_sidebar_list_view(
                             .or(feed.name.as_deref())
                             .unwrap_or("Unnamed Feed");
                         label.set_text(name);
+                        label.set_tooltip_text(Some(name));
                         // ViaductAvatar hashes a stable colour from the text
                         // (network::color_for = NNW ColorHash) and shows
                         // initials until a favicon arrives.

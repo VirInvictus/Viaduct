@@ -201,6 +201,19 @@
       </description>
     </key>
 
+    <key name="timeline-show-read" type="b">
+      <default>true</default>
+      <summary>Show read articles in feed and folder timelines</summary>
+      <description>
+        When true (default), feed and folder timelines include articles
+        already marked read, rendered dimmed. When false, read articles are
+        hidden from those views entirely (the NNW readFilter toggle,
+        Mac TimelineContainerViewController readFilteredButton). The All
+        Unread, Starred, Today, and custom smart-feed views have their own
+        read semantics and are unaffected.
+      </description>
+    </key>
+
     <key name="article-theme" enum="io.github.virinvictus.Viaduct.ArticleTheme">
       <default>"auto"</default>
       <summary>Article reading theme</summary>

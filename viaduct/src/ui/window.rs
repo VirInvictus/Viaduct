@@ -507,6 +507,13 @@ impl ViaductWindow {
                         window.imp().sidebar_view.get().apply_opml(opml);
                         window.refresh_unread_counts();
                         window.reload_custom_smart_feeds();
+                        // Land on the first feed instead of the always-empty
+                        // "Smart Feeds" group header: with a populated store
+                        // the timeline shows articles immediately; with a
+                        // fresh one it shows the honest "No articles yet —
+                        // hit Sync" state. Either way the user starts on a
+                        // navigable row, not a section header.
+                        window.select_first_feed();
                         if opml_empty && crate::ui::welcome_dialog::should_present() {
                             crate::ui::welcome_dialog::present(&window);
                         }
@@ -604,9 +611,22 @@ impl ViaductWindow {
                 let click_at = std::time::Instant::now();
                 let sort = current_timeline_sort();
                 let limit = crate::database::articles::TIMELINE_FETCH_LIMIT;
+                // Computed before the match: the match arms move out of
+                // `item`, and the empty-result arm below still needs to
+                // know whether the selection was a navigable row.
+                let navigable_selection = !matches!(
+                    item,
+                    SidebarItem::SmartFeedGroup | SidebarItem::CustomSmartFeedsGroup
+                );
                 let result: crate::error::Result<Vec<_>> = match item {
                     SidebarItem::Feed(feed) => {
-                        account.fetch_articles_by_feed(feed.id, sort, limit).await
+                        if current_show_read() {
+                            account.fetch_articles_by_feed(feed.id, sort, limit).await
+                        } else {
+                            account
+                                .fetch_articles_by_feed_filtered(feed.id, sort, limit, false)
+                                .await
+                        }
                     }
                     SidebarItem::SmartFeed(name) => match name.as_str() {
                         "Today" => account.fetch_today_articles(sort, limit).await,
@@ -615,7 +635,7 @@ impl ViaductWindow {
                         _ => Ok(Vec::new()),
                     },
                     SidebarItem::Folder(folder) => {
-                        fetch_folder_articles(&account, &folder, sort).await
+                        fetch_folder_articles(&account, &folder, sort, current_show_read()).await
                     }
                     SidebarItem::CustomSmartFeed(sf) => {
                         account.fetch_smart_feed_articles(sf.rules, sort).await
@@ -655,6 +675,12 @@ impl ViaductWindow {
 
                         let populate_at = std::time::Instant::now();
                         timeline.populate(articles);
+                        // A real selection that fetches empty gets the
+                        // "nothing fetched yet" state; the generic
+                        // "Select a feed" copy would be wrong here.
+                        if count == 0 && navigable_selection {
+                            timeline.set_no_articles_state();
+                        }
                         let populate_ms = populate_at.elapsed().as_millis();
 
                         let status_at = std::time::Instant::now();
@@ -2382,9 +2408,16 @@ impl ViaductWindow {
         glib::spawn_future_local(async move {
             let sort = current_timeline_sort();
             let limit = crate::database::articles::TIMELINE_FETCH_LIMIT;
+            let show_read = current_show_read();
             let result: crate::error::Result<Vec<_>> = match item {
                 SidebarItem::Feed(feed) => {
-                    account.fetch_articles_by_feed(feed.id, sort, limit).await
+                    if show_read {
+                        account.fetch_articles_by_feed(feed.id, sort, limit).await
+                    } else {
+                        account
+                            .fetch_articles_by_feed_filtered(feed.id, sort, limit, false)
+                            .await
+                    }
                 }
                 SidebarItem::SmartFeed(name) => match name.as_str() {
                     "Today" => account.fetch_today_articles(sort, limit).await,
@@ -2392,7 +2425,9 @@ impl ViaductWindow {
                     "Starred" => account.fetch_starred_articles(sort, limit).await,
                     _ => Ok(Vec::new()),
                 },
-                SidebarItem::Folder(folder) => fetch_folder_articles(&account, &folder, sort).await,
+                SidebarItem::Folder(folder) => {
+                    fetch_folder_articles(&account, &folder, sort, show_read).await
+                }
                 SidebarItem::CustomSmartFeed(sf) => {
                     account.fetch_smart_feed_articles(sf.rules, sort).await
                 }
@@ -2416,6 +2451,19 @@ impl ViaductWindow {
             .sidebar_view
             .get()
             .refresh_unread_counts(self.account());
+    }
+
+    /// True while the sidebar's selection is one of the non-navigable group
+    /// headers (the startup default). See `SidebarView::selection_is_group_header`.
+    pub(crate) fn selection_is_group_header(&self) -> bool {
+        self.imp().sidebar_view.get().selection_is_group_header()
+    }
+
+    /// Land the sidebar on its first real feed row. The selection-changed
+    /// handler drives the fetch + populate from here, so no reload call is
+    /// needed. See `SidebarView::select_first_feed`.
+    pub(crate) fn select_first_feed(&self) {
+        self.imp().sidebar_view.get().select_first_feed();
     }
 
     /// Capture-phase shortcut controller scoped to the timeline `ListView`.
@@ -2528,6 +2576,16 @@ fn current_timeline_sort() -> crate::database::articles::SortOrder {
     crate::preferences::settings()
         .map(|s| crate::preferences::timeline_sort_order(&s))
         .unwrap_or(SortOrder::NewestFirst)
+}
+
+/// Read fresh on every feed/folder fetch: `false` hides read articles from
+/// feed and folder timelines (the `win.show-read` toggle, NNW
+/// readFilter parity). Defaults to true (everything visible) without the
+/// schema, so a missing GSettings install can never hide articles.
+fn current_show_read() -> bool {
+    crate::preferences::settings()
+        .map(|s| s.boolean(crate::preferences::keys::TIMELINE_SHOW_READ))
+        .unwrap_or(true)
 }
 
 #[derive(Copy, Clone)]
@@ -2643,6 +2701,7 @@ async fn fetch_folder_articles(
     account: &std::sync::Arc<Account>,
     folder: &crate::models::Folder,
     sort: crate::database::articles::SortOrder,
+    include_read: bool,
 ) -> crate::error::Result<Vec<crate::models::Article>> {
     if folder.feeds.is_empty() {
         return Ok(Vec::new());
@@ -2654,11 +2713,22 @@ async fn fetch_folder_articles(
     // to O(1 · channel + plan). v2.6.22: the bulk op handles cross-
     // chunk sort internally per `SortOrder`, so no second pass needed.
     let feed_ids: Vec<String> = folder.feeds.iter().map(|f| f.id.clone()).collect();
-    account
-        .fetch_articles_by_feeds(
-            feed_ids,
-            sort,
-            crate::database::articles::TIMELINE_FETCH_LIMIT,
-        )
-        .await
+    if include_read {
+        account
+            .fetch_articles_by_feeds(
+                feed_ids,
+                sort,
+                crate::database::articles::TIMELINE_FETCH_LIMIT,
+            )
+            .await
+    } else {
+        account
+            .fetch_articles_by_feeds_filtered(
+                feed_ids,
+                sort,
+                crate::database::articles::TIMELINE_FETCH_LIMIT,
+                false,
+            )
+            .await
+    }
 }
