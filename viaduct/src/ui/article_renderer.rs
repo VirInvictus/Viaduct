@@ -976,14 +976,23 @@ const FEED_DOMAINS_WITH_PARAGRAPHS_SEPARATED_BY_RETURNS: &[&str] = &["slashdot.o
 
 /// See [`FEED_DOMAINS_WITH_PARAGRAPHS_SEPARATED_BY_RETURNS`]. Port of
 /// NNW `ArticleRenderingSpecialCases.insertParagraphTagsIfNeeded`.
-pub fn insert_paragraph_tags_if_needed(html: &str, feed_url: Option<&str>) -> String {
-    let Some(feed_url) = feed_url else {
-        return html.to_string();
+/// NNW `a44cfe13c`: the home page is matched too, so a feed subscribed
+/// through a proxy such as FeedBurner (feed URL on the proxy's domain)
+/// still gets its special cases.
+pub fn insert_paragraph_tags_if_needed(
+    html: &str,
+    feed_url: Option<&str>,
+    home_page_url: Option<&str>,
+) -> String {
+    let matches_domain = |url: Option<&str>| {
+        url.is_some_and(|u| {
+            crate::network::fetcher::url_host_matches_domain(
+                u,
+                FEED_DOMAINS_WITH_PARAGRAPHS_SEPARATED_BY_RETURNS,
+            )
+        })
     };
-    if !crate::network::fetcher::url_host_matches_domain(
-        feed_url,
-        FEED_DOMAINS_WITH_PARAGRAPHS_SEPARATED_BY_RETURNS,
-    ) {
+    if !matches_domain(feed_url) && !matches_domain(home_page_url) {
         return html.to_string();
     }
     if !html.contains('\n') {
@@ -1674,32 +1683,60 @@ mod tests {
     #[test]
     fn slashdot_paragraph_separation_inserts_p_tags() {
         let body = "<p>first para\n\nsecond para\n\nthird";
-        let out = insert_paragraph_tags_if_needed(body, Some("https://slashdot.org/index.rss"));
+        let out =
+            insert_paragraph_tags_if_needed(body, Some("https://slashdot.org/index.rss"), None);
         assert_eq!(out, "<p>first para<p>second para<p>third");
     }
 
     #[test]
     fn paragraph_separation_ignores_other_domains_and_missing_feed() {
         let body = "a\n\nb";
-        assert_eq!(insert_paragraph_tags_if_needed(body, None), body);
+        assert_eq!(insert_paragraph_tags_if_needed(body, None, None), body);
         assert_eq!(
-            insert_paragraph_tags_if_needed(body, Some("https://example.com/feed.rss")),
+            insert_paragraph_tags_if_needed(body, Some("https://example.com/feed.rss"), None),
             body
         );
     }
 
     #[test]
     fn paragraph_separation_matches_subdomains_of_listed_hosts() {
-        let out =
-            insert_paragraph_tags_if_needed("a\n\nb", Some("https://science.slashdot.org/rss"));
+        let out = insert_paragraph_tags_if_needed(
+            "a\n\nb",
+            Some("https://science.slashdot.org/rss"),
+            None,
+        );
         assert_eq!(out, "a<p>b");
+    }
+
+    #[test]
+    fn paragraph_separation_matches_the_home_page_too() {
+        // NNW `a44cfe13c`: a Slashdot feed subscribed through a proxy
+        // (FeedBurner et al.) carries the proxy's feed URL; the home
+        // page URL still identifies the site.
+        let body = "a\n\nb";
+        assert_eq!(
+            insert_paragraph_tags_if_needed(
+                body,
+                Some("https://feedburner.example/slashdot"),
+                None
+            ),
+            body
+        );
+        assert_eq!(
+            insert_paragraph_tags_if_needed(
+                body,
+                Some("https://feedburner.example/slashdot"),
+                Some("https://slashdot.org/")
+            ),
+            "a<p>b"
+        );
     }
 
     #[test]
     fn paragraph_separation_requires_two_returns() {
         let body = "only\none\nnewline";
         assert_eq!(
-            insert_paragraph_tags_if_needed(body, Some("https://slashdot.org/rss")),
+            insert_paragraph_tags_if_needed(body, Some("https://slashdot.org/rss"), None),
             body
         );
     }
@@ -1709,11 +1746,11 @@ mod tests {
         // The run consumes \r\n plus trailing spaces/tabs, mirroring the
         // regex `(\r?\n[ \t]*){2,}`; a lone \r is not a line end.
         let body = "one\r\n  \r\n\ttwo";
-        let out = insert_paragraph_tags_if_needed(body, Some("https://slashdot.org/rss"));
+        let out = insert_paragraph_tags_if_needed(body, Some("https://slashdot.org/rss"), None);
         assert_eq!(out, "one<p>two");
         let lone_cr = "one\rtwo";
         assert_eq!(
-            insert_paragraph_tags_if_needed(lone_cr, Some("https://slashdot.org/rss")),
+            insert_paragraph_tags_if_needed(lone_cr, Some("https://slashdot.org/rss"), None),
             lone_cr
         );
     }

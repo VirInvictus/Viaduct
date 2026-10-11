@@ -1,5 +1,12 @@
 # viaduct: Patch Notes
 
+## v4.3.1: proxied Slashdot, numeric titles (2026-10-11)
+
+Two ports from the October 11 NetNewsWire sync (`7cd2e4f31` to `a3e61ddc5`, +33 commits). 292 tests; clippy `-D warnings` clean.
+
+- **Fixed:** a Slashdot feed subscribed through a proxy such as FeedBurner now gets its paragraph-separation fix. The special case matched only the feed URL, which for proxied feeds is the proxy's domain; the feed's home page URL is matched too (NNW `a44cfe13c`), carried through a new `feed_home_page_url` field beside `feed_url`.
+- **Fixed:** folder-view title sorts order numbers numerically: "Chapter 2" before "Chapter 10" (NNW `2dcb8641f`). The merge comparator's key zero-pads digit runs. Feed views still sort lexicographically inside SQLite (no numeric collation exists there; recorded divergence, invisible for any realistic title).
+
 ## v4.3.0: the bug-hunt harvest (2026-10-09)
 
 Six fixes from Brandon's seeded-bench bug hunt against the running app, plus the NetNewsWire read-filter parity the hunt surfaced. 290 tests; clippy `-D warnings` clean.

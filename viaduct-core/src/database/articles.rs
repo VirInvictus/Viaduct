@@ -95,7 +95,8 @@ pub enum SortOrder {
 /// the Rust twin of this key (`title_sort_key`, used by the
 /// `fetch_by_feeds` merge) trims the same six on both ends: keeping
 /// the two sets identical is what makes a feed view and a folder view
-/// order the same article identically. Trim also runs *before* the
+/// order the same article identically (for case and trim; digit runs
+/// diverge, see `title_sort_key`). Trim also runs *before* the
 /// 300-character cut on both sides.
 ///
 /// Macros rather than consts because `concat!` only composes literals,
@@ -917,7 +918,29 @@ fn title_sort_key(a: &Article) -> String {
         .or_else(|| a.content_text.as_deref().and_then(nonempty).map(excerpt))
         .or_else(|| a.summary.as_deref().and_then(nonempty).map(str::to_string))
         .unwrap_or_default();
-    key.to_lowercase()
+    // NNW `2dcb8641f` (localizedStandardCompare): numbers compare
+    // numerically, not lexicographically, so "Chapter 2" sorts before
+    // "Chapter 10". The Rust twin pads runs of digits with leading
+    // zeroes to a fixed width so a byte comparison reproduces numeric
+    // order; the SQL side stays COLLATE NOCASE (no locale-aware
+    // collation in SQLite), a recorded divergence.
+    let mut folded = String::with_capacity(key.len());
+    let mut digit_run = String::new();
+    for c in key.to_lowercase().chars() {
+        if c.is_ascii_digit() {
+            digit_run.push(c);
+        } else {
+            if !digit_run.is_empty() {
+                folded.push_str(&format!("{:0>10}", digit_run));
+                digit_run.clear();
+            }
+            folded.push(c);
+        }
+    }
+    if !digit_run.is_empty() {
+        folded.push_str(&format!("{:0>10}", digit_run));
+    }
+    folded
 }
 
 fn fetch_by_article_id(conn: &mut Connection, article_id: &str) -> Result<Option<Article>> {
@@ -2950,6 +2973,44 @@ mod tests {
             title_sort_key(&mk(None, Some(&multibyte), None)),
             "é".repeat(300)
         );
+    }
+
+    #[test]
+    fn title_sort_key_folds_digit_runs_numerically() {
+        // NNW `2dcb8641f` (localizedStandardCompare): "Chapter 2" sorts
+        // before "Chapter 10". The twin zero-pads digit runs so byte
+        // comparison reproduces numeric order.
+        let mk = |title: &str| Article {
+            article_id: "id".to_string(),
+            feed_id: "feed".to_string(),
+            title: Some(title.to_string()),
+            content_html: None,
+            content_text: None,
+            url: None,
+            external_url: None,
+            summary: None,
+            image_url: None,
+            date_published: None,
+            date_modified: None,
+            authors: Vec::new(),
+            attachments: Vec::new(),
+        };
+        let two = title_sort_key(&mk("Chapter 2"));
+        let ten = title_sort_key(&mk("Chapter 10"));
+        assert!(two < ten, "2 must sort before 10: {two:?} vs {ten:?}");
+        // Digit runs at the very start and end of the key both pad.
+        let a = title_sort_key(&mk("9 problems"));
+        let b = title_sort_key(&mk("10 problems"));
+        assert!(a < b);
+        // A run longer than the pad width carries the overflow past the
+        // pad, so ordering within over-width runs degrades to plain
+        // lexicographic: 10000000000 (eleven digits, numerically larger)
+        // sorts before 9999999999 (ten). Documented limit of a
+        // fixed-width fold; no realistic title carries ten-digit runs.
+        let at_width = title_sort_key(&mk("Episode 9999999999"));
+        let over_width = title_sort_key(&mk("Episode 10000000000"));
+        assert_eq!(at_width, format!("episode {:0>10}", "9999999999"));
+        assert!(over_width < at_width, "over-width runs are lexicographic");
     }
 
     #[test]

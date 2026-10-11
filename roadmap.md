@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.3.0.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.3.1.
 
 ---
 
@@ -365,6 +365,29 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [x] **Add-feed "open in Reader View by default" toggle** *(shipped v3.1.0, 2026-08-08)*. We already persisted `reader_view_always_enabled` per feed; NewsFlash exposes the equivalent as a checkbox in its add-feed dialog (#905). A `rows::switch_row` in `add_feed_dialog.rs` (same copy as the feed-settings dialog) now sets it at creation time, upserted before the feed's first refresh so the refresher's settings writes can't race the fresh row. Default off, matching the DB default. Verified live: dialog renders and the switch defaults off.
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
+
+## Upstream Sync Candidates (October 11, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `a3e61ddc5` (+33 commits over `7cd2e4f31`, Oct 9 – Oct 11; the `mac-7.2b3` / `iOS-7.2` line); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `CLAUDE.md` §2 for the sync note. The bulk is Mac/iOS UI polish and cleanups; two ports shipped in v4.3.1.
+
+### Ported from NetNewsWire
+
+- [x] **Paragraph-separation home-page match** (NNW `a44cfe13c`) *(shipped v4.3.1)*. A Slashdot feed subscribed through a proxy (FeedBurner et al.) carries the proxy's feed URL, so the #5460 special case missed it; the home page URL is matched too. `feed_urls` is now a `(feed_url, home_page_url)` tuple map; `feed_home_page_url` rides `ArticleRenderContext`/`ArticleDisplayState`; two renderer tests pin the proxied shape.
+- [x] **Numeric title sort** (NNW `2dcb8641f`, `localizedStandardCompare`) *(shipped v4.3.1)*. "Chapter 2" sorts before "Chapter 10": `title_sort_key` zero-pads digit runs to ten places. Recorded divergence: SQL stays `COLLATE NOCASE` (no locale/numeric collation in SQLite), so feed views sort digit runs lexicographically while folder merges sort numerically; the fold saturates past ten digits.
+
+### Deferred candidates (not yet ported)
+
+- [ ] **Update-credentials for username/password accounts** (NNW `263ec2683`). NNW offers "Update Credentials" for every username/password account, not just Feedbin. Our credentials surface is the Inoreader initial setup only; an update path (menu item + dialog reusing the existing credentials::store_credentials) is a small feature with a design edge (where the entry point lives for a single-account app).
+- [ ] **UnreadCountDisplay accessibility strings** (NNW `f74e6e220`, `813ae7b33`). VoiceOver reads "unread" when counts render as dots. Only relevant once the Oct 9 window's UnreadCountDisplay dot/hide modes land; bundle the strings with that port.
+
+### Watch / inapplicable (this window)
+
+- FeedFinder hardening (`e2afa2ae2` uppercase extensions + query/anchor-aware matching; `c498f9a46` social-domain link skipping): both feed the body-link keyword heuristic; our discovery is typed-`rel=alternate`-only, nothing to harden (same verdict as `383e46f28` in the Oct 9 window).
+- iframe aspect-ratio keep (`cfa36a413`, #5479) and the iPad fullscreen fix (`e59a7eda8`): main.js / WKWebView; dead under §7.4 (no JS, no in-pane embeds).
+- FetchAllUnreadCountsOperation deletion (`7cfe41a85`): the async replacement is the shape we already ship (`UnreadCountsByFeed` + `UnreadCountFlight` single-flight).
+- `2dcb8641f` also precomputes each title once per comparison; we already use `sort_by_cached_key`, the same fix.
+
+---
 
 ## Upstream Sync Candidates (October 9, 2026)
 

@@ -31,10 +31,11 @@ use crate::ui::sidebar::{
 };
 use crate::ui::timeline::FeedNameMap;
 
-/// Twin of [`FeedNameMap`]: feed id → feed URL, rebuilt on every OPML
-/// apply. Consumed by the article pane's per-feed rendering special
-/// cases (NNW #5460).
-pub type FeedUrlMap = Rc<RefCell<HashMap<String, String>>>;
+/// Twin of [`FeedNameMap`]: feed id → (feed URL, home page URL), rebuilt
+/// on every OPML apply. Consumed by the article pane's per-feed rendering
+/// special cases (NNW #5460 + `a44cfe13c`, which matches the home page so
+/// proxied feeds get their special cases too).
+pub type FeedUrlMap = Rc<RefCell<HashMap<String, (String, String)>>>;
 use crate::ui::tree::{TreeController, TreeNode};
 
 /// Single-flight + dirty flag for unread-count rounds. Distilled from
@@ -652,17 +653,32 @@ impl SidebarView {
                 map.insert(feed.id.clone(), display_name_for_feed(feed));
             }
         }
-        // The twin map the article pane's rendering special cases key on
-        // (Slashdot paragraph separation, NNW #5460): feed id → feed URL.
+        // The twin maps the article pane's rendering special cases key on
+        // (Slashdot paragraph separation, NNW #5460): feed id → feed URL
+        // and feed id → home page URL. NNW `a44cfe13c` matches the home
+        // page too, which catches a feed subscribed through a proxy such
+        // as FeedBurner (its feed URL is the proxy's domain).
         if let Some(url_map_rc) = self.imp().feed_urls.get() {
             let mut url_map = url_map_rc.borrow_mut();
             url_map.clear();
             for feed in &opml.standalone_feeds {
-                url_map.insert(feed.id.clone(), feed.url.clone());
+                url_map.insert(
+                    feed.id.clone(),
+                    (
+                        feed.url.clone(),
+                        feed.home_page_url.clone().unwrap_or_default(),
+                    ),
+                );
             }
             for folder in &opml.folders {
                 for feed in &folder.feeds {
-                    url_map.insert(feed.id.clone(), feed.url.clone());
+                    url_map.insert(
+                        feed.id.clone(),
+                        (
+                            feed.url.clone(),
+                            feed.home_page_url.clone().unwrap_or_default(),
+                        ),
+                    );
                 }
             }
         }

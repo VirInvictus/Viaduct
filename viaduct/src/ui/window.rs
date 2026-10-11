@@ -754,16 +754,19 @@ impl ViaductWindow {
                 .get(&feed_id)
                 .cloned()
                 .unwrap_or_default();
-            // The feed's own URL, for the pane's per-feed rendering
-            // special cases (Slashdot paragraph separation, NNW #5460).
-            let feed_url = window
+            // The feed's own URL + home page URL, for the pane's per-feed
+            // rendering special cases (Slashdot paragraph separation, NNW
+            // #5460 + `a44cfe13c`: the home page matches too so proxied
+            // feeds keep their special cases).
+            let (feed_url, feed_home_page_url) = window
                 .imp()
                 .sidebar_view
                 .get()
                 .feed_urls()
                 .borrow()
                 .get(&feed_id)
-                .cloned();
+                .map(|(url, home)| (Some(url.clone()), (!home.is_empty()).then(|| home.clone())))
+                .unwrap_or((None, None));
             let byline = article
                 .authors
                 .first()
@@ -809,6 +812,7 @@ impl ViaductWindow {
                     feed_link,
                     feed_link_title,
                     feed_url,
+                    feed_home_page_url,
                     date_published: article.date_published,
                     video: detected,
                 },

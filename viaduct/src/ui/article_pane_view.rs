@@ -163,10 +163,13 @@ pub struct ArticleRenderContext {
     pub byline: String,
     pub feed_link: String,
     pub feed_link_title: String,
-    /// The feed's own URL (the RSS address). Drives NNW's per-feed
-    /// rendering special cases (Slashdot paragraph separation, #5460),
-    /// which match on the feed's domain.
+    /// The feed's own URL (the RSS address) and home page URL. Drive
+    /// NNW's per-feed rendering special cases (Slashdot paragraph
+    /// separation, #5460 + `a44cfe13c`: the home page is matched too, so
+    /// a feed subscribed through a proxy such as FeedBurner still gets
+    /// its special cases).
     pub feed_url: Option<String>,
+    pub feed_home_page_url: Option<String>,
     pub date_published: Option<chrono::DateTime<chrono::Utc>>,
     /// Detected video source (if any) used to drive `play_video_btn`.
     pub video: Option<VideoSource>,
@@ -191,6 +194,7 @@ pub struct ArticleDisplayState {
     pub feed_link: String,
     pub feed_link_title: String,
     pub feed_url: Option<String>,
+    pub feed_home_page_url: Option<String>,
     pub date_published: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -388,6 +392,7 @@ impl ArticlePaneView {
             state.feed_link = ctx.feed_link;
             state.feed_link_title = ctx.feed_link_title;
             state.feed_url = ctx.feed_url;
+            state.feed_home_page_url = ctx.feed_home_page_url;
             state.date_published = ctx.date_published;
         }
         // Keep the header bar oriented: article title up top, feed name as
@@ -581,6 +586,7 @@ impl ArticlePaneView {
                 article_renderer::insert_paragraph_tags_if_needed(
                     &body_html,
                     state.feed_url.as_deref(),
+                    state.feed_home_page_url.as_deref(),
                 )
             } else {
                 body_html

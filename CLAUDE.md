@@ -21,7 +21,7 @@ NetNewsWire is open-source, battle-tested, and has already solved every hard pro
 
 If you catch yourself thinking "I have a better idea": you don't. Go read the corresponding Swift file in `.netnewswire/` and port *that*. The app is local-first (local accounts plus Inoreader, and no other remote per §7.3), renders articles through exactly one locked-down `WebKitWebView` (§7.4), and holds to a strict memory budget. Targets GTK4 4.16+ on Wayland (Hyprland or GNOME). **libadwaita was dropped in v3.0.0** (Phase 20); the app is plain GTK4 + WebKitGTK with a viaduct-owned design layer.
 
-Current version: **v4.3.0**; the version-by-version prose in this file stops at the v2.0.0 milestone, so read `patchnotes.md` for the v3.x arc. Test-count baseline (2026-09-14): **226 tests**, counted from the runner (`cargo test --workspace`), not by grepping attributes; the grep count runs ahead of the runner. Historical per-release numbers were ad-hoc (v3.4.0's "142 total" undercounted; the roadmap's v3.0.0-era "162" was a point-in-time figure). The Inoreader sync engine is driven once per refresh cycle since v3.6.0 (`run_refresh_with_tally` calls `Account::sync_with_remote` after the feed refresh; local accounts no-op; there is no independent status-send timer yet, roadmap candidate 416). Tagged stable points: v1.6.0 (collects the v1.5.x stability arc: workspace split, Meson, NNW-parity audit, visual identity, theme-contrast picker, adaptive-layout fixes, working YouTube playback via iframe wrapper). The v1.7.x series filled in the obvious missing UI (Add Feed dialog, right-click context menus on sidebar + timeline). v1.8.0 added sync-on-open + periodic-refresh preferences. v1.9.x is the perf-instrumentation arc: `viaduct::perf` log target with structured timing on every sidebar click, cancel-stale-fetch generation counter, bulk folder-aggregation DB op, and the v1.9.1 caps on `strip_html_for_preview` (400 chars) and `scan_html_for_video` (8 KB) that cured the "Digital Antiquarian feels slow" report. **v1.10.0 landed the Phase 17 background daemon**: window-hide-on-close + `run-in-background` GSetting + portal request via `ashpd` + D-Bus re-summon + idle-memory drop on hide. Phase 17's only remaining bullet is the Flathub tag (blocked on user: onboarding credentials, not code). **v2.0.0 ships the Phase 18 architectural refinement**: the three-pane decomposition (`ArticlePaneView` / `TimelineView` / `SidebarView`: pre1/pre2/pre3) shrank `window.rs` from 2900 to 2043 lines (−30 %); pre4 promoted `article_renderer.rs` into a dedicated `ViaductArticleRenderer` GObject with a per-renderer `WebContext` so the `viaduct-img://` + `viaduct-font://` scheme handlers no longer leak onto `WebContext::default()` (and into the video-dialog WebView); pre5 moved unread-count aggregation into `TreeNode` (folder/group totals auto-derive from leaves via `notify::unread-count` cascade); pre6 polished the WebKit ↔ GTK CSS bridge with `currentColor`-driven scrollbars, a 150 ms article-to-article fade-in, and `--accent-color` propagation that picks up the libadwaita system accent for the Adwaita theme. See `roadmap.md` for the live phase plan, `patchnotes.md` for the shipped log, and `docs/debugging.md` for the perf-log workflow.
+Current version: **v4.3.1**; the version-by-version prose in this file stops at the v2.0.0 milestone, so read `patchnotes.md` for the v3.x arc. Test-count baseline (2026-09-14): **226 tests**, counted from the runner (`cargo test --workspace`), not by grepping attributes; the grep count runs ahead of the runner. Historical per-release numbers were ad-hoc (v3.4.0's "142 total" undercounted; the roadmap's v3.0.0-era "162" was a point-in-time figure). The Inoreader sync engine is driven once per refresh cycle since v3.6.0 (`run_refresh_with_tally` calls `Account::sync_with_remote` after the feed refresh; local accounts no-op; there is no independent status-send timer yet, roadmap candidate 416). Tagged stable points: v1.6.0 (collects the v1.5.x stability arc: workspace split, Meson, NNW-parity audit, visual identity, theme-contrast picker, adaptive-layout fixes, working YouTube playback via iframe wrapper). The v1.7.x series filled in the obvious missing UI (Add Feed dialog, right-click context menus on sidebar + timeline). v1.8.0 added sync-on-open + periodic-refresh preferences. v1.9.x is the perf-instrumentation arc: `viaduct::perf` log target with structured timing on every sidebar click, cancel-stale-fetch generation counter, bulk folder-aggregation DB op, and the v1.9.1 caps on `strip_html_for_preview` (400 chars) and `scan_html_for_video` (8 KB) that cured the "Digital Antiquarian feels slow" report. **v1.10.0 landed the Phase 17 background daemon**: window-hide-on-close + `run-in-background` GSetting + portal request via `ashpd` + D-Bus re-summon + idle-memory drop on hide. Phase 17's only remaining bullet is the Flathub tag (blocked on user: onboarding credentials, not code). **v2.0.0 ships the Phase 18 architectural refinement**: the three-pane decomposition (`ArticlePaneView` / `TimelineView` / `SidebarView`: pre1/pre2/pre3) shrank `window.rs` from 2900 to 2043 lines (−30 %); pre4 promoted `article_renderer.rs` into a dedicated `ViaductArticleRenderer` GObject with a per-renderer `WebContext` so the `viaduct-img://` + `viaduct-font://` scheme handlers no longer leak onto `WebContext::default()` (and into the video-dialog WebView); pre5 moved unread-count aggregation into `TreeNode` (folder/group totals auto-derive from leaves via `notify::unread-count` cascade); pre6 polished the WebKit ↔ GTK CSS bridge with `currentColor`-driven scrollbars, a 150 ms article-to-article fade-in, and `--accent-color` propagation that picks up the libadwaita system accent for the Adwaita theme. See `roadmap.md` for the live phase plan, `patchnotes.md` for the shipped log, and `docs/debugging.md` for the perf-log workflow.
 
 **License:** MIT. **Edition:** Rust 2024.
 
@@ -30,6 +30,52 @@ Current version: **v4.3.0**; the version-by-version prose in this file stops at 
 ## 2. Source of Truth: `.netnewswire/`
 
 A full clone of NetNewsWire lives at `.netnewswire/` in this repo. **It is already there: do not re-clone, re-download, or `git submodule add` it.** Treat it as read-only reference material.
+
+> **Note on Latest Upstream Sync (October 11, 2026):**
+> The `.netnewswire` reference folder has been fast-forwarded to `a3e61ddc5`
+> (+33 commits over the prior `7cd2e4f31` sync; Oct 9 – Oct 11, the
+> `mac-7.2b3` / `iOS-7.2` line). The bulk is Mac/iOS UI polish, the
+> FetchAllUnreadCountsOperation deletion (its async replacement is the
+> single-query + single-flight shape we already ship: `UnreadCountsByFeed`
+> + `UnreadCountFlight`), accessibility strings, appcast churn, and code
+> cleanups. **Two ports shipped in v4.3.1**:
+> *   **Paragraph-separation home-page match** (`a44cfe13c`): a Slashdot
+>     feed subscribed through a proxy such as FeedBurner carries the
+>     proxy's feed URL, so the special case missed it; the home page URL
+>     is matched too. `feed_urls` grew from a URL map to a
+>     `(feed_url, home_page_url)` tuple map, and `feed_home_page_url`
+>     rides `ArticleRenderContext`/`ArticleDisplayState` beside
+>     `feed_url`.
+> *   **Numeric title sort** (`2dcb8641f`, `localizedStandardCompare`):
+>     "Chapter 2" sorts before "Chapter 10". The Rust twin
+>     (`title_sort_key`, the `fetch_by_feeds` merge path) zero-pads digit
+>     runs to ten places so byte comparison reproduces numeric order.
+>     Recorded divergence: the SQL side stays `COLLATE NOCASE` (SQLite
+>     has no locale-aware collation and no numeric fold), so a title view
+>     sorted inside SQLite orders digit runs lexicographically while the
+>     folder-merge path orders numerically; no realistic title carries
+>     ten-digit runs, where the fold's fixed width saturates.
+> *   **Skipped:** the FeedFinder hardening pair (`e2afa2ae2` uppercase
+>     extensions and query/anchor-aware path matching; `c498f9a46`
+>     x/twitter/facebook/instagram link skipping) both target NNW's
+>     body-link keyword heuristic; our discovery follows typed
+>     `rel=alternate` links only and never classifies body links, so
+>     there is no heuristic to harden (same verdict as the Oct 9 window's
+>     `383e46f28`). The iframe aspect-ratio keep (`cfa36a413`, #5479) and
+>     the iPad fullscreen-embed fix (`e59a7eda8`) live in main.js /
+>     WKWebView plumbing: JS never runs under the §7.4 CSP and we have no
+>     in-pane embeds. `7cfe41a85` replaces FetchAllUnreadCountsOperation
+>     with the shape we already have. The rest is Mac/iOS UI, strings,
+>     and cleanups.
+> *   **Roadmap candidates (recorded in `roadmap.md`):** update-credentials
+>     for username/password accounts (`263ec2683`: our credentials UI is
+>     Inoreader-initial only; an "update credentials" path is a small
+>     feature); the UnreadCountDisplay accessibility strings (`f74e6e220`,
+>     `813ae7b33`: "unread" as accessible text when counts render as dots,
+>     relevant only if/when the dot display mode lands).
+>
+> **Companion clones:** `.newsflash` and `.liferea` were not reviewed
+> (weekly-sync charter: NNW only).
 
 > **Note on Latest Upstream Sync (October 9, 2026):**
 > The `.netnewswire` reference folder has been fast-forwarded to `7cd2e4f31`
