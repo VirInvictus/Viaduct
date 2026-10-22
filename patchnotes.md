@@ -1,5 +1,12 @@
 # viaduct: Patch Notes
 
+## v4.3.2: MacRumors cleanup, magnet links (2026-10-22)
+
+Two ports from the October 22 NetNewsWire sync (`a3e61ddc5` to `63aa234df`, +54 commits). 297 tests; clippy `-D warnings` clean.
+
+- **Fixed:** MacRumors feeds render without their walls of blank lines. MacRumors puts a `<br/>` after every line of its feed HTML, including inside lists and tables, where each `<br>` becomes a blank line (and in tables the parser piles them above the table as a huge gap). A second per-feed rendering special case removes `<br>`s that sit right after list/table structural tags for macrumors.com feeds, matching the feed URL or the home page; a `<br>` after an opening `<li>`/`<td>`/`<th>` is content and stays, and `<br>`s in legal between-blocks positions are kept (NNW `9e21f5c09`).
+- **Added:** `magnet:` links in articles open (NNW `1307ca04e`, Mac-only upstream; viaduct is the desktop analog). The link allowlist was http/https/mailto since v3.4.0; `magnet` joins it case-insensitively. With no torrent handler registered the open simply fails and logs; `file://` and every other custom scheme stay blocked.
+
 ## v4.3.1: proxied Slashdot, numeric titles (2026-10-11)
 
 Two ports from the October 11 NetNewsWire sync (`7cd2e4f31` to `a3e61ddc5`, +33 commits). 292 tests; clippy `-D warnings` clean.

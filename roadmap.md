@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.3.1.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.3.2.
 
 ---
 
@@ -365,6 +365,28 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [x] **Add-feed "open in Reader View by default" toggle** *(shipped v3.1.0, 2026-08-08)*. We already persisted `reader_view_always_enabled` per feed; NewsFlash exposes the equivalent as a checkbox in its add-feed dialog (#905). A `rows::switch_row` in `add_feed_dialog.rs` (same copy as the feed-settings dialog) now sets it at creation time, upserted before the feed's first refresh so the refresher's settings writes can't race the fresh row. Default off, matching the DB default. Verified live: dialog renders and the switch defaults off.
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
+
+## Upstream Sync Candidates (October 22, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `63aa234df` (+54 commits over `a3e61ddc5`, Oct 11 – Oct 21; the `mac-7.2` / `7.2.1` releases plus `7.3b1` work); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `AGENTS.md` §2 for the sync note. The bulk is the restored Mac status bar and a Swift lock-migration sweep; two ports shipped in v4.3.2.
+
+### Ported from NetNewsWire
+
+- [x] **MacRumors stray-`<br>` removal** (NNW `9e21f5c09`, #5498) *(shipped v4.3.2)*. `remove_stray_line_breaks_if_needed`, second per-feed raw-body special case (after the paragraph separation, same order as upstream, matching feed URL or home page): removes `<br>`s that sit right after list/table structural tags. Close set excludes `</ul>`/`</ol>`/`</table>` by upstream design (legal between-blocks position). Five scanner tests.
+- [x] **magnet: links open** (NNW `1307ca04e`) *(shipped v4.3.2)*. `is_openable_url` gains `magnet` (upstream Mac-only; we are the desktop analog). Case-insensitive; the rest of the blocklist is unchanged.
+
+### Deferred candidates (not yet ported)
+
+- [ ] **Status-bar affordance, inspired-by** (NNW `2ce51a4d3` + the follow-up cluster: `e4eefa31d` last-refresh display, `be578c6fe` progress opens the activity log, `a746736bf` gear menu). Upstream restored NNW-of-yore's bottom status bar: last refresh time, live refresh progress, unread count, and a gear menu. Our function is covered today by the refresh progress strip and toasts, so this is a design decision (what a status bar adds on the GtkPaned shell: persistent last-refresh time is the genuinely missing bit), hence deferred.
+
+### Watch / inapplicable (this window)
+
+- `OSAllocatedUnfairLock` → `Mutex` sweep (`3baacbbad`, `a207f3411`, `cb6a59f6d`, `3dfe0595f`, `af70d3ead`, `a4bc00fad`, `8b2b06653`) plus `4d99f1c91` (DatabaseQueue simplification): Swift-concurrency churn and a queue architecture we don't share.
+- Column-layout scroll fixes (`0c2add865`, `ba42d7191`, `2b604643d`, `65b895021`, `b18c59311`, `2cc5ae52b`): AppKit tableview plumbing.
+- `c70a7ab4a` (iOS 18 floor), `63aa234df` (upstream's own Xcode/CI bump): packaging.
+- `b808eaad8`/`d732f6dc7` (CopyableLabel for the version string), `94032d95f` (last-refresh date consistency; our refresher persists `last_check_date`), the rest: strings, assets, cleanups.
+
+---
 
 ## Upstream Sync Candidates (October 11, 2026)
 

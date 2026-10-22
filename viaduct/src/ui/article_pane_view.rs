@@ -552,10 +552,6 @@ impl ArticlePaneView {
         let extracted = state.extracted_html.clone();
         let url = state.article_url.clone();
 
-        // NNW `06ff4cbb6` (#5460): the paragraph-separation special case
-        // applies to raw feed bodies only, never Reader View output
-        // (readability already produces real paragraphs, and rewriting
-        // extracted HTML could corrupt <pre> blocks).
         let (body_html, from_raw) = if reader_mode {
             match extracted.clone() {
                 Some(extracted) => (Some(extracted), false),
@@ -571,6 +567,27 @@ impl ArticlePaneView {
         };
         imp.article_stack.set_visible_child_name("content");
 
+        // NNW `06ff4cbb6` (#5460) + `9e21f5c09` (#5498): the per-feed
+        // special cases apply to raw feed bodies only, never Reader View
+        // output (readability already produces real paragraphs, and
+        // rewriting extracted HTML could corrupt <pre> blocks). Order
+        // matches upstream: paragraph separation first, then the stray
+        // `<br>` removal.
+        let body_for_render = if !from_raw {
+            body_html
+        } else {
+            let para = article_renderer::insert_paragraph_tags_if_needed(
+                &body_html,
+                state.feed_url.as_deref(),
+                state.feed_home_page_url.as_deref(),
+            );
+            article_renderer::remove_stray_line_breaks_if_needed(
+                &para,
+                state.feed_url.as_deref(),
+                state.feed_home_page_url.as_deref(),
+            )
+        };
+
         let is_dark = crate::theme::is_dark();
         let theme = match crate::preferences::settings() {
             Some(s) => crate::preferences::resolve_article_theme(&s, is_dark),
@@ -582,15 +599,7 @@ impl ArticlePaneView {
             // subset (<em>, <b>, <abbr>…) renders as markup instead of
             // literal escaped text; everything else is escaped.
             title: crate::text::sanitized_title(&state.title, true),
-            body: if from_raw {
-                article_renderer::insert_paragraph_tags_if_needed(
-                    &body_html,
-                    state.feed_url.as_deref(),
-                    state.feed_home_page_url.as_deref(),
-                )
-            } else {
-                body_html
-            },
+            body: body_for_render,
             preferred_link: article_renderer::safe_article_url(
                 state.article_url.as_deref().unwrap_or_default(),
             ),

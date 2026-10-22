@@ -467,9 +467,13 @@ fn is_openable_url(uri: &str) -> bool {
     let Some((scheme, _)) = uri.split_once(':') else {
         return false;
     };
+    // magnet: rides along on the desktop (NNW `1307ca04e` is Mac-only
+    // upstream; viaduct is the desktop analog — a torrent client
+    // registers a handler, and with none xdg-open just fails and logs).
+    // file:// and every other custom scheme stay blocked.
     matches!(
         scheme.to_ascii_lowercase().as_str(),
-        "http" | "https" | "mailto"
+        "http" | "https" | "mailto" | "magnet"
     )
 }
 
@@ -999,6 +1003,155 @@ pub fn insert_paragraph_tags_if_needed(
         return html.to_string();
     }
     insert_paragraph_tags(html)
+}
+
+/// NNW `9e21f5c09` (#5498): MacRumors puts a `<br/>` after every line of
+/// its feed HTML, including inside lists and tables. In lists each one
+/// renders as a blank line; in tables the HTML parser moves them to just
+/// before the table, leaving a huge gap above it. For feeds whose domain
+/// is on this list, remove `<br>`s that sit where a `<br>` can't legally
+/// appear: right after a list/table structural open tag (`<ul>`, `<ol>`,
+/// `<table>`, `<thead>`, `<tbody>`, `<tfoot>`) or structural close tag
+/// (`</li>`, `</tr>`, `</td>`, `</th>`, `</thead>`, `</tbody>`,
+/// `</tfoot>`). A `<br>` right after an *opening* `<li>`/`<td>`/`<th>` is
+/// content and stays. Raw bodies only, like the paragraph separation.
+const FEED_DOMAINS_WITH_STRAY_LINE_BREAKS: &[&str] = &["macrumors.com"];
+
+/// See [`FEED_DOMAINS_WITH_STRAY_LINE_BREAKS`]. Port of
+/// NNW `ArticleRenderingSpecialCases.removeStrayLineBreaksIfNeeded`
+/// (whose upstream shape is the case-insensitive regex
+/// `(<(?:ul|ol|table|thead|tbody|tfoot)\b[^>]*>|</(?:li|tr|td|th|thead|tbody|tfoot)>)(?:\s*<br\s*/?>)+`
+/// replaced with the kept tag); hand-rolled scanner, same discipline as
+/// [`insert_paragraph_tags_if_needed`].
+pub fn remove_stray_line_breaks_if_needed(
+    html: &str,
+    feed_url: Option<&str>,
+    home_page_url: Option<&str>,
+) -> String {
+    let matches_domain = |url: Option<&str>| {
+        url.is_some_and(|u| {
+            crate::network::fetcher::url_host_matches_domain(u, FEED_DOMAINS_WITH_STRAY_LINE_BREAKS)
+        })
+    };
+    if !matches_domain(feed_url) && !matches_domain(home_page_url) {
+        return html.to_string();
+    }
+    // Cheap reject: no `<br` in any case anywhere.
+    let has_br = html
+        .as_bytes()
+        .windows(3)
+        .any(|w| w[0] == b'<' && (w[1] == b'b' || w[1] == b'B') && (w[2] == b'r' || w[2] == b'R'));
+    if !has_br {
+        return html.to_string();
+    }
+    remove_stray_line_breaks(html)
+}
+
+fn remove_stray_line_breaks(html: &str) -> String {
+    fn eq_ignore_ascii(a: &[u8], b: &[u8]) -> bool {
+        a.len() == b.len() && a.eq_ignore_ascii_case(b)
+    }
+
+    /// Length of a structural boundary tag at `i`, if any. Openings:
+    /// `<` + (ul|ol|table|thead|tbody|tfoot) + non-word next char + attrs
+    /// to `>` (upstream's `\b[^>]*`). Closings: `</` + (li|tr|td|th|
+    /// thead|tbody|tfoot) + `>` exactly. Unterminated tags never match.
+    fn boundary_tag_len(bytes: &[u8], i: usize) -> Option<usize> {
+        if bytes[i] != b'<' {
+            return None;
+        }
+        let (closing, name_start) = if bytes.get(i + 1) == Some(&b'/') {
+            (true, i + 2)
+        } else {
+            (false, i + 1)
+        };
+        let mut j = name_start;
+        while j < bytes.len() && bytes[j].is_ascii_alphabetic() {
+            j += 1;
+        }
+        if j == name_start {
+            return None;
+        }
+        let name = &bytes[name_start..j];
+        let matched = if closing {
+            let names: &[&[u8]] = &[b"li", b"tr", b"td", b"th", b"thead", b"tbody", b"tfoot"];
+            names.iter().any(|n| eq_ignore_ascii(name, n))
+        } else {
+            // Upstream's `\b`: the char after the name must not be a word
+            // char, so `<ultra>` can't match `ul`.
+            let names: &[&[u8]] = &[b"ul", b"ol", b"table", b"thead", b"tbody", b"tfoot"];
+            names.iter().any(|n| eq_ignore_ascii(name, n))
+                && j < bytes.len()
+                && !(bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
+        };
+        if !matched {
+            return None;
+        }
+        while j < bytes.len() && bytes[j] != b'>' {
+            j += 1;
+        }
+        if j >= bytes.len() {
+            return None;
+        }
+        Some(j + 1 - i)
+    }
+
+    /// Length of one `<br>` token at `i` (any case, optional whitespace
+    /// and slash before `>`). `<brown>` is not a `<br`.
+    fn br_len(bytes: &[u8], i: usize) -> Option<usize> {
+        if bytes.get(i) != Some(&b'<') || !eq_ignore_ascii(bytes.get(i + 1..i + 3)?, b"br") {
+            return None;
+        }
+        let mut j = i + 3;
+        while j < bytes.len() && (bytes[j] as char).is_ascii_whitespace() {
+            j += 1;
+        }
+        if bytes.get(j) == Some(&b'/') {
+            j += 1;
+        }
+        while j < bytes.len() && (bytes[j] as char).is_ascii_whitespace() {
+            j += 1;
+        }
+        if bytes.get(j) == Some(&b'>') {
+            Some(j + 1 - i)
+        } else {
+            None
+        }
+    }
+
+    let bytes = html.as_bytes();
+    let mut out = String::with_capacity(html.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if let Some(tag_len) = boundary_tag_len(bytes, i) {
+            // Keep the boundary tag itself, then swallow the whole run of
+            // whitespace-separated `<br>`s that follows it.
+            out.push_str(&html[i..i + tag_len]);
+            i += tag_len;
+            loop {
+                let mut j = i;
+                while j < bytes.len() && (bytes[j] as char).is_ascii_whitespace() {
+                    j += 1;
+                }
+                match br_len(bytes, j) {
+                    Some(br) => i = j + br,
+                    None => break,
+                }
+            }
+        } else {
+            // Bulk-copy up to the next `<` (endpoints are ASCII, so the
+            // slices stay char-boundary safe).
+            let next = bytes[i..]
+                .iter()
+                .position(|&b| b == b'<')
+                .map(|p| i + p)
+                .unwrap_or(bytes.len());
+            let next = if next == i { i + 1 } else { next };
+            out.push_str(&html[i..next]);
+            i = next;
+        }
+    }
+    out
 }
 
 /// Replace every run of two or more `(\r?\n[ \t]*)` with `<p>`, the
@@ -1611,13 +1764,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn openable_urls_allow_http_https_mailto_only() {
+    fn openable_urls_allow_http_https_mailto_magnet() {
         assert!(is_openable_url("https://example.com/post"));
         assert!(is_openable_url("http://example.com/post"));
         assert!(is_openable_url(
             "mailto:someone@example.com?subject=Hi%20there"
         ));
         assert!(is_openable_url("HTTPS://EXAMPLE.COM/UPPER"));
+        // magnet: joins the desktop allowlist (NNW `1307ca04e`).
+        assert!(is_openable_url(
+            "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=example"
+        ));
+        assert!(is_openable_url(
+            "MAGNET:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+        ));
 
         assert!(!is_openable_url("file:///home/bdkl/.zshrc"));
         assert!(!is_openable_url("javascript:alert(1)"));
@@ -1729,6 +1889,71 @@ mod tests {
                 Some("https://slashdot.org/")
             ),
             "a<p>b"
+        );
+    }
+
+    // --- remove_stray_line_breaks_if_needed (NNW `9e21f5c09`, #5498) ---
+
+    #[test]
+    fn stray_line_breaks_removed_after_structural_tags() {
+        // The MacRumors shape: `<br>` after every line, including where
+        // a `<br>` can't legally sit (after `</li>`, after `</td>`). The
+        // close-tag set deliberately excludes `</ul>`/`</ol>`/`</table>`:
+        // a `<br>` right after those closes a whole block, a legal
+        // between-blocks position, so upstream keeps it.
+        let body = "<ul>\n<li>One</li><br>\n<li>Two</li>\n</ul>\n<br>\n<table>\n<tr><td>A</td><br></tr>\n</table>";
+        let out = remove_stray_line_breaks_if_needed(body, Some("https://macrumors.com/rss"), None);
+        assert_eq!(
+            out,
+            "<ul>\n<li>One</li>\n<li>Two</li>\n</ul>\n<br>\n<table>\n<tr><td>A</td></tr>\n</table>"
+        );
+    }
+
+    #[test]
+    fn stray_line_breaks_kept_where_content() {
+        // After an *opening* <li>/<td>/<th> a <br> is content; so is a
+        // <br> after ordinary tags (<p>) or bare text.
+        let body = "<ul><li><br>lead</li></ul><p>para</p><br>text";
+        let out = remove_stray_line_breaks_if_needed(body, Some("https://macrumors.com/"), None);
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn stray_line_breaks_other_domains_untouched() {
+        let body = "<ul><li>One</li><br></ul>";
+        assert_eq!(
+            remove_stray_line_breaks_if_needed(body, Some("https://example.com/feed"), None),
+            body
+        );
+        assert_eq!(remove_stray_line_breaks_if_needed(body, None, None), body);
+    }
+
+    #[test]
+    fn stray_line_breaks_case_insensitive_and_via_home_page() {
+        // `<BR/>` matches; the home page URL triggers the special case
+        // for proxied feeds too (`a44cfe13c`).
+        let body = "<ol><li>a</li><BR/><li>b</li></ol>";
+        let out = remove_stray_line_breaks_if_needed(
+            body,
+            Some("https://feedburner.example/macrumors"),
+            Some("https://www.macrumors.com/"),
+        );
+        assert_eq!(out, "<ol><li>a</li><li>b</li></ol>");
+    }
+
+    #[test]
+    fn stray_line_breaks_word_boundary_and_partial_tags_safe() {
+        // `<ultra>` must not match `ul`; `<brown>` must not match `br`;
+        // an unterminated structural tag leaves everything untouched.
+        let body = "<ultra><li>x</li></ultra><brown>text";
+        assert_eq!(
+            remove_stray_line_breaks_if_needed(body, Some("https://macrumors.com/"), None),
+            body
+        );
+        let unterminated = "<table <br>rows";
+        assert_eq!(
+            remove_stray_line_breaks_if_needed(unterminated, Some("https://macrumors.com/"), None),
+            unterminated
         );
     }
 
