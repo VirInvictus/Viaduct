@@ -822,16 +822,25 @@ impl ViaductWindow {
             let feed_link = String::new();
 
             // Prefer content_html → content_text → summary, in order. NNW
-            // does the equivalent fall-through. If everything is empty
-            // (sparse feeds like pragprog.com that ship title+link only),
-            // synthesize a minimal HTML stub so the article pane shows the
-            // title and an "open in browser" link instead of going blank.
+            // does the equivalent fall-through. `content_text` is plain
+            // text: convert to HTML (escape, paragraphs, linkified URLs;
+            // NNW `d795983c9`) so a raw `<` or `&` in a text-only feed
+            // can't corrupt the page and URLs become clickable. If
+            // everything is empty (sparse feeds like pragprog.com that
+            // ship title+link only), synthesize a minimal HTML stub so
+            // the article pane shows the title and an "open in browser"
+            // link instead of going blank.
             let body = article
                 .content_html
                 .clone()
                 .filter(|s| !s.trim().is_empty())
-                .or(article.content_text.clone())
-                .filter(|s| !s.trim().is_empty())
+                .or_else(|| {
+                    article
+                        .content_text
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
+                        .map(crate::text::plain_text_to_html)
+                })
                 .or(article.summary.clone())
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| build_empty_body_fallback(&article));

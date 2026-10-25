@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.4.0.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.4.1.
 
 ---
 
@@ -365,6 +365,26 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [x] **Add-feed "open in Reader View by default" toggle** *(shipped v3.1.0, 2026-08-08)*. We already persisted `reader_view_always_enabled` per feed; NewsFlash exposes the equivalent as a checkbox in its add-feed dialog (#905). A `rows::switch_row` in `add_feed_dialog.rs` (same copy as the feed-settings dialog) now sets it at creation time, upserted before the feed's first refresh so the refresher's settings writes can't race the fresh row. Default off, matching the DB default. Verified live: dialog renders and the switch defaults off.
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
+
+## Upstream Sync Candidates (October 25, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `70c5dce65` (+28 commits over `d9ec7df6f`, Oct 22 – Oct 24); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `AGENTS.md` §2 for the sync note. The window is upstream's media/attachments arc; one port shipped in v4.4.1.
+
+### Ported from NetNewsWire
+
+- [x] **Plain-text rendering** (NNW `d795983c9`) *(shipped v4.4.1)*. `text::plain_text_to_html` on the `content_text` body path: escape, blank-line paragraphs, `<br>`, linkified scheme-prefixed URL runs (sentence-safe trailing punctuation). Divergence: no bare-`www.` linkify (upstream's NSDataDetector); recorded in the fn docs. Four tests.
+
+### Deferred candidates (not yet ported)
+
+- [ ] **The media/attachments arc** (NNW `df20c6cc1` + `4a842f8ef` + `9ac622102` + `81088cb21` + `641c2818a` + `b22294f1a` + `3838725d0` + `473a94bb0` + `876e0a006` + `17b9a5b54` + `77075a188` + `18380e800` and kin). Feature-scale: richer Media RSS metadata in both parsers (width/height/medium, `media:group`, merging duplicate attachments for the same resource, `itunes:image` as article image, `media:description` as last-resort body), thumbnails + article-image extraction per feed, and enclosure rendering in the pane (images inline via `viaduct-img://`, podcast affordances). In-pane YouTube playback stays declined under §7.4 (the video dialog covers it). Our parse surface already carries basic `<enclosure>`/MRSS into `attachments` JSON; the schema work is widening that JSON, not a new column.
+
+### Watch / inapplicable (this window)
+
+- `73009b389` (OPML saved on feed rename): already our shape (`rename_feed` saves on change).
+- `1a07f175d` (unclosed tags can't hide enclosures) and `badbb4703` (div vs figure): shape their enclosure renderer, which we don't have; folds into the arc candidate above.
+- Feedbin/Feedly/NewsBlur entry parsers (`7858ea8b6`, `d3d52a72e`, `c9d52b859`, `8b6adbc8f`): per-backend image extraction, out of scope per §7.3; the local-account parsing half rides the arc candidate.
+
+---
 
 ## Upstream Sync Candidates (October 24, 2026)
 

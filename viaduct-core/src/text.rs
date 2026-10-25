@@ -122,9 +122,184 @@ pub fn sanitized_title(title: &str, for_html: bool) -> String {
     String::from_utf8(out).expect("sanitized output is valid UTF-8")
 }
 
+/// HTML for a plain-text article body (NNW `d795983c9`,
+/// `RSCore.String.convertingPlainTextToHTML`): escaped, blank lines as
+/// paragraph breaks, other line breaks as `<br>`, and URLs as links.
+/// Feeds whose items carry only plain text (no `content_html`) would
+/// otherwise inject raw text into the HTML pipeline, unescaped and
+/// unlinked.
+///
+/// Recorded divergence: upstream linkifies with `NSDataDetector` (ICU,
+/// finds bare `www.` hosts and trailing punctuation intelligently);
+/// we scan for `http://`, `https://`, and `mailto:` runs by hand (the
+/// no-regex discipline) and trim common trailing punctuation from a
+/// run. Same no-new-dependency trade the other scanners make.
+pub fn plain_text_to_html(text: &str) -> String {
+    fn escape(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&quot;"),
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+
+    /// Length of a URL starting at `i` (`http(s)://…` / `mailto:…`),
+    /// stopping at whitespace or a closing bracket/quote. Trailing
+    /// sentence punctuation (`.,;:!?)`]` + closing quotes) is left out
+    /// of the run so "see https://x.example/a." links the address.
+    fn url_run_len(bytes: &[u8], i: usize) -> Option<usize> {
+        let rest = &bytes[i..];
+        let starts = rest.starts_with(b"http://")
+            || rest.starts_with(b"https://")
+            || rest.starts_with(b"mailto:");
+        if !starts {
+            return None;
+        }
+        let mut j = i;
+        while j < bytes.len() {
+            let b = bytes[j];
+            if b.is_ascii_whitespace()
+                || matches!(b, b'<' | b'>' | b'"' | b'\'' | b'`' | b')' | b']' | b'}')
+            {
+                break;
+            }
+            j += 1;
+        }
+        // Trim trailing sentence punctuation off the run end.
+        while j > i
+            && matches!(
+                bytes[j - 1],
+                b'.' | b',' | b';' | b':' | b'!' | b'?' | b'"' | b'\'' | b'`'
+            )
+        {
+            j -= 1;
+        }
+        if j <= i { None } else { Some(j - i) }
+    }
+
+    /// One line, escaped, with URL runs wrapped in anchors. The href
+    /// and the text are both escaped (the href attribute needs quotes
+    /// escaped too, which `escape` covers).
+    fn linkified_escaped_line(line: &str) -> String {
+        let bytes = line.as_bytes();
+        let mut out = String::with_capacity(line.len());
+        let mut i = 0usize;
+        while i < line.len() {
+            if let Some(len) = url_run_len(bytes, i) {
+                let url = &line[i..i + len];
+                out.push_str("<a href=\"");
+                out.push_str(&escape(url));
+                out.push_str("\">");
+                out.push_str(&escape(url));
+                out.push_str("</a>");
+                i += len;
+                continue;
+            }
+            // Copy one char (keeps UTF-8 whole; URL starts are ASCII,
+            // so a non-match position just walks one char forward).
+            let (off, c) = line[i..]
+                .char_indices()
+                .next()
+                .map(|(off, c)| (i + off, c))
+                .expect("i is a char boundary");
+            let end = off + c.len_utf8();
+            out.push_str(&escape(&line[off..end]));
+            i = end;
+        }
+        out
+    }
+
+    let normalized = text.replace("\r\n", "\n");
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut paragraph_lines: Vec<String> = Vec::new();
+    for line in normalized.split('\n') {
+        if line.trim().is_empty() {
+            if !paragraph_lines.is_empty() {
+                paragraphs.push(format!("<p>{}</p>", paragraph_lines.join("<br>\n")));
+                paragraph_lines.clear();
+            }
+        } else {
+            paragraph_lines.push(linkified_escaped_line(line));
+        }
+    }
+    if !paragraph_lines.is_empty() {
+        paragraphs.push(format!("<p>{}</p>", paragraph_lines.join("<br>\n")));
+    }
+    paragraphs.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_text_makes_paragraphs_and_brs() {
+        // NNW d795983c9 shape: blank lines split paragraphs; single
+        // newlines become <br>. CRLF normalizes first.
+        assert_eq!(
+            plain_text_to_html("one\ntwo\n\nthree"),
+            "<p>one<br>\ntwo</p>\n<p>three</p>"
+        );
+        assert_eq!(
+            plain_text_to_html("one\r\ntwo\r\n\r\nthree"),
+            "<p>one<br>\ntwo</p>\n<p>three</p>"
+        );
+        // Leading/trailing blank lines produce no empty paragraphs.
+        assert_eq!(plain_text_to_html("\n\nhello\n\n"), "<p>hello</p>");
+        assert_eq!(plain_text_to_html(""), "");
+    }
+
+    #[test]
+    fn plain_text_escapes_html() {
+        assert_eq!(
+            plain_text_to_html("a < b & c > d \"quoted\""),
+            "<p>a &lt; b &amp; c &gt; d &quot;quoted&quot;</p>"
+        );
+    }
+
+    #[test]
+    fn plain_text_linkifies_urls_with_safe_trailing_punctuation() {
+        // The address links; the sentence period stays outside.
+        assert_eq!(
+            plain_text_to_html("see https://example.com/a."),
+            "<p>see <a href=\"https://example.com/a\">https://example.com/a</a>.</p>"
+        );
+        assert_eq!(
+            plain_text_to_html("http://example.com/x and mailto:me@example.com"),
+            "<p><a href=\"http://example.com/x\">http://example.com/x</a> and \
+             <a href=\"mailto:me@example.com\">mailto:me@example.com</a></p>"
+        );
+        // A URL in parentheses: the closing paren ends the run.
+        assert_eq!(
+            plain_text_to_html("(https://example.com/y)"),
+            "<p>(<a href=\"https://example.com/y\">https://example.com/y</a>)</p>"
+        );
+        // An ampersand inside the URL is escaped in both href and text.
+        assert_eq!(
+            plain_text_to_html("https://example.com/q?a=1&b=2"),
+            "<p><a href=\"https://example.com/q?a=1&amp;b=2\">https://example.com/q?a=1&amp;b=2</a></p>"
+        );
+        // Bare hosts (no scheme) stay plain: the scanner's documented
+        // divergence from NSDataDetector.
+        assert_eq!(
+            plain_text_to_html("visit example.com today"),
+            "<p>visit example.com today</p>"
+        );
+    }
+
+    #[test]
+    fn plain_text_preserves_multibyte_text() {
+        assert_eq!(
+            plain_text_to_html("こんにちは世界"),
+            "<p>こんにちは世界</p>"
+        );
+    }
 
     #[test]
     fn plain_title_passes_through() {

@@ -1,5 +1,11 @@
 # viaduct: Patch Notes
 
+## v4.4.1: plain text renders as HTML (2026-10-25)
+
+One port from the October 25 NetNewsWire sync (`d9ec7df6f` to `70c5dce65`, +28 commits). 305 tests; clippy `-D warnings` clean.
+
+- **Fixed:** articles from text-only feeds rendered as one unescaped blob: a `<` or `&` in the text corrupted the page, paragraphs ran together, and URLs were dead text. The plain-text body path now converts to HTML first: escaped, blank lines as paragraph breaks, single line breaks as `<br>`, and `http(s)://`/`mailto:` URLs as links with sentence-safe trailing punctuation (NNW `d795983c9`).
+
 ## v4.4.0: the roadmap harvest (2026-10-24)
 
 The four standing roadmap candidates, built in one pass per Brandon's call that this project's roadmap work runs here rather than being handed off. 301 tests; clippy `-D warnings` clean.
