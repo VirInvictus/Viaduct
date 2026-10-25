@@ -33,6 +33,7 @@ pub mod status_page;
 pub mod timeline;
 pub mod timeline_view;
 pub mod tree;
+pub mod update_credentials_dialog;
 pub mod welcome_dialog;
 pub mod window;
 pub mod window_title;

@@ -32,6 +32,12 @@
     <value nick="title-descending" value="3"/>
   </enum>
 
+  <enum id="io.github.virinvictus.Viaduct.UnreadCountDisplay">
+    <value nick="count" value="0"/>
+    <value nick="dot" value="1"/>
+    <value nick="hidden" value="2"/>
+  </enum>
+
   <schema id="io.github.virinvictus.Viaduct" path="/io/github/virinvictus/Viaduct/">
     <key name="color-scheme" enum="io.github.virinvictus.Viaduct.ColorScheme">
       <default>"default"</default>
@@ -198,6 +204,23 @@
         newest-first. The setting is read every time the timeline
         reloads so flipping it in the timeline header bar re-sorts
         immediately.
+      </description>
+    </key>
+
+    <key name="unread-count-display" enum="io.github.virinvictus.Viaduct.UnreadCountDisplay">
+      <default>"count"</default>
+      <summary>How unread counts render</summary>
+      <description>
+        How the sidebar's unread badges render (NNW c71be4919 /
+        6f7830904). "count" (default) shows the number. "dot" shows a
+        bullet for any unread > 0, with the number preserved as the
+        accessible label so screen readers still announce it
+        (NNW f74e6e220 / 813ae7b33). "hidden" shows nothing. Zero
+        unread renders nothing in every mode, as it always has. The
+        setting applies everywhere an unread count renders: feed,
+        folder, smart-feed, and aggregated group rows. Read fresh on
+        every row bind so a flip re-renders on the next sidebar
+        rebuild.
       </description>
     </key>
 

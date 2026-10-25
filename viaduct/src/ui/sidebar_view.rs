@@ -31,6 +31,9 @@ use crate::ui::sidebar::{
 };
 use crate::ui::timeline::FeedNameMap;
 
+/// The status bar's unread-total callback, registered by the window.
+type UnreadTotalListener = Box<dyn Fn(i64)>;
+
 /// Twin of [`FeedNameMap`]: feed id → (feed URL, home page URL), rebuilt
 /// on every OPML apply. Consumed by the article pane's per-feed rendering
 /// special cases (NNW #5460 + `a44cfe13c`, which matches the home page so
@@ -117,6 +120,9 @@ mod imp {
         /// Single-flight state for unread-count rounds. GTK-main-thread
         /// only, like every other field here; see [`UnreadCountFlight`].
         pub(crate) unread_counts_flight: RefCell<UnreadCountFlight>,
+        /// The status bar's unread-total callback (the window registers
+        /// one; invoked at the end of every successful count round).
+        pub(crate) unread_total_listener: RefCell<Option<UnreadTotalListener>>,
     }
 
     #[glib::object_subclass]
@@ -579,17 +585,31 @@ impl SidebarView {
                 }
             }
 
-            // Round complete: release the flight, then honor at most one
+            // Round complete: hand the account-wide total to the status
+            // bar listener (the window registers one; nothing owns it
+            // otherwise), release the flight, then honor at most one
             // re-run if any request collapsed while this round ran. Runs
             // on the query-error path too, so a failed round doesn't
             // swallow the follow-up and strand the badges stale.
             if let Some(view) = view {
+                if let Some(smart) = smart
+                    && let Some(listener) = view.imp().unread_total_listener.borrow().as_ref()
+                {
+                    listener(smart.all_unread);
+                }
                 let rerun = view.imp().unread_counts_flight.borrow_mut().complete();
                 if rerun {
                     view.refresh_unread_counts(account);
                 }
             }
         });
+    }
+
+    /// Register the status-bar callback: invoked with the account-wide
+    /// unread total at the end of every successful count round. The
+    /// window wires this to `status_unread_label`.
+    pub fn set_unread_total_listener(&self, listener: UnreadTotalListener) {
+        *self.imp().unread_total_listener.borrow_mut() = Some(listener);
     }
 
     /// Tear down the right-click popovers before the listview finalizes.

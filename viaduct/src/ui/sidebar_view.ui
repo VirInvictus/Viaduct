@@ -34,6 +34,10 @@
     </section>
     <section>
       <item>
+        <attribute name="label" translatable="yes">Update Inoreader Credentials…</attribute>
+        <attribute name="action">win.update-credentials</attribute>
+      </item>
+      <item>
         <attribute name="label" translatable="yes">Activity Log…</attribute>
         <attribute name="action">win.activity-log</attribute>
       </item>

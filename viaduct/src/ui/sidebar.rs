@@ -543,7 +543,14 @@ pub fn setup_sidebar_list_view(
             icon_stack.set_visible_child_name("icon");
         }
 
-        apply_unread_badge(&badge, node.unread_count());
+        // Badge mode read fresh at bind (row recycling means a stored
+        // mode would leak across rows); the notify handler re-reads it
+        // the same way, so a Preferences flip lands on the next
+        // recount/rebind without a global rebuild.
+        let badge_mode = crate::preferences::settings()
+            .map(|s| crate::preferences::unread_count_display(&s))
+            .unwrap_or(crate::preferences::UnreadCountDisplay::Count);
+        apply_unread_badge(&badge, node.unread_count(), badge_mode);
 
         // Re-render the badge whenever the node's unread count flips. Same
         // pattern as ArticleNode/notify::read in the timeline factory: id
@@ -552,7 +559,10 @@ pub fn setup_sidebar_list_view(
         let badge_for_notify = badge.downgrade();
         let id = node.connect_notify_local(Some("unread-count"), move |node, _| {
             if let Some(badge) = badge_for_notify.upgrade() {
-                apply_unread_badge(&badge, node.unread_count());
+                let mode = crate::preferences::settings()
+                    .map(|s| crate::preferences::unread_count_display(&s))
+                    .unwrap_or(crate::preferences::UnreadCountDisplay::Count);
+                apply_unread_badge(&badge, node.unread_count(), mode);
             }
         });
         unsafe {
@@ -581,14 +591,29 @@ pub fn setup_sidebar_list_view(
     selection_model
 }
 
-fn apply_unread_badge(badge: &gtk::Label, count: u32) {
-    if count > 0 {
-        badge.set_text(&count.to_string());
-        badge.set_visible(true);
-    } else {
-        badge.set_text("");
-        badge.set_visible(false);
+/// Render the unread badge per the user's display mode (count / dot /
+/// hidden; zero unread hides in every mode, as it always has). The
+/// accessible label always carries the number so dot/hidden modes still
+/// announce "N unread" (NNW `f74e6e220` / `813ae7b33`).
+fn apply_unread_badge(
+    badge: &gtk::Label,
+    count: u32,
+    mode: crate::preferences::UnreadCountDisplay,
+) {
+    let (text, a11y) = crate::preferences::unread_badge_for(mode, count);
+    match text {
+        Some(text) => {
+            badge.set_text(&text);
+            badge.set_visible(true);
+        }
+        None => {
+            badge.set_text("");
+            badge.set_visible(false);
+        }
     }
+    badge.update_property(&[gtk::accessible::Property::Label(
+        a11y.as_deref().unwrap_or(""),
+    )]);
 }
 
 /// Show the feed-health warning when the last refresh returned an HTTP error

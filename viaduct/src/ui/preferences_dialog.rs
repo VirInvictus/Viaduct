@@ -48,6 +48,7 @@ pub fn present(parent: &ViaductWindow) {
 
     appearance.add(&color_scheme_row(&settings));
     appearance.add(&article_theme_row(&settings));
+    appearance.add(&unread_count_display_row(&settings));
     typography.add(&font_row(
         &settings,
         keys::FONT_UI,
@@ -194,13 +195,60 @@ fn color_scheme_row(settings: &gio::Settings) -> gtk::ListBoxRow {
     row
 }
 
+/// How sidebar unread badges render: numbers, a dot, or hidden (NNW
+/// `UnreadCountDisplay`). Same write + external-flip shape as the
+/// color-scheme row.
+fn unread_count_display_row(settings: &gio::Settings) -> gtk::ListBoxRow {
+    let (row, drop_down) = rows::combo_row(
+        "Unread counts",
+        Some("How sidebar unread badges render: the number, a dot, or hidden."),
+        &["Numbers", "Dots", "Hidden"],
+    );
+    drop_down.set_selected(match settings.string(keys::UNREAD_COUNT_DISPLAY).as_str() {
+        "dot" => 1,
+        "hidden" => 2,
+        _ => 0,
+    });
+
+    let settings_for_row = settings.clone();
+    drop_down.connect_selected_notify(move |drop_down| {
+        let nick = match drop_down.selected() {
+            1 => "dot",
+            2 => "hidden",
+            _ => "count",
+        };
+        if settings_for_row.string(keys::UNREAD_COUNT_DISPLAY).as_str() != nick
+            && let Err(e) = settings_for_row.set_string(keys::UNREAD_COUNT_DISPLAY, nick)
+        {
+            tracing::warn!(?e, "failed to write unread-count-display setting");
+        }
+    });
+
+    settings.connect_changed(
+        Some(keys::UNREAD_COUNT_DISPLAY),
+        glib::clone!(
+            #[weak]
+            drop_down,
+            move |s, _| {
+                let nick = s.string(keys::UNREAD_COUNT_DISPLAY);
+                drop_down.set_selected(match nick.as_str() {
+                    "dot" => 1,
+                    "hidden" => 2,
+                    _ => 0,
+                });
+            }
+        ),
+    );
+
+    row
+}
+
 /// Theme picker for the article reading pane. The dropdown lists "Follow
-/// color scheme" plus all 8 NNW-ported themes; the selected theme's
-/// accent color also propagates app-wide via
-/// `preferences::apply_article_theme_accent`.
+/// color scheme" plus all 8 NNW-ported themes; the pane keeps its
+/// per-theme accent via `render_themed` (Phase 20d removed the
+/// chrome-wide propagation).
 fn article_theme_row(settings: &gio::Settings) -> gtk::ListBoxRow {
     use crate::ui::article_renderer::THEMES;
-
     // Index 0 = Auto; subsequent indices match THEMES[i-1].
     let mut labels = vec!["Follow color scheme".to_string()];
     labels.extend(THEMES.iter().map(|t| t.display_name.to_string()));

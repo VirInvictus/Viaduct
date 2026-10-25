@@ -72,39 +72,49 @@ Licensed under the MIT License. See LICENSE in the project root for details.
                 </property>
               </object>
             </child>
-            <!-- v2.6.10 refresh progress strip. Hidden until the next
-                 refresh cycle starts; fades in via Revealer's slide-up,
-                 fades out when the cycle completes. -->
+            <!-- v4.4.0 status bar (absorbs the v2.6.10 refresh progress
+                 strip): always visible. Left = "Last refreshed …" at
+                 rest, live "Refreshing feeds… N/M" during a cycle;
+                 center = the thin progress bar (visible during a cycle
+                 only); right = the total unread count. -->
             <child>
-              <object class="GtkRevealer" id="refresh_progress_revealer">
-                <property name="transition-type">slide-up</property>
-                <property name="reveal-child">False</property>
-                <property name="child">
-                  <object class="GtkBox">
-                    <property name="orientation">vertical</property>
-                    <property name="spacing">4</property>
-                    <property name="margin-start">12</property>
-                    <property name="margin-end">12</property>
-                    <property name="margin-top">6</property>
-                    <property name="margin-bottom">6</property>
-                    <child>
-                      <object class="GtkLabel" id="refresh_progress_label">
-                        <property name="halign">start</property>
-                        <property name="xalign">0</property>
-                        <property name="ellipsize">end</property>
-                        <style>
-                          <class name="caption"/>
-                          <class name="dim-label"/>
-                        </style>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkProgressBar" id="refresh_progress_bar">
-                        <property name="hexpand">True</property>
-                      </object>
-                    </child>
+              <object class="GtkBox" id="status_bar">
+                <property name="orientation">horizontal</property>
+                <property name="spacing">12</property>
+                <property name="margin-start">12</property>
+                <property name="margin-end">12</property>
+                <property name="margin-top">6</property>
+                <property name="margin-bottom">6</property>
+                <child>
+                  <object class="GtkLabel" id="refresh_progress_label">
+                    <property name="halign">start</property>
+                    <property name="hexpand">True</property>
+                    <property name="xalign">0</property>
+                    <property name="ellipsize">end</property>
+                    <style>
+                      <class name="caption"/>
+                      <class name="dim-label"/>
+                    </style>
                   </object>
-                </property>
+                </child>
+                <child>
+                  <object class="GtkProgressBar" id="refresh_progress_bar">
+                    <property name="visible">False</property>
+                    <property name="valign">center</property>
+                    <property name="width-request">180</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="status_unread_label">
+                    <property name="halign">end</property>
+                    <property name="valign">center</property>
+                    <style>
+                      <class name="caption"/>
+                      <class name="dim-label"/>
+                      <class name="numeric"/>
+                    </style>
+                  </object>
+                </child>
               </object>
             </child>
           </object>

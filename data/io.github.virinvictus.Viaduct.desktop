@@ -7,5 +7,6 @@ Terminal=false
 Type=Application
 Categories=GNOME;GTK;Network;News;
 Keywords=RSS;Feed;Reader;News;Inoreader;
+MimeType=x-scheme-handler/feed;x-scheme-handler/feeds;
 StartupNotify=true
 DBusActivatable=true

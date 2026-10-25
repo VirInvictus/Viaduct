@@ -1,5 +1,15 @@
 # viaduct: Patch Notes
 
+## v4.4.0: the roadmap harvest (2026-10-24)
+
+The four standing roadmap candidates, built in one pass per Brandon's call that this project's roadmap work runs here rather than being handed off. 301 tests; clippy `-D warnings` clean.
+
+- **Added:** unread-count display modes (NNW `c71be4919`, `6f7830904`): a new Appearance preference, "Unread counts" (Numbers / Dots / Hidden), applies everywhere an unread count renders: feed, folder, smart-feed, and aggregated group rows. Dot mode shows a bullet for unread > 0; zero unread shows nothing in every mode, as it always has.
+- **Added:** the accessible label on every badge always carries the number, so dot and hidden modes still announce "N unread" to screen readers (NNW `f74e6e220`, `813ae7b33`).
+- **Added:** "Update Inoreader Credentials…" in the primary menu (NNW `263ec2683`'s update path for username/password accounts). The dialog pre-fills from the Secret Service, verifies the token against the Reader API before storing, and a failed verification leaves the stored credentials untouched.
+- **Added:** `feed:` and `feeds:` subscription links open viaduct (NNW `8b261521f`'s reader interop, our desktop shape): the desktop file registers the schemes, a running instance receives the URL over D-Bus, and the Add Feed dialog opens pre-filled and focused. Both real-world URL shapes normalize (`feed://host/path` and RFC 7464's `feed:https://…`); the `x-netnewswire-feed` scheme deliberately stays unclaimed.
+- **Added:** the status bar (inspired by NNW's restored Mac status bar, `2ce51a4d3` + follow-ups): a persistent thin bar under the panes showing "Last refreshed 17:42" (from the DB at startup, wall clock at cycle end; "Never refreshed" on a fresh install), the live per-feed progress during a cycle (absorbing the old auto-hiding strip), and the total unread count on the right. The completion toast is unchanged.
+
 ## v4.3.2: MacRumors cleanup, magnet links (2026-10-22)
 
 Two ports from the October 22 NetNewsWire sync (`a3e61ddc5` to `63aa234df`, +54 commits). 297 tests; clippy `-D warnings` clean.

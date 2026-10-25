@@ -45,12 +45,15 @@ pub(crate) mod imp {
         pub toast_label: TemplateChild<gtk::Label>,
         pub toast_timeout: RefCell<Option<glib::SourceId>>,
         // v2.6.10 refresh-progress strip (Revealer + label + bar at
-        // window bottom). Hidden until a refresh cycle starts; the
+        // v4.4.0 status bar (absorbed the v2.6.10 refresh progress
+        // strip): always visible. The label shows "Last refreshed …" at
+        // rest and live "Refreshing feeds… N/M" during a cycle (the
         // poll loop in `show_refresh_progress` reads
-        // `refresh_progress_completed` (incremented by each per-feed
-        // task in the refresher) and updates fraction + label at 250ms.
+        // `refresh_progress_completed`, incremented by each per-feed
+        // task in the refresher); the thin bar is visible during a
+        // cycle only; the right label carries the total unread.
         #[template_child]
-        pub refresh_progress_revealer: TemplateChild<gtk::Revealer>,
+        pub status_unread_label: TemplateChild<gtk::Label>,
         #[template_child]
         pub refresh_progress_label: TemplateChild<gtk::Label>,
         #[template_child]
@@ -404,6 +407,46 @@ impl ViaductWindow {
 
     fn wire_models(&self) {
         let imp = self.imp();
+
+        // v4.4.0 status bar: seed the rest-state line. The startup value
+        // comes from the DB (newest last_check_date across feeds) so a
+        // relaunch doesn't claim "Never refreshed" on a synced account;
+        // after each cycle the wall clock stamps it instead (the DB
+        // write can lag the cycle end). The unread total arrives through
+        // the sidebar's count-round listener.
+        imp.refresh_progress_label.get().set_text("Never refreshed");
+        {
+            let window_weak = self.downgrade();
+            let account_for_stamp = self.account();
+            glib::spawn_future_local(async move {
+                let Ok(stamp) = account_for_stamp.last_check_date().await else {
+                    return;
+                };
+                let stamp = stamp.and_then(|secs| {
+                    chrono::DateTime::from_timestamp(secs, 0)
+                        .map(|utc| utc.with_timezone(&chrono::Local))
+                });
+                if let Some(window) = window_weak.upgrade() {
+                    window
+                        .imp()
+                        .refresh_progress_label
+                        .get()
+                        .set_text(&crate::ui::refresh::format_last_refresh(stamp));
+                }
+            });
+        }
+        imp.sidebar_view.get().set_unread_total_listener(Box::new({
+            let window_weak = self.downgrade();
+            move |total| {
+                if let Some(window) = window_weak.upgrade() {
+                    window
+                        .imp()
+                        .status_unread_label
+                        .get()
+                        .set_text(&format!("{total} unread",));
+                }
+            }
+        }));
 
         // Clear any per-feed refresh notifications the moment the window
         // becomes active. Keyed on `is-active` rather than the background

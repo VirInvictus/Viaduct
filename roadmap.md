@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.3.2.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.4.0.
 
 ---
 
@@ -372,7 +372,7 @@ Surfaced by fast-forwarding `.netnewswire` to `d9ec7df6f` (+38 commits over `63a
 
 ### Deferred candidates (not yet ported)
 
-- [ ] **`feed:`/`feeds:` subscription links** (NNW `8b261521f`, the magnet follow-up). Upstream's open-allowlist now includes the reader-interop subscription schemes so `feed:` URLs hand off to the default reader. For viaduct the interesting move is different: register as a `feed:`/`feeds:` handler (desktop file MimeType + DBusActivatable routing) and land the URL in the Add Feed dialog. Feature, not a fix, hence deferred; pairs naturally with the standing add-feed UX work.
+- [x] **`feed:`/`feeds:` subscription links** (NNW `8b261521f`, the magnet follow-up) *(shipped v4.4.0)*. Full handler: MimeType registration, GApplication HANDLES_OPEN with second-instance D-Bus routing, both URL shapes normalized (`feed://host/path` and RFC 7464 `feed:https://…`), Add Feed dialog pre-filled and focused; the Add button arms via the same changed-signal path. `x-netnewswire-feed` deliberately unclaimed (it identifies NetNewsWire).
 
 ### Watch / inapplicable (this window)
 
@@ -396,7 +396,7 @@ Surfaced by fast-forwarding `.netnewswire` to `63aa234df` (+54 commits over `a3e
 
 ### Deferred candidates (not yet ported)
 
-- [ ] **Status-bar affordance, inspired-by** (NNW `2ce51a4d3` + the follow-up cluster: `e4eefa31d` last-refresh display, `be578c6fe` progress opens the activity log, `a746736bf` gear menu). Upstream restored NNW-of-yore's bottom status bar: last refresh time, live refresh progress, unread count, and a gear menu. Our function is covered today by the refresh progress strip and toasts, so this is a design decision (what a status bar adds on the GtkPaned shell: persistent last-refresh time is the genuinely missing bit), hence deferred.
+- [x] **Status-bar affordance, inspired-by** (NNW `2ce51a4d3` + `e4eefa31d`; the progress-opens-activity-log and gear-menu follow-ups not adopted) *(shipped v4.4.0)*. Brandon's shape: a persistent bottom bar absorbing the auto-hiding strip (last-refresh at rest, live progress during a cycle), total unread on the right, completion toast unchanged. Last-refresh seeds from the DB (MAX(last_check_date), new settings op) at startup and stamps from the wall clock at cycle end.
 
 ### Watch / inapplicable (this window)
 
@@ -418,8 +418,8 @@ Surfaced by fast-forwarding `.netnewswire` to `a3e61ddc5` (+33 commits over `7cd
 
 ### Deferred candidates (not yet ported)
 
-- [ ] **Update-credentials for username/password accounts** (NNW `263ec2683`). NNW offers "Update Credentials" for every username/password account, not just Feedbin. Our credentials surface is the Inoreader initial setup only; an update path (menu item + dialog reusing the existing credentials::store_credentials) is a small feature with a design edge (where the entry point lives for a single-account app).
-- [ ] **UnreadCountDisplay accessibility strings** (NNW `f74e6e220`, `813ae7b33`). VoiceOver reads "unread" when counts render as dots. Only relevant once the Oct 9 window's UnreadCountDisplay dot/hide modes land; bundle the strings with that port.
+- [x] **Update-credentials for username/password accounts** (NNW `263ec2683`) *(shipped v4.4.0)*. "Update Inoreader Credentials…" in the primary menu; modal pre-fills from the Secret Service, verifies via ReaderAPICaller::validate_credentials before store_credentials, and a failed verification leaves the stored token untouched.
+- [x] **UnreadCountDisplay accessibility strings** (NNW `f74e6e220`, `813ae7b33`) *(shipped v4.4.0, bundled with the display modes)*. The badge's accessible label always carries the number ("N unread"), so dot and hidden modes still announce state.
 
 ### Watch / inapplicable (this window)
 
@@ -441,7 +441,7 @@ Surfaced by fast-forwarding `.netnewswire` to `7cd2e4f31` (+231 commits over `8c
 
 ### Deferred candidates (not yet ported)
 
-- [ ] **UnreadCountDisplay preference** (NNW `c71be4919`, `6f7830904` + the Mac `UnreadCountView` and iOS views). Upstream added a three-mode setting for how unread counts render: the number, a dot, or nothing. Our counterpart surface: a new GSetting (following the `preferences.rs` conventions and the gschema's existing enums), a combo row in the preferences dialog, and `TreeNode`/sidebar-row rendering honoring the mode (the badge label becomes a dot or disappears; folder/group aggregation is untouched, only presentation). Small feature with a design-adjacent edge (what a dot means on rows with zero unread), hence deferred rather than ported as a fix.
+- [x] **UnreadCountDisplay preference** (NNW `c71be4919`, `6f7830904`) *(shipped v4.4.0)*. Three-mode `unread-count-display` GSetting (count/dot/hidden, upstream's rawValues), an Appearance combo row, and badge rendering honoring the mode everywhere an unread count renders (Brandon's scope call); zero unread hides in every mode, matching upstream's `text(for:)` contract. Pure decision fn (`unread_badge_for`) unit-tested as the matrix; mode read fresh at each bind + notify.
 
 ### Watch / inapplicable (this window)
 

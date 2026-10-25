@@ -494,6 +494,20 @@ impl Account {
             .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
     }
 
+    /// The newest `last_check_date` across all feeds (Unix seconds), or
+    /// `None` when nothing has ever been checked. Backs the status bar's
+    /// "Last refreshed" line at startup; the running value after each
+    /// cycle is simply the wall clock at completion.
+    pub async fn last_check_date(&self) -> Result<Option<i64>> {
+        let (tx, rx) = oneshot::channel();
+        self.db_tx
+            .send(DbOp::Settings(Box::new(SettingsDbOp::LastCheckDate(tx))))
+            .await
+            .map_err(|_| ViaductError::Database(DatabaseError::WriterGone))?;
+        rx.await
+            .unwrap_or_else(|_| Err(ViaductError::Database(DatabaseError::WriterGone)))
+    }
+
     /// Bulk `fetch_feed_settings`: one worker round-trip for N ids.
     /// Feeds with no stored row are absent from the map.
     pub async fn fetch_feed_settings_many(

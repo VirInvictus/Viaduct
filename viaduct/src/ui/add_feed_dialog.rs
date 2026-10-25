@@ -28,6 +28,14 @@ use crate::ui::window::ViaductWindow;
 
 /// Build and present the Add Feed dialog modal to `parent`.
 pub fn present(parent: &ViaductWindow) {
+    present_with_url(parent, None)
+}
+
+/// Same dialog with a pre-filled URL: the `feed:`/`feeds:` handler lands
+/// here (NNW `8b261521f`'s subscription-scheme interop, our desktop
+/// analog). The URL is prefilled and focused; discovery runs on Add as
+/// usual.
+pub fn present_with_url(parent: &ViaductWindow, url: Option<&str>) {
     // Phase 20c: plain modal window. The Add button rides a `GtkHeaderBar`;
     // the rows are `ui::rows` in a `.boxed-list`.
     let add_btn = gtk::Button::with_label("Add");
@@ -42,6 +50,7 @@ pub fn present(parent: &ViaductWindow) {
     );
 
     let (url_row, url_entry) = rows::entry_row(Some("Feed or website URL"), None, None, None);
+    url_entry.set_text(url.unwrap_or_default());
     let (name_row, name_entry) = rows::entry_row(Some("Name (optional)"), None, None, None);
 
     let folder_names = list_folder_names(parent);
@@ -117,6 +126,13 @@ pub fn present(parent: &ViaductWindow) {
         let idle = !*busy_for_text.borrow();
         add_btn_for_text.set_sensitive(has_text && idle);
     });
+    // A pre-filled URL (the feed: handler path) must arm the Add button:
+    // the sensitivity closure only fires on `changed`, which set_text
+    // alone doesn't emit. `emit_by_name` runs the same closure.
+    if url.is_some() {
+        url_entry.emit_by_name::<()>("changed", &[]);
+        url_entry.grab_focus();
+    }
 
     // Submit when the user activates the Add button or hits Enter in
     // the URL field.
@@ -391,10 +407,80 @@ fn already_subscribed_error_text(folder_names: &[String]) -> String {
     )
 }
 
+/// Normalize a subscription-scheme URL (`feed:` / `feeds:`) into the
+/// http(s) URL the discovery flow expects, or None when the input isn't
+/// one of the two schemes or carries no usable address. Both real-world
+/// shapes normalize: `feed://example.com/rss` (the scheme replaces the
+/// transport) and `feed:https://example.com/rss` (RFC 7464 style, scheme
+/// stacked on a full URL).
+pub fn normalize_subscription_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let (scheme, rest) = trimmed.split_once(':')?;
+    if !scheme.eq_ignore_ascii_case("feed") && !scheme.eq_ignore_ascii_case("feeds") {
+        return None;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    if let Some(address) = rest
+        .strip_prefix("https://")
+        .or_else(|| rest.strip_prefix("http://"))
+    {
+        // `feed:https://…` / `feed:http://…`: keep the embedded transport.
+        Some(format!(
+            "{}://{address}",
+            if rest.starts_with("http://") {
+                "http"
+            } else {
+                "https"
+            }
+        ))
+    } else {
+        // `feed://…` or `feed:example.com/rss` (scheme replaces the
+        // transport): default to https.
+        let address = rest.trim_start_matches("//");
+        if address.is_empty() {
+            None
+        } else {
+            Some(format!("https://{address}"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::Folder;
+
+    #[test]
+    fn normalize_subscription_url_covers_both_shapes() {
+        // feed://host/path: the scheme replaced the transport.
+        assert_eq!(
+            normalize_subscription_url("feed://example.com/rss.xml").as_deref(),
+            Some("https://example.com/rss.xml")
+        );
+        // feed:https://… (RFC 7464 style): keep the embedded transport.
+        assert_eq!(
+            normalize_subscription_url("feed:https://example.com/rss.xml").as_deref(),
+            Some("https://example.com/rss.xml")
+        );
+        assert_eq!(
+            normalize_subscription_url("feed:http://example.com/rss.xml").as_deref(),
+            Some("http://example.com/rss.xml")
+        );
+        // feeds: variant, case-insensitive, whitespace-tolerant.
+        assert_eq!(
+            normalize_subscription_url("  FEEDS://example.com/f ").as_deref(),
+            Some("https://example.com/f")
+        );
+        // Not our schemes / unusable input: None.
+        assert_eq!(normalize_subscription_url("https://example.com/"), None);
+        assert_eq!(normalize_subscription_url("magnet:?xt=urn:btih:x"), None);
+        assert_eq!(normalize_subscription_url("feed:"), None);
+        assert_eq!(normalize_subscription_url("feed://"), None);
+        assert_eq!(normalize_subscription_url(""), None);
+    }
 
     fn feed(id: &str, url: &str) -> Feed {
         Feed {

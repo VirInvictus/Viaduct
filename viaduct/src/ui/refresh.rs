@@ -249,10 +249,11 @@ impl ViaductWindow {
     /// v2.6.10: reveal the bottom progress strip and start a 250 ms
     /// poll loop that reads the cycle's `RefreshProgress` counters
     /// and updates the bar fraction + label. Call at the same time as
-    /// `set_refresh_in_progress(true)`. The poll loop pulses
-    /// indeterminately while `total == 0` (the refresher hasn't yet
-    /// computed `paired.len()`) and switches to a determinate
-    /// `completed / total` fraction once the total is published.
+    /// v4.4.0 status bar: the label/bars live in the always-visible
+    /// bottom bar now. The poll loop pulses indeterminately while
+    /// `total == 0` (the refresher hasn't yet computed `paired.len()`)
+    /// and switches to a determinate `completed / total` fraction once
+    /// the total is published. Same 250ms cadence as the old strip.
     pub(crate) fn show_refresh_progress(&self, progress: RefreshProgress) {
         let imp = self.imp();
         // If a previous cycle's poll loop is somehow still active
@@ -263,9 +264,9 @@ impl ViaductWindow {
         }
         let bar = imp.refresh_progress_bar.get();
         let label = imp.refresh_progress_label.get();
+        bar.set_visible(true);
         bar.set_fraction(0.0);
         label.set_text("Refreshing feeds…");
-        imp.refresh_progress_revealer.get().set_reveal_child(true);
 
         let bar_weak = bar.downgrade();
         let label_weak = label.downgrade();
@@ -295,17 +296,21 @@ impl ViaductWindow {
         imp.refresh_progress_source.borrow_mut().replace(source);
     }
 
-    /// v2.6.10: cancel the poll loop, reset the bar to 0, and slide
-    /// the strip out of view. Call at the same time as
-    /// `set_refresh_in_progress(false)`.
+    /// v4.4.0: cancel the poll loop, hide the thin bar, and stamp the
+    /// status label with the completion time (the wall clock, not the
+    /// DB's per-feed check dates, which can lag the cycle end). Call at
+    /// the same time as `set_refresh_in_progress(false)`.
     pub(crate) fn hide_refresh_progress(&self) {
         let imp = self.imp();
         if let Some(source) = imp.refresh_progress_source.borrow_mut().take() {
             source.remove();
         }
-        imp.refresh_progress_revealer.get().set_reveal_child(false);
+        imp.refresh_progress_bar.get().set_visible(false);
         imp.refresh_progress_bar.get().set_fraction(0.0);
-        imp.refresh_progress_label.get().set_text("");
+        let now = chrono::Local::now();
+        imp.refresh_progress_label
+            .get()
+            .set_text(&format_last_refresh(Some(now)));
     }
 
     fn show_refresh_toast(&self, tally: &RefreshTally) {
@@ -702,6 +707,21 @@ fn current_retention_days() -> i64 {
         .unwrap_or(30)
 }
 
+/// The status bar's rest-state line. `None` (nothing checked this
+/// install) reads "Never refreshed"; today's stamps show the time only,
+/// older ones carry the date so a bar left over the weekend still reads.
+pub(crate) fn format_last_refresh(last: Option<chrono::DateTime<chrono::Local>>) -> String {
+    let Some(last) = last else {
+        return "Never refreshed".to_string();
+    };
+    let today = chrono::Local::now().date_naive();
+    if last.date_naive() == today {
+        format!("Last refreshed {}", last.format("%H:%M"))
+    } else {
+        format!("Last refreshed {}", last.format("%b %-d, %H:%M"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,6 +734,23 @@ mod tests {
         t.per_feed_new.insert("feed-a".to_string(), 2);
         t.per_feed_new.insert("feed-b".to_string(), 5);
         assert_eq!(t.total_new_articles(), 7);
+    }
+
+    #[test]
+    fn format_last_refresh_covers_never_today_and_older() {
+        assert_eq!(format_last_refresh(None), "Never refreshed");
+        // Today: time only.
+        let now = chrono::Local::now();
+        assert_eq!(
+            format_last_refresh(Some(now)),
+            format!("Last refreshed {}", now.format("%H:%M"))
+        );
+        // Older: date + time.
+        let yesterday = now - chrono::Duration::days(1);
+        assert_eq!(
+            format_last_refresh(Some(yesterday)),
+            format!("Last refreshed {}", yesterday.format("%b %-d, %H:%M"))
+        );
     }
 
     #[test]

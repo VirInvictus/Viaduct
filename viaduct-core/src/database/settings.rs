@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::HashMap;
 use tokio::sync::oneshot;
 
-use crate::error::Result;
+use crate::error::{Result, ViaductError};
 use crate::models::FeedSettings;
 
 pub enum SettingsDbOp {
@@ -32,6 +32,10 @@ pub enum SettingsDbOp {
     /// caller can hash to the md5 set the targeted-sweep expects.
     /// Empty / blank URLs are filtered out at the SQL layer.
     CollectFaviconUrls(oneshot::Sender<Result<Vec<String>>>),
+    /// The newest `last_check_date` across all feed settings (Unix
+    /// seconds), backing the status bar's "Last refreshed" line at
+    /// startup. `None` when nothing has ever been checked.
+    LastCheckDate(oneshot::Sender<Result<Option<i64>>>),
 }
 
 pub(crate) fn setup_schema(conn: &Connection) -> Result<()> {
@@ -88,6 +92,16 @@ pub(crate) fn handle_op(conn: &mut Connection, op: SettingsDbOp) {
     match op {
         SettingsDbOp::Fetch(feed_id, tx) => {
             let res = fetch(conn, &feed_id);
+            let _ = tx.send(res);
+        }
+        SettingsDbOp::LastCheckDate(tx) => {
+            let res = conn
+                .query_row(
+                    "SELECT MAX(last_check_date) FROM feed_settings",
+                    [],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .map_err(ViaductError::from);
             let _ = tx.send(res);
         }
         SettingsDbOp::FetchMany(feed_ids, tx) => {

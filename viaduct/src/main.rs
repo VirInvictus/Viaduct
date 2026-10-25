@@ -17,7 +17,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use viaduct::database::accounts::Account;
 use viaduct::{database, fonts, icons, paths, ui};
@@ -131,10 +131,54 @@ fn main() -> glib::ExitCode {
 
     let app = gtk::Application::builder()
         .application_id(viaduct::preferences::APP_ID)
+        // HANDLES_OPEN: the feed:/feeds: handler (desktop file MimeType)
+        // delivers subscription URLs through GApplication::open, both at
+        // first launch and to the running instance (DBusActivatable
+        // routes the second invocation to the primary automatically).
+        .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN)
         .build();
 
     let account_for_activate = account.clone();
     app.connect_activate(move |app| build_ui(app, account_for_activate.clone()));
+
+    // Subscription links: every open (first launch or second instance)
+    // carries one URI; normalize the feed:/feeds: schemes and land the
+    // URL in the Add Feed dialog on whatever window exists (or the one
+    // activation is about to build). Non-subscription opens are ignored,
+    // matching upstream's "ignore netnewswire: URLs that are not theme
+    // installs" posture (`4287e1e5d`).
+    {
+        app.connect_open(move |app, files, _hint| {
+            let Some(url) = files.first().map(|f| f.uri()) else {
+                return;
+            };
+            let Some(address) = viaduct::ui::add_feed_dialog::normalize_subscription_url(&url)
+            else {
+                info!(%url, "open: not a feed:/feeds: subscription link; ignored");
+                return;
+            };
+            let app = app.clone();
+            glib::spawn_future_local(async move {
+                // A fresh launch may still be inside connect_activate's
+                // build_ui; yield until a window exists, then present.
+                // (No Arc juggling needed: the app and the Account live
+                // for the process duration in `main`.)
+                for _ in 0..50 {
+                    if let Some(window) = app.windows().first().and_then(|w| {
+                        w.clone()
+                            .downcast::<viaduct::ui::window::ViaductWindow>()
+                            .ok()
+                    }) {
+                        viaduct::ui::add_feed_dialog::present_with_url(&window, Some(&address));
+                        window.present();
+                        return;
+                    }
+                    glib::timeout_future(std::time::Duration::from_millis(20)).await;
+                }
+                warn!("open: no main window appeared for the subscription link");
+            });
+        });
+    }
 
     // v2.5.0: wire the system-tray indicator. Starts an SNI service when
     // the `run-in-background` GSetting is on so the user always has a

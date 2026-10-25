@@ -59,6 +59,9 @@ pub fn install(window: &ViaductWindow, app: &gtk::Application) {
     register(window, "toggle-sidebar", |w| w.act_toggle_sidebar());
     register(window, "shortcuts", |w| w.act_shortcuts());
     register(window, "preferences", |w| w.act_preferences());
+    register(window, "update-credentials", |w| {
+        crate::ui::update_credentials_dialog::present(w);
+    });
     register(window, "activity-log", |w| w.act_activity_log());
 
     // v2.6.25 share / send-to surface.

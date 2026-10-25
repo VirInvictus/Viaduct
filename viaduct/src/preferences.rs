@@ -36,6 +36,7 @@ pub mod keys {
     pub const RUN_IN_BACKGROUND: &str = "run-in-background";
     pub const TIMELINE_SORT_ORDER: &str = "timeline-sort-order";
     pub const TIMELINE_SHOW_READ: &str = "timeline-show-read";
+    pub const UNREAD_COUNT_DISPLAY: &str = "unread-count-display";
     pub const WELCOME_SHOWN: &str = "welcome-shown";
 }
 
@@ -299,6 +300,43 @@ pub fn timeline_sort_order(
     }
 }
 
+/// How unread badges render (NNW `UnreadCountDisplay`, the Rust twin of
+/// the upstream enum with the same three modes and rawValues). Pure
+/// presentation: the unread aggregation itself is untouched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnreadCountDisplay {
+    Count,
+    Dot,
+    Hidden,
+}
+
+/// The pure badge decision the sidebar's row factory consumes, shared by
+/// the bind path and the unread-count notify path so the two can never
+/// disagree. Returns the label text (None = hide the badge) and the
+/// accessible label (always the count so dot/hidden modes still announce
+/// "N unread" to screen readers, NNW `f74e6e220` / `813ae7b33`).
+pub fn unread_badge_for(mode: UnreadCountDisplay, count: u32) -> (Option<String>, Option<String>) {
+    if count == 0 {
+        return (None, None);
+    }
+    match mode {
+        UnreadCountDisplay::Count => (Some(count.to_string()), Some(format!("{count} unread"))),
+        UnreadCountDisplay::Dot => (Some("•".to_string()), Some(format!("{count} unread"))),
+        UnreadCountDisplay::Hidden => (None, Some(format!("{count} unread"))),
+    }
+}
+
+/// Read the badge mode fresh (cheap: the settings object is a
+/// process-singleton behind a thread-local). Unknown nicks fall back to
+/// the count mode so a future binary's values can't blank the sidebar.
+pub fn unread_count_display(settings: &gio::Settings) -> UnreadCountDisplay {
+    match settings.string(keys::UNREAD_COUNT_DISPLAY).as_str() {
+        "dot" => UnreadCountDisplay::Dot,
+        "hidden" => UnreadCountDisplay::Hidden,
+        _ => UnreadCountDisplay::Count,
+    }
+}
+
 /// Monospace font family override. Applied to `code` / `pre` in the
 /// article reading pane and to any chrome monospace surfaces. Empty
 /// string means "use system / theme default".
@@ -392,6 +430,54 @@ mod tests {
                 .expect("nick is schema-valid");
             assert_eq!(
                 super::timeline_sort_order(&settings),
+                expected,
+                "nick {nick} maps to the wrong variant"
+            );
+        }
+    }
+
+    /// The badge decision matrix: count shows the number, dot shows a
+    /// bullet, hidden shows nothing, zero unread hides in every mode, and
+    /// the accessible label always carries the number (NNW `f74e6e220` /
+    /// `813ae7b33`).
+    #[test]
+    fn unread_badge_for_covers_the_mode_matrix() {
+        use super::UnreadCountDisplay::*;
+        // Zero unread: hidden in every mode, no a11y text (nothing there).
+        for mode in [Count, Dot, Hidden] {
+            assert_eq!(super::unread_badge_for(mode, 0), (None, None));
+        }
+        // Count: the number, spoken as before.
+        assert_eq!(
+            super::unread_badge_for(Count, 12),
+            (Some("12".to_string()), Some("12 unread".to_string()))
+        );
+        // Dot: the bullet visually, the number to screen readers.
+        assert_eq!(
+            super::unread_badge_for(Dot, 12),
+            (Some("•".to_string()), Some("12 unread".to_string()))
+        );
+        // Hidden: nothing visually, the number still announced.
+        assert_eq!(
+            super::unread_badge_for(Hidden, 12),
+            (None, Some("12 unread".to_string()))
+        );
+    }
+
+    #[gtk::test]
+    fn unread_count_display_maps_every_schema_nick() {
+        use super::UnreadCountDisplay;
+        let settings = test_settings();
+        for (nick, expected) in [
+            ("count", UnreadCountDisplay::Count),
+            ("dot", UnreadCountDisplay::Dot),
+            ("hidden", UnreadCountDisplay::Hidden),
+        ] {
+            settings
+                .set_string(keys::UNREAD_COUNT_DISPLAY, nick)
+                .expect("nick is schema-valid");
+            assert_eq!(
+                super::unread_count_display(&settings),
                 expected,
                 "nick {nick} maps to the wrong variant"
             );
