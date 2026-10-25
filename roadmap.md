@@ -366,6 +366,25 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
 
+## Upstream Sync Candidates (October 24, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `d9ec7df6f` (+38 commits over `63aa234df`, Oct 21 – Oct 24; the `iOS-7.3` release line plus `mac-7.3b2` work); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `AGENTS.md` §2 for the sync note. An `AppDefaults` refactor plus iOS timeline/preview work: **nothing ports, no new releases.**
+
+### Deferred candidates (not yet ported)
+
+- [ ] **`feed:`/`feeds:` subscription links** (NNW `8b261521f`, the magnet follow-up). Upstream's open-allowlist now includes the reader-interop subscription schemes so `feed:` URLs hand off to the default reader. For viaduct the interesting move is different: register as a `feed:`/`feeds:` handler (desktop file MimeType + DBusActivatable routing) and land the URL in the Add Feed dialog. Feature, not a fix, hence deferred; pairs naturally with the standing add-feed UX work.
+
+### Watch / inapplicable (this window)
+
+- FreshRSS inline-footnote de-sanitization (`6432162e6` + the regex hardening trio, #5472): FreshRSS renames `class`/`id` to `data-sanitized-*` server-side and NNW's sanitizer keeps them; our ammonia strips those attributes wholesale (zero occurrences in our tree), and inline footnotes are dead under the §7.4 no-JS lockdown regardless. If a FreshRSS account type is ever added (§7.3 says it isn't), revisit with the sanitizer conversation.
+- Status-bar midnight crash (`b17800e28`): AppKit status-bar code we don't have.
+- Menu ellipsis convention (`bcfde26a2`): already our shape; every dialog-opening menu item has carried `…` since v1.7.
+- Posh context menus (`2a457b4c8`), the JS-preference-respecting preview (`59c0afe4a`), `ArticlePreviewViewController` (`c5b524b5e`), `CopyableLabel` (`b808eaad8` lineage): iOS/WKWebView platform work.
+- `afb5d2d89` reverts upstream's Mutex migration for Xcode CI: churn on churn, nothing on our side.
+- The `AppDefaults` refactor cluster (`d2833b65c`, `2ce850441`, `b45fcbc7d`, `dccf7d3e8`, `48ac4fa22`, and kin): Swift UserDefaults restructuring; our `preferences.rs` + gschema shape is unaffected.
+
+---
+
 ## Upstream Sync Candidates (October 22, 2026)
 
 Surfaced by fast-forwarding `.netnewswire` to `63aa234df` (+54 commits over `a3e61ddc5`, Oct 11 – Oct 21; the `mac-7.2` / `7.2.1` releases plus `7.3b1` work); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `AGENTS.md` §2 for the sync note. The bulk is the restored Mac status bar and a Swift lock-migration sweep; two ports shipped in v4.3.2.

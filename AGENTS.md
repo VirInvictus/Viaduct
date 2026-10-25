@@ -28,6 +28,38 @@ Current version: **v4.3.2**; the version-by-version prose in this file stops at 
 
 A full clone of NetNewsWire lives at `.netnewswire/` in this repo. **It is already there: do not re-clone, re-download, or `git submodule add` it.** Treat it as read-only reference material.
 
+> **Note on Latest Upstream Sync (October 24, 2026):**
+> The `.netnewswire` reference folder has been fast-forwarded to `d9ec7df6f`
+> (+38 commits over the prior `63aa234df` sync; Oct 21 – Oct 24, the
+> `iOS-7.3` release line plus `mac-7.3b2` work). The bulk is an
+> `AppDefaults` refactor (split into Shared/Mac/iOS extensions, enum
+> instead of singleton, an iOS suite-to-standard UserDefaults migration)
+> and iOS timeline/preview work; nothing in it ports. **Nothing shipped;
+> no release.**
+> *   **Skipped:** the FreshRSS inline-footnote fix cluster (`6432162e6`,
+>     `fc7416e10`, `bdf638ba3`, `6dc14b331`, #5472) de-sanitizes
+>     `data-sanitized-class`/`-id` attributes that FreshRSS renames
+>     server-side; our ammonia pipeline strips those attributes wholesale
+>     (zero `data-sanitized` in our tree) and inline footnotes are dead
+>     under the §7.4 no-JS lockdown regardless. The magnet follow-up
+>     (`8b261521f`) adds reader-interop subscription schemes
+>     (`feed`/`feeds`/`netnewswire`/`x-netnewswire-feed`): opening those
+>     is a subscription-import feature, not a fix (roadmap candidate).
+>     `b17800e28` (status bar midnight crash) is AppKit code we don't
+>     have; `bcfde26a2` ("Add …" ellipsis on menu commands) is already
+>     our shape (every dialog-opening item has carried `…` since v1.7);
+>     the posh-preview cluster (`2a457b4c8`, `59c0afe4a`, `c5b524b5e`)
+>     and `CopyableLabel` (`b808eaad8` follow-ups) are iOS/WKWebView
+>     work; `afb5d2d89` reverts the Mutex migration for CI Xcode
+>     (upstream churn on churn); the AppDefaults refactor and the rest
+>     are platform packaging.
+> *   **Roadmap candidates (recorded in `roadmap.md`):** handle
+>     `feed:`/`feeds:` subscription links (register as a handler and
+>     route into Add Feed).
+>
+> **Companion clones:** `.newsflash` and `.liferea` were not reviewed
+> (weekly-sync charter: NNW only).
+
 > **Note on Latest Upstream Sync (October 22, 2026):**
 > The `.netnewswire` reference folder has been fast-forwarded to `63aa234df`
 > (+54 commits over the prior `a3e61ddc5` sync; Oct 11 – Oct 21, the
