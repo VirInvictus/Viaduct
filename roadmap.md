@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.4.1.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.4.2.
 
 ---
 
@@ -365,6 +365,29 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [x] **Add-feed "open in Reader View by default" toggle** *(shipped v3.1.0, 2026-08-08)*. We already persisted `reader_view_always_enabled` per feed; NewsFlash exposes the equivalent as a checkbox in its add-feed dialog (#905). A `rows::switch_row` in `add_feed_dialog.rs` (same copy as the feed-settings dialog) now sets it at creation time, upserted before the feed's first refresh so the refresher's settings writes can't race the fresh row. Default off, matching the DB default. Verified live: dialog renders and the switch defaults off.
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
+
+## Upstream Sync Candidates (November 8, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `65b51f262` (+352 commits over `70c5dce65`, Oct 24 – Nov 8); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `AGENTS.md` §2 for the sync note. The window is upstream's images/thumbnails infrastructure arc; one port shipped in v4.4.2.
+
+### Ported from NetNewsWire
+
+- [x] **HTMLScanner raw-text set** (NNW `617598c7a`) *(shipped v4.4.2)*. `textarea`, `title`, `xmp`, `noembed` join `script`/`style` as raw text in both `html.rs` scanners. Feed/favicon discovery could forge `HtmlTag`s from link-looking markup inside a `<title>`; the regression test pins that case plus the stripper shapes.
+
+### Deferred candidates (not yet ported)
+
+- [ ] **Images & media arc, merged** (the October 25 media/attachments candidate + this window's `Modules/Images` rewrite and timeline thumbnails: `6831d31fc` DownloadedImageCache, `ebfa6ed0e` disk size cap, `4f6ff7d50`/`edd83c59d`/`ec803f9f7` ThumbnailTaskQueue + Retry-After, `e3e7bf324` icon precedence chain, `f2ac871b9` ArticleThumbnailFinder, `1f418a17c` HTMLImageParser, `f05a9f110` original-size storage, `92059c4c1` HTMLImageAttributeInserter, `7c89314ea` ArticleImageSchemeHandler, plus the parse-side metadata widening from Oct 25). One build: persistent image DB + bounded disk cache, thumbnail finding/download with per-host limits, timeline thumbnail rows, and a local-copy image scheme for the article pane (our `viaduct-img://` pattern extended to full article images). No new deps (gdk-pixbuf decode on the GTK thread, as tray.rs already does); schema work is viaduct-core side-tables, additive.
+
+### Watch / inapplicable (this window)
+
+- CacheControlInfo `>=` to `>` (`7214b44dc`): Apple-beta crash workaround; our comparison is `DateTime<Utc>`-based.
+- MediaRSS rename (`fcbc49118`): pure Swift API rename, no behavior.
+- RSWeb Downloader/NetworkMonitor/429 cluster: the image-retry machinery; our feed Retry-After handling is already ported (v2.8.3), the image side rides the arc candidate.
+- Mac/iOS Appearance + Timeline settings panes, timeline-cell layout and separator work, scroll-anchor/rotation fixes, duo/popover fixes: platform UI features; the settings our users would want (text size, fade-read) land with the arc or their own candidates when asked for.
+- `main.js`/`core.css`/`newsfoot.js`: dead or inert under the §7.4 CSP.
+- `html_url_resolver`'s own raw-text set stays script/style only: upstream `617598c7a` changed HTMLScanner alone (its image inserter inherits the fix through that scanner), and our resolver is a separate scanner upstream does not have; extend it if upstream ever grows resolver-side handling.
+
+---
 
 ## Upstream Sync Candidates (October 25, 2026)
 

@@ -95,12 +95,18 @@ pub fn extract_metadata(data: &[u8], url_string: &str) -> HtmlMetadata {
                         attributes: attrs,
                     });
                 }
-            } else if (name.eq_ignore_ascii_case(b"script") || name.eq_ignore_ascii_case(b"style"))
+            } else if (name.eq_ignore_ascii_case(b"script")
+                || name.eq_ignore_ascii_case(b"style")
+                || name.eq_ignore_ascii_case(b"textarea")
+                || name.eq_ignore_ascii_case(b"title")
+                || name.eq_ignore_ascii_case(b"xmp")
+                || name.eq_ignore_ascii_case(b"noembed"))
                 && !attrs
                     .iter()
                     .any(|(k, _)| k.eq_ignore_ascii_case("self-closing"))
             {
-                // Raw-text elements: nothing between here and the matching
+                // Raw-text elements (NNW `617598c7a` grew the set past
+                // script/style): nothing between here and the matching
                 // close tag is markup, even if it looks like `<link>`.
                 let lower_name: Vec<u8> = name.to_ascii_lowercase();
                 pos = skip_raw_text(data, pos, &lower_name);
@@ -168,11 +174,18 @@ pub fn strip_html_to_text(html: &str, max_chars: usize) -> String {
                     if aborted {
                         break;
                     }
-                    if (name.eq_ignore_ascii_case(b"script") || name.eq_ignore_ascii_case(b"style"))
+                    if (name.eq_ignore_ascii_case(b"script")
+                        || name.eq_ignore_ascii_case(b"style")
+                        || name.eq_ignore_ascii_case(b"textarea")
+                        || name.eq_ignore_ascii_case(b"title")
+                        || name.eq_ignore_ascii_case(b"xmp")
+                        || name.eq_ignore_ascii_case(b"noembed"))
                         && !attrs
                             .iter()
                             .any(|(k, _)| k.eq_ignore_ascii_case("self-closing"))
                     {
+                        // Same raw-text set as extract_metadata
+                        // (NNW `617598c7a`).
                         let lower_name: Vec<u8> = name.to_ascii_lowercase();
                         pos = skip_raw_text(data, pos, &lower_name);
                     }
@@ -555,6 +568,43 @@ mod tests {
             strip_html_to_text("a<!-- <b>gone</b> -->b", 4096),
             "a b",
             "comment bodies never leak and their boundary spaces collapse"
+        );
+    }
+
+    #[test]
+    fn extended_raw_text_elements_are_dropped() {
+        // NNW `617598c7a`: textarea, title, xmp, and noembed join
+        // script/style as raw text in both scanners. The stripper drops
+        // their bodies; a link-looking line inside one never reaches
+        // extract_metadata's tag list.
+        assert_eq!(
+            strip_html_to_text(
+                "<p>a</p><textarea><link rel=\"alternate\" href=\"x\"></textarea><p>b</p>",
+                4096
+            ),
+            "a b"
+        );
+        assert_eq!(
+            strip_html_to_text(
+                "<title>&lt;link href=\"fake\"&gt;</title><noembed><b>x</b></noembed><p>c</p>",
+                4096
+            ),
+            "c"
+        );
+        let meta = extract_metadata(
+            b"<html><head><title><link rel=\"alternate\" type=\"application/rss+xml\" href=\"/feed\"></title><link rel=\"alternate\" type=\"application/rss+xml\" href=\"/real\"></head></html>",
+            "https://example.com/",
+        );
+        let feed_hrefs: Vec<&String> = meta
+            .tags
+            .iter()
+            .filter(|t| t.tag_type == crate::parser::HtmlTagType::Link)
+            .filter_map(|t| t.attributes.get("href"))
+            .collect();
+        assert_eq!(
+            feed_hrefs,
+            vec!["/real"],
+            "link-looking markup inside <title> must not forge a feed tag"
         );
     }
 

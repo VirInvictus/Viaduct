@@ -35,6 +35,9 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="4.4.2" date="2026-11-08">
+      <description><p>Link-looking titles can no longer forge feed discovery</p></description>
+    </release>
     <release version="4.4.1" date="2026-10-25">
       <description><p>Plain text renders as HTML</p></description>
     </release>

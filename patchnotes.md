@@ -1,5 +1,11 @@
 # viaduct: Patch Notes
 
+## v4.4.2: link-looking titles can't forge feeds (2026-11-08)
+
+One port from the November 8 NetNewsWire sync (`70c5dce65` to `65b51f262`, +352 commits). 306 tests; clippy `-D warnings` clean.
+
+- **Fixed:** feed and favicon discovery on a page whose `<title>` (or `<textarea>`, `<xmp>`, `<noembed>`) contains link-looking markup could read that markup as real `<link>` tags and discover a bogus feed candidate. Those four elements now join `<script>`/`<style>` as raw text in the HTML scanner (NNW `617598c7a`), in both the metadata extractor and the plain-text stripper.
+
 ## v4.4.1: plain text renders as HTML (2026-10-25)
 
 One port from the October 25 NetNewsWire sync (`d9ec7df6f` to `70c5dce65`, +28 commits). 305 tests; clippy `-D warnings` clean.
