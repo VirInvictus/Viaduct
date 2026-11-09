@@ -368,7 +368,7 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 
 ## Upstream Sync Candidates (November 8, 2026)
 
-Surfaced by fast-forwarding `.netnewswire` to `65b51f262` (+352 commits over `70c5dce65`, Oct 24 – Nov 8); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `AGENTS.md` §2 for the sync note. The window is upstream's images/thumbnails infrastructure arc; one port shipped in v4.4.2.
+Surfaced by fast-forwarding `.netnewswire` to `65b51f262` (+352 commits over `70c5dce65`, Oct 24 – Nov 8, plus a same-day follow-up window to `f3a0102c3`); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `AGENTS.md` §2 for the sync note. The window is upstream's images/thumbnails infrastructure arc; one port shipped in v4.4.2.
 
 ### Ported from NetNewsWire
 
@@ -376,7 +376,7 @@ Surfaced by fast-forwarding `.netnewswire` to `65b51f262` (+352 commits over `70
 
 ### Deferred candidates (not yet ported)
 
-- [ ] **Images & media arc, merged** (the October 25 media/attachments candidate + this window's `Modules/Images` rewrite and timeline thumbnails: `6831d31fc` DownloadedImageCache, `ebfa6ed0e` disk size cap, `4f6ff7d50`/`edd83c59d`/`ec803f9f7` ThumbnailTaskQueue + Retry-After, `e3e7bf324` icon precedence chain, `f2ac871b9` ArticleThumbnailFinder, `1f418a17c` HTMLImageParser, `f05a9f110` original-size storage, `92059c4c1` HTMLImageAttributeInserter, `7c89314ea` ArticleImageSchemeHandler, plus the parse-side metadata widening from Oct 25). One build: persistent image DB + bounded disk cache, thumbnail finding/download with per-host limits, timeline thumbnail rows, and a local-copy image scheme for the article pane (our `viaduct-img://` pattern extended to full article images). No new deps (gdk-pixbuf decode on the GTK thread, as tray.rs already does); schema work is viaduct-core side-tables, additive.
+- [ ] **Images & media arc, merged** (the October 25 media/attachments candidate + this window's `Modules/Images` rewrite and timeline thumbnails: `6831d31fc` DownloadedImageCache, `ebfa6ed0e` disk size cap, `4f6ff7d50`/`edd83c59d`/`ec803f9f7` ThumbnailTaskQueue + Retry-After, `e3e7bf324` icon precedence chain, `f2ac871b9` ArticleThumbnailFinder, `1f418a17c` HTMLImageParser, `f05a9f110` original-size storage, `92059c4c1` HTMLImageAttributeInserter, `7c89314ea` ArticleImageSchemeHandler, plus the parse-side metadata widening from Oct 25). One build: persistent image DB + bounded disk cache, thumbnail finding/download with per-host limits, timeline thumbnail rows, and a local-copy image scheme for the article pane (our `viaduct-img://` pattern extended to full article images). Same-day follow-up trio (`77e2c298d` Mac + `37e54f40b` iOS layout, `f3a0102c3` default flip): with small thumbnails and feed-name-and-date-above-title both on, the date line spans the thumbnail column and the thumbnail top-aligns with the title, and the setting defaults on; fold both into the row design. No new deps (gdk-pixbuf decode on the GTK thread, as tray.rs already does); schema work is viaduct-core side-tables, additive.
 
 ### Watch / inapplicable (this window)
 

@@ -28,6 +28,26 @@ Current version: **v4.4.2**; the version-by-version prose in this file stops at 
 
 A full clone of NetNewsWire lives at `.netnewswire/` in this repo. **It is already there: do not re-clone, re-download, or `git submodule add` it.** Treat it as read-only reference material.
 
+> **Note on Latest Upstream Sync (November 8, 2026, later run):**
+> The `.netnewswire` reference folder has been fast-forwarded to `f3a0102c3`
+> (+3 commits over the prior `65b51f262` sync, same day; a Sunday-morning
+> layout-polish follow-up to the images arc). **Nothing ports; no release.**
+> *   **Skipped / rides the arc candidate:** the timeline-cell layout trio
+>     (`77e2c298d` Mac, `37e54f40b` iOS, `f3a0102c3` default flip) refines
+>     the small-thumbnail row: when small thumbnails and
+>     feed-name-and-date-above-title are both on, the date line spans the
+>     thumbnail column and the thumbnail top-aligns with the title, and the
+>     setting now defaults on. It is AppKit/UIKit rect math layered on the
+>     appearance settings from the earlier window's arc; our timeline rows
+>     are GTK box-model widgets with no thumbnails setting and no
+>     above-title appearance key yet (the only timeline thumbnails we have
+>     are the video-source ones). The alignment and the default-on are
+>     recorded inside the merged images & media roadmap candidate so the
+>     in-house build folds them in.
+>
+> **Companion clones:** `.newsflash` and `.liferea` were not reviewed
+> (weekly-sync charter: NNW only).
+
 > **Note on Latest Upstream Sync (November 8, 2026):**
 > The `.netnewswire` reference folder has been fast-forwarded to `65b51f262`
 > (+352 commits over the prior `70c5dce65` sync; Oct 24 – Nov 8, the
