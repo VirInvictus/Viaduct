@@ -116,7 +116,7 @@ sudo meson install -C builddir
 
 ### Inoreader sync setup
 
-Inoreader's API requires an **app registration** (`AppId`/`AppKey`) on every request; registering an app is free at [inoreader.com/developers](https://www.inoreader.com/developers/). Log in through the sidebar's gear menu → *Update Inoreader Credentials…*, then give viaduct the app pair through any one of:
+Inoreader's API requires an **app registration** (`AppId`/`AppKey`) on every request, and the developer API is not free: it needs an **Inoreader Pro subscription**. Registration runs through the Developer API section of your Inoreader preferences; accounts without API access see an *Upgrade to Pro* button there instead of the registration form (per [inoreader.com/developers](https://www.inoreader.com/developers/)). Log in through the sidebar's gear menu → *Update Inoreader Credentials…*, then give viaduct the app pair through any one of:
 
 1. A config file at `~/.config/viaduct/inoreader.json` (or `$XDG_CONFIG_HOME/viaduct/inoreader.json`):
    ```json
