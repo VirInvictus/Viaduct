@@ -16,7 +16,7 @@
 
 Viaduct translates NetNewsWire's local-account architecture, parsing pipeline, and refresh engine to GTK4 on Wayland, faithfully enough that Brent's CSS themes drop in byte-for-byte. As of v3.0.0 it runs on plain GTK4 with its own flat design (no libadwaita), so it belongs equally on GNOME, Hyprland, or any Wayland desktop. The name is the metaphor: a viaduct carries something across a gap. This one carries NetNewsWire across to Linux.
 
-**A note on scope.** Viaduct is a solo project, built and tested for one person's real-world use. It supports local and Inoreader accounts because those are the ones I rely on, and it has been exercised against a live subscription list of around 150 feeds on Fedora 44 (ThinkPad T14 AMD Gen 6). Contributions are welcome, but I can only meaningfully test my own configuration.
+**A note on scope.** Viaduct is a solo project, built and tested for one person's real-world use. It supports local and Inoreader accounts because those are the ones I rely on, and it has been exercised against a live subscription list of around 150 feeds on Fedora 44 (ThinkPad T14 AMD Gen 6). Contributions are welcome, but I can only meaningfully test my own configuration. If you have an account with a sync service you'd like supported and are willing to help test it, see [Help test another sync service](#help-test-another-sync-service) below.
 
 ## Why this exists
 
@@ -126,6 +126,10 @@ Inoreader's API requires an **app registration** (`AppId`/`AppKey`) on every req
 3. Build-time environment variables of the same names, compiled in via `option_env!` (how packagers inject the pair; the same model NetNewsWire's `SecretKey` uses).
 
 Without a pair, refresh shows a toast naming the missing registration instead of a doomed API call. The config file applies without restarting viaduct.
+
+## Help test another sync service
+
+Viaduct supports local and Inoreader accounts because those are the two I can exercise myself. Other services are a testing problem more than a design one: hosts that speak the same Reader API protocol Inoreader uses (FreshRSS, BazQux, The Old Reader) can likely ride the existing engine with a new variant and a willing tester, while services with bespoke APIs (Feedbin, NewsBlur, Feedly) need another engine ported from NetNewsWire. Either way, every service needs a real account to develop and test against, and some put their API access behind paid tiers I can't afford as a full-time student. If you have an account with a service you'd like to see supported and are willing to help test, simply add your request as an issue and we can go from there.
 
 ## Architecture
 
