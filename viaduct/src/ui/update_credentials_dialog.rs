@@ -13,6 +13,18 @@ use gtk::prelude::*;
 use crate::ui::rows;
 use crate::ui::window::ViaductWindow;
 
+/// Outcome of the verify+store leg, handed from the tokio-side task back
+/// to the main-loop future over a oneshot. Both legs need the tokio
+/// runtime (reqwest for the token check, oo7/zbus for the keyring) and
+/// the GLib main loop has no reactor, so running either under
+/// `spawn_future_local` panicked with "there is no reactor running"
+/// (issue #1).
+enum SaveOutcome {
+    Stored,
+    StoreFailed(String),
+    VerifyFailed(String),
+}
+
 /// Build and present the dialog. Fields pre-fill from the Secret Service
 /// where credentials already exist; Save verifies against the Reader API
 /// and only then stores, so the previously-working token survives a
@@ -38,17 +50,23 @@ pub fn present(parent: &ViaductWindow) {
         .build();
 
     // Pre-fill from the stored credentials (best-effort; a locked or
-    // empty keyring just leaves the fields blank). spawn_future_local:
-    // the entries cross the keyring await, so the future stays on the
-    // main loop.
+    // empty keyring just leaves the fields blank). The keyring read is
+    // oo7/zbus work that needs a tokio reactor, so it runs on the
+    // library runtime and hands the result back over a oneshot; the
+    // entries cross only that channel await, so the widget work stays
+    // on the main loop.
     let email_for_prefill = email_entry.clone();
     let token_for_prefill = token_entry.clone();
-    glib::spawn_future_local(async move {
-        if let Some(creds) = crate::network::credentials::fetch_credentials("inoreader")
+    let (prefill_tx, prefill_rx) = tokio::sync::oneshot::channel();
+    crate::spawn_on_runtime(async move {
+        let creds = crate::network::credentials::fetch_credentials("inoreader")
             .await
             .ok()
-            .flatten()
-        {
+            .flatten();
+        let _ = prefill_tx.send(creds);
+    });
+    glib::spawn_future_local(async move {
+        if let Ok(Some(creds)) = prefill_rx.await {
             email_for_prefill.set_text(&creds.username);
             token_for_prefill.set_text(creds.password.as_deref().unwrap_or_default());
         }
@@ -110,17 +128,21 @@ pub fn present(parent: &ViaductWindow) {
         }
         // Verify against the Reader API; store only on success. The
         // button disables for the round trip so a slow token check
-        // can't be double-submitted. Runs on the main loop via
-        // spawn_future_local (the widgets cross the awaits, so the
-        // Send-bounded runtime spawner can't carry them).
+        // can't be double-submitted. The verify (reqwest) and store
+        // (keyring/zbus) legs run on the library runtime and hand a
+        // SaveOutcome back over a oneshot; only the widget updates stay
+        // on the main loop (issue #1: running the legs directly under
+        // spawn_future_local panicked with "there is no reactor
+        // running").
         save_btn.set_sensitive(false);
         status.set_text("Verifying against Inoreader…");
         status.set_visible(true);
-        glib::spawn_future_local(async move {
+        let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
+        crate::spawn_on_runtime(async move {
             let caller = crate::network::inoreader::ReaderAPICaller::new(
                 crate::network::inoreader::ReaderAPIVariant::Inoreader,
             );
-            match caller.validate_credentials(&email, &token).await {
+            let outcome = match caller.validate_credentials(&email, &token).await {
                 Ok(_) => {
                     let creds = crate::network::credentials::Credentials {
                         username: email,
@@ -128,25 +150,50 @@ pub fn present(parent: &ViaductWindow) {
                     };
                     match crate::network::credentials::store_credentials("inoreader", &creds).await
                     {
-                        Ok(()) => {
-                            window.close();
-                            if let Some(parent) = window
-                                .transient_for()
-                                .and_then(|p| p.downcast::<crate::ui::window::ViaductWindow>().ok())
-                            {
-                                parent.show_toast_public("Inoreader credentials updated.");
-                            }
-                        }
-                        Err(e) => {
-                            save_btn.set_sensitive(true);
-                            status.set_text(&format!("Verified, but storing failed: {e}"));
-                            status.set_visible(true);
-                        }
+                        Ok(()) => SaveOutcome::Stored,
+                        Err(e) => SaveOutcome::StoreFailed(format!("{e}")),
                     }
                 }
-                Err(e) => {
+                Err(e) => SaveOutcome::VerifyFailed(format!("{e}")),
+            };
+            let _ = outcome_tx.send(outcome);
+        });
+        glib::spawn_future_local(async move {
+            match outcome_rx.await {
+                Ok(SaveOutcome::Stored) => {
+                    window.close();
+                    if let Some(parent) = window
+                        .transient_for()
+                        .and_then(|p| p.downcast::<crate::ui::window::ViaductWindow>().ok())
+                    {
+                        // v4.4.3 (issue #1): the account backend is
+                        // chosen once at startup, so a first-time login
+                        // needs a restart to activate; an already-remote
+                        // account picks the new credentials up
+                        // immediately.
+                        let msg = if parent.account().is_local_account() {
+                            "Inoreader credentials stored. Restart viaduct, then refresh, to pull your subscriptions."
+                        } else {
+                            "Inoreader credentials updated."
+                        };
+                        parent.show_toast_public(msg);
+                    }
+                }
+                Ok(SaveOutcome::StoreFailed(e)) => {
+                    save_btn.set_sensitive(true);
+                    status.set_text(&format!("Verified, but storing failed: {e}"));
+                    status.set_visible(true);
+                }
+                Ok(SaveOutcome::VerifyFailed(e)) => {
                     save_btn.set_sensitive(true);
                     status.set_text(&format!("Inoreader rejected these credentials: {e}"));
+                    status.set_visible(true);
+                }
+                Err(_) => {
+                    // The runtime leg died before answering; let the
+                    // user retry instead of leaving the dialog stuck.
+                    save_btn.set_sensitive(true);
+                    status.set_text("Verification did not complete; try again.");
                     status.set_visible(true);
                 }
             }

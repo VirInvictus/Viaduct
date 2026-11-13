@@ -1,5 +1,17 @@
 # viaduct: Patch Notes
 
+## v4.4.3: Inoreader login works end to end (2026-11-13)
+
+Fixes the whole first-login journey reported in issue #1. 310 tests; clippy `-D warnings` clean.
+
+- **Fixed:** the Update Inoreader Credentials dialog (v4.4.0) ran the keyring read (oo7/zbus) and the token verification (reqwest) directly under `glib::spawn_future_local`, which polls on the GLib main loop with no tokio reactor: opening the dialog panicked at `zbus executor.rs:190` and clicking Save panicked at `hyper-util dns.rs:119`, the two panics in the issue log. Both legs now run on the library runtime via `spawn_on_runtime` and hand results back over oneshots, the house pattern since v1.5.6.
+- **Fixed:** with an empty local OPML the refresh cycle returned before the account sync ever ran, and the sync's reconcile is what populates the list from the server: a fresh Inoreader login could never pull its subscriptions, even after a restart. The empty-list path now drives the sync, and the sidebar rebuilds whenever the reconcile changes the tree (web-side adds, moves, and renames used to appear only after an app restart).
+- **Fixed:** every Reader-API request carried empty `AppId`/`AppKey` headers unless build-time env vars were set, and nothing anywhere sets them (not CI, not Flatpak, not the documented build commands), so Inoreader answered 403 "AppId required!" to every sync. The pair now resolves per request: `~/.config/viaduct/inoreader.json` (`{"app_id": "…", "app_key": "…"}`) → runtime `INOREADER_APP_ID`/`INOREADER_APP_KEY` → build-time `option_env!` (the NNW `SecretKey` model) → empty. When it resolves empty, refresh shows an actionable toast naming the fix instead of making the doomed call. Registrations are free at inoreader.com/developers; README and spec document the chain.
+- **Changed:** a first login through the dialog now toasts that a restart activates the account backend (the delegate is chosen at startup); an already-remote account keeps the old "credentials updated" message.
+- **Changed:** `Account::new_with_delegate` pins the backend explicitly for tests, so integration tests stop inheriting the session keyring: on a machine with stored viaduct Inoreader credentials, `test_account_update_feed_integration` flipped onto the Inoreader delegate and made a real API call (CI's keyring-less container never saw it).
+
+Known limitation: live end-to-end verification against Inoreader still awaits an app registration (inoreader.dev's program requires a Pro plan the maintainer can't register for right now); every mechanism between login and the API call is covered by tests and local verification.
+
 ## v4.4.2: link-looking titles can't forge feeds (2026-11-08)
 
 One port from the November 8 NetNewsWire sync (`70c5dce65` to `65b51f262`, +352 commits). 306 tests; clippy `-D warnings` clean.

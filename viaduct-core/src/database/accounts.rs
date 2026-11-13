@@ -49,9 +49,6 @@ impl Account {
         read_tx: Option<cbc::Sender<ArticlesDbOp>>,
         sync_tx: mpsc::Sender<SyncDbOp>,
     ) -> Result<Self> {
-        let opml_file_path = opml_path()?;
-        let opml_writer = OpmlWriter::spawn(opml_file_path.clone());
-
         // A Secret Service that cannot be reached at all is not a fatal
         // condition, it just means there are no stored Inoreader credentials
         // to find. Propagating the error here made `Account::new` fail on any
@@ -71,6 +68,26 @@ impl Account {
         } else {
             Arc::new(LocalAccountDelegate)
         };
+
+        Self::new_with_delegate(db_tx, read_tx, sync_tx, delegate).await
+    }
+
+    /// `Account::new` with the backend pinned by the caller instead of
+    /// derived from the session keyring. Tests use this to stay
+    /// hermetic: on a machine that has stored viaduct Inoreader
+    /// credentials, the keyring-derived choice flips every
+    /// `Account::new`-built account onto the Inoreader delegate
+    /// mid-test, and a sync assertion then makes a real network call
+    /// (surfaced by issue #1 verification; CI's keyring-less container
+    /// never saw it).
+    pub async fn new_with_delegate(
+        db_tx: mpsc::Sender<DbOp>,
+        read_tx: Option<cbc::Sender<ArticlesDbOp>>,
+        sync_tx: mpsc::Sender<SyncDbOp>,
+        delegate: Arc<dyn AccountDelegate>,
+    ) -> Result<Self> {
+        let opml_file_path = opml_path()?;
+        let opml_writer = OpmlWriter::spawn(opml_file_path.clone());
 
         let account = Self {
             db_tx,

@@ -17,6 +17,8 @@ use gtk::{gio, glib};
 use std::sync::Arc;
 
 use crate::database::accounts::Account;
+use crate::database::opml::OpmlFile;
+use crate::models::Feed;
 use crate::ui::window::ViaductWindow;
 
 impl ViaductWindow {
@@ -158,7 +160,20 @@ impl ViaductWindow {
                 feeds.extend(folder.feeds.iter().cloned());
             }
             if feeds.is_empty() {
-                let _ = done_tx.send(RefreshTally::default());
+                // v4.4.3 (issue #1): an empty local list used to skip
+                // the whole cycle — including the account delegate's
+                // remote sync, whose reconcile is what populates the
+                // list from the server. A fresh Inoreader login could
+                // therefore never pull its subscriptions: the bootstrap
+                // sync only ever ran for non-empty lists. Run the sync
+                // half; per-feed fetching is empty by definition.
+                let (opml_changed, sync_error) = sync_and_compare_opml(&account).await;
+                let _ = done_tx.send(RefreshTally {
+                    feeds_attempted: 0,
+                    per_feed_new: std::collections::HashMap::new(),
+                    opml_changed,
+                    sync_error,
+                });
                 return;
             }
             let paired = pair_feeds_with_settings(&account, feeds).await;
@@ -201,6 +216,20 @@ impl ViaductWindow {
                 // walk is a cheap DB query so badges are accurate
                 // the moment the user re-shows the window.
                 window.dispatch_refresh_notification(&tally);
+                // v4.4.3 (issue #1): the account sync may have changed
+                // the OPML tree (bootstrap reconcile, server-side
+                // subscription change); rebuild the sidebar so the
+                // change shows without a restart.
+                if tally.opml_changed {
+                    window.reload_sidebar_after_opml_change();
+                }
+                // v4.4.3 (issue #1): surface the one actionable sync
+                // failure. The toast texts itself with the exact fix,
+                // so the user isn't left guessing why refresh produced
+                // nothing.
+                if let Some(message) = &tally.sync_error {
+                    window.show_toast_public(message);
+                }
                 window.refresh_unread_counts();
                 if window.is_visible() {
                     window.show_refresh_toast(&tally);
@@ -490,6 +519,20 @@ impl ViaductWindow {
                 // repopulate waits until the user re-summons the
                 // window (`main.rs build_ui` calls it on re-show).
                 window.dispatch_refresh_notification(&tally);
+                // v4.4.3 (issue #1): the account sync may have changed
+                // the OPML tree (bootstrap reconcile, server-side
+                // subscription change); rebuild the sidebar so the
+                // change shows without a restart.
+                if tally.opml_changed {
+                    window.reload_sidebar_after_opml_change();
+                }
+                // v4.4.3 (issue #1): surface the one actionable sync
+                // failure. The toast texts itself with the exact fix,
+                // so the user isn't left guessing why refresh produced
+                // nothing.
+                if let Some(message) = &tally.sync_error {
+                    window.show_toast_public(message);
+                }
                 window.refresh_unread_counts();
                 if window.is_visible() {
                     window.reload_current_timeline();
@@ -563,6 +606,15 @@ async fn pair_feeds_with_settings(
 pub(crate) struct RefreshTally {
     pub feeds_attempted: usize,
     pub per_feed_new: std::collections::HashMap<String, usize>,
+    /// v4.4.3 (issue #1): the account sync changed the OPML tree
+    /// (bootstrap reconcile, server-side subscription change), so the
+    /// caller must rebuild the sidebar for it to show without a
+    /// restart.
+    pub opml_changed: bool,
+    /// v4.4.3 (issue #1): the one actionable account-sync failure, for
+    /// a toast. `Some` only for a missing Inoreader app registration;
+    /// other sync failures stay log-only.
+    pub sync_error: Option<String>,
 }
 
 impl RefreshTally {
@@ -665,15 +717,90 @@ async fn run_refresh_with_tally(
     // Known limitation, recorded in the roadmap: NNW also sends statuses
     // on an independent short timer (our upstream candidate 416); until
     // that lands, status sync rides the refresh cadence.
-    if !account.is_local_account()
-        && let Err(e) = account.sync_with_remote().await
-    {
-        tracing::warn!(?e, "account sync failed; feeds refreshed regardless");
-    }
+    // v4.4.3 (issue #1): the sync now also reports whether it changed
+    // the OPML tree, so a server-side subscription change reaches the
+    // sidebar without a restart, and surfaces the one actionable sync
+    // failure (a missing Inoreader app registration) to the user.
+    let (opml_changed, sync_error) = sync_and_compare_opml(&account).await;
     RefreshTally {
         feeds_attempted,
         per_feed_new,
+        opml_changed,
+        sync_error,
     }
+}
+
+/// Drive the account delegate's remote sync (the v3.6.0 driver) and
+/// report whether it changed the local OPML tree. A local account
+/// never syncs and never changes the tree. The compare lets the
+/// caller rebuild the sidebar when the server added, removed, moved,
+/// or renamed a feed — previously such changes only appeared after an
+/// app restart. The second value is a user-facing error for the one
+/// failure with an actionable fix: a missing Inoreader app
+/// registration (every call would 403 "AppId required!"), which
+/// replaces the doomed network round trip. Other sync failures keep
+/// the log-only shape they always had.
+async fn sync_and_compare_opml(account: &Arc<Account>) -> (bool, Option<String>) {
+    if account.is_local_account() {
+        return (false, None);
+    }
+    if !crate::network::inoreader::inoreader_app_credentials_configured() {
+        let path = crate::paths::inoreader_app_config_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "~/.config/viaduct/inoreader.json".to_string());
+        return (
+            false,
+            Some(format!(
+                "Inoreader sync is unconfigured: register an app at inoreader.dev, then put its AppId and AppKey in {path} as {{\"app_id\": \"…\", \"app_key\": \"…\"}} (or set INOREADER_APP_ID and INOREADER_APP_KEY)."
+            )),
+        );
+    }
+    let before = match account.load_opml().await {
+        Ok(opml) => opml_tree_signature(&opml),
+        Err(e) => {
+            tracing::warn!(?e, "refresh: OPML load failed before account sync");
+            return (false, None);
+        }
+    };
+    if let Err(e) = account.sync_with_remote().await {
+        tracing::warn!(?e, "account sync failed; feeds refreshed regardless");
+    }
+    let after = match account.load_opml().await {
+        Ok(opml) => opml_tree_signature(&opml),
+        Err(e) => {
+            tracing::warn!(?e, "refresh: OPML load failed after account sync");
+            return (false, None);
+        }
+    };
+    (before != after, None)
+}
+
+/// Identity signature of the OPML tree: one entry per (folder, feed,
+/// display name). Captures everything the sidebar renders, so any
+/// server-side add / remove / move / rename flips it. BTreeSet keeps
+/// the comparison order-independent.
+fn opml_tree_signature(opml: &OpmlFile) -> std::collections::BTreeSet<String> {
+    fn display_name(f: &Feed) -> &str {
+        f.edited_name
+            .as_deref()
+            .or(f.name.as_deref())
+            .unwrap_or_default()
+    }
+    let mut sig = std::collections::BTreeSet::new();
+    for feed in &opml.standalone_feeds {
+        sig.insert(format!("|{}|{}", feed.id, display_name(feed)));
+    }
+    for folder in &opml.folders {
+        for feed in &folder.feeds {
+            sig.insert(format!(
+                "{}|{}|{}",
+                folder.name,
+                feed.id,
+                display_name(feed)
+            ));
+        }
+    }
+    sig
 }
 
 /// Pair of atomic counters threaded through `run_refresh_with_tally`
@@ -725,6 +852,17 @@ pub(crate) fn format_last_refresh(last: Option<chrono::DateTime<chrono::Local>>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Folder;
+
+    fn test_feed(id: &str, name: Option<&str>, edited_name: Option<&str>) -> Feed {
+        Feed {
+            id: id.to_string(),
+            url: format!("https://example.com/{id}.xml"),
+            name: name.map(str::to_string),
+            edited_name: edited_name.map(str::to_string),
+            home_page_url: None,
+        }
+    }
 
     #[test]
     fn refresh_tally_total_sums_per_feed_new() {
@@ -734,6 +872,93 @@ mod tests {
         t.per_feed_new.insert("feed-a".to_string(), 2);
         t.per_feed_new.insert("feed-b".to_string(), 5);
         assert_eq!(t.total_new_articles(), 7);
+    }
+
+    #[test]
+    fn opml_tree_signature_is_order_independent() {
+        let tree = |folder_feeds: Vec<Feed>, standalone: Vec<Feed>| OpmlFile {
+            folders: vec![Folder {
+                name: "Tech".to_string(),
+                feeds: folder_feeds,
+            }],
+            standalone_feeds: standalone,
+        };
+        let a = tree(
+            vec![
+                test_feed("f1", Some("One"), None),
+                test_feed("f2", None, None),
+            ],
+            vec![test_feed("f3", None, Some("Three"))],
+        );
+        let b = tree(
+            vec![
+                test_feed("f2", None, None),
+                test_feed("f1", Some("One"), None),
+            ],
+            vec![test_feed("f3", None, Some("Three"))],
+        );
+        assert_eq!(opml_tree_signature(&a), opml_tree_signature(&b));
+    }
+
+    #[test]
+    fn opml_tree_signature_flips_on_sidebar_visible_changes() {
+        let tree = |folders: Vec<Folder>, standalone: Vec<Feed>| OpmlFile {
+            folders,
+            standalone_feeds: standalone,
+        };
+        let base = tree(
+            vec![Folder {
+                name: "Tech".to_string(),
+                feeds: vec![test_feed("f1", Some("One"), None)],
+            }],
+            vec![test_feed("f2", None, None)],
+        );
+        let base_sig = opml_tree_signature(&base);
+
+        // An untouched rebuild of the same tree is unchanged.
+        let same = tree(
+            vec![Folder {
+                name: "Tech".to_string(),
+                feeds: vec![test_feed("f1", Some("One"), None)],
+            }],
+            vec![test_feed("f2", None, None)],
+        );
+        assert_eq!(base_sig, opml_tree_signature(&same));
+
+        // Display-name change (server set a title for a feed). Note the
+        // base resolves edited_name.or(name) to "One", so the rename
+        // must produce a different resolved display name to flip.
+        let renamed = tree(
+            vec![Folder {
+                name: "Tech".to_string(),
+                feeds: vec![test_feed("f1", None, Some("One Renamed"))],
+            }],
+            vec![test_feed("f2", None, None)],
+        );
+        assert_ne!(base_sig, opml_tree_signature(&renamed));
+
+        // Feed moved out of its folder.
+        let moved = tree(
+            Vec::new(),
+            vec![
+                test_feed("f1", Some("One"), None),
+                test_feed("f2", None, None),
+            ],
+        );
+        assert_ne!(base_sig, opml_tree_signature(&moved));
+
+        // New subscription added.
+        let added = tree(
+            vec![Folder {
+                name: "Tech".to_string(),
+                feeds: vec![test_feed("f1", Some("One"), None)],
+            }],
+            vec![test_feed("f2", None, None), test_feed("f3", None, None)],
+        );
+        assert_ne!(base_sig, opml_tree_signature(&added));
+
+        // Subscription removed (the empty tree also differs from base).
+        assert_ne!(base_sig, opml_tree_signature(&tree(Vec::new(), Vec::new())));
     }
 
     #[test]

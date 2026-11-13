@@ -1,6 +1,6 @@
 # viaduct: Application Specification
 
-**Version:** 4.4.2  
+**Version:** 4.4.3  
 **Target:** GTK4 ≥ 4.16, WebKitGTK 6.0, Wayland (Hyprland or GNOME). *(libadwaita dropped in v3.0.0; §12 is the post-libadwaita design contract.)*  
 **Language:** Rust (2024 Edition)  
 **Build System:** Cargo workspace (`viaduct-core` + `viaduct`) / Meson wrapper for Flatpak packaging  
@@ -225,7 +225,7 @@ To enforce the memory and disk footprint, the database is regularly vacuumed.
 * `rusqlite`: SQLite bindings (bundled, FTS5).
 * `crossbeam-channel`: Main/Worker thread communication.
 * `readability`: Local Reader View extraction.
-* `oo7`: Secret Service credential storage. Note: the shipped Inoreader client is **ClientLogin** (email + password exchanged for a bearer token), not OAuth; what oo7 stores is the account password. The app id/key pair the API requires comes from the `INOREADER_APP_ID` / `INOREADER_APP_KEY` environment variables at build time (`option_env!`), compiled into every Reader-API request as `AppId`/`AppKey` headers.
+* `oo7`: Secret Service credential storage. Note: the shipped Inoreader client is **ClientLogin** (email + password exchanged for a bearer token), not OAuth; what oo7 stores is the account password. The app id/key pair the API requires is resolved per request (v4.4.3): `$XDG_CONFIG_HOME/viaduct/inoreader.json` (`{"app_id": "…", "app_key": "…"}`) → runtime `INOREADER_APP_ID` / `INOREADER_APP_KEY` environment variables → build-time `option_env!` (how release builds inject the pair, the NNW `SecretKey` model) → empty strings, which make every Reader-API request 403 until one of the above exists. The pair rides every Reader-API request as `AppId`/`AppKey` headers. Registrations are free at inoreader.com/developers. When the pair resolves empty, the refresh cycle surfaces an actionable toast instead of the doomed network call.
 * `vir-gtk` (git dependency, lock-pinned): the shared VirInvictus widget kit: portal-based dark/light, the crate-tier base stylesheet, and the `rows`/`Alert` widget replacements since v3.8.0.
 * `ksni`: StatusNotifierItem system tray (run-in-background mode).
 * `ashpd`: xdg-desktop-portal client (Background portal for run-in-background).

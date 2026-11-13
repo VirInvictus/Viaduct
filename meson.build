@@ -18,7 +18,7 @@
 project(
   'viaduct',
   'rust',
-  version: '4.4.2',
+  version: '4.4.3',
   meson_version: '>= 0.59.0',
   license: 'MIT',
 )

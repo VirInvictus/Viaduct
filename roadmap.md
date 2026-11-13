@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.4.2.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.4.3.
 
 ---
 
@@ -621,6 +621,13 @@ Surfaced by fast-forwarding `.netnewswire` to `4c85c907f` (+267 commits over `8c
 - [ ] **Activity-log instrumentation parity.** NNW now logs `didReceiveResponse`, redirect chains, and detailed 429/4xx skip reasons, plus a `FindStrategy` in `FeedFinder`. Our `activity.rs` records terminal states only. Observability polish, not correctness.
 - [ ] **System suspend/resume timer pause.** NNW's `AccountRefreshTimer` suspends on sleep and skips refresh while `isSystemSleeping`. The Linux analog is a logind D-Bus `PrepareForSleep` hook around the periodic-refresh timer in `refresh.rs`. Minor on desktop; matters for mobile GTK form factors.
 - [ ] **Idle-backoff status-sync timer.** NNW's `ArticleStatusSyncTimer` runs at 2 min normally and backs off to 30 min when idle, exiting backoff on user-queued status changes. (v3.6.0 update: the sync engine is now driven once per refresh cycle, so statuses ride the refresh cadence; this timer is the port that would decouple them and let stars land server-side within minutes.)
+
+---
+
+## Issue-driven fixes (November 13, 2026)
+
+- [x] **Issue #1: the Inoreader first-login journey** *(shipped v4.4.3)*. Three stacked layers, all fixed in one release: (1) the v4.4.0 credentials dialog ran the oo7/zbus keyring read and the reqwest token check directly under `glib::spawn_future_local`, which polls on the GLib main loop with no tokio reactor (the "no reactor running" panics); both legs now run on the library runtime and hand results back over oneshots. (2) An empty local OPML made the refresh cycle return before the account sync, so the delegate reconcile that populates the list from the server never ran; the empty-list path now drives the sync and the sidebar rebuilds whenever the reconcile changes the tree. (3) Every build shipped empty `AppId`/`AppKey` headers (the build-time env vars nothing ever sets), so Inoreader 403'd every sync; the pair now resolves per request (`~/.config/viaduct/inoreader.json` → runtime env → build-time env → empty) with an actionable toast when unconfigured. Plus: restart hint after a first login, and `Account::new_with_delegate` for keyring-hermetic tests.
+- [ ] **Deferred:** live end-to-end Inoreader verification. The developer API requires an app registration and inoreader.dev's program requires a Pro plan the maintainer can't register for right now; every mechanism between login and the API call is covered by tests and local verification until one exists.
 
 ---
 

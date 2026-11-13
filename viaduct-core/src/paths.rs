@@ -17,6 +17,20 @@ pub fn cache_dir() -> Result<PathBuf> {
     Ok(xdg_home("XDG_CACHE_HOME", ".cache")?.join(APP_DIR))
 }
 
+/// v4.4.3 — user config root (`$XDG_CONFIG_HOME/viaduct`). Hosts the
+/// optional Inoreader app-registration file.
+pub fn config_dir() -> Result<PathBuf> {
+    Ok(xdg_home("XDG_CONFIG_HOME", ".config")?.join(APP_DIR))
+}
+
+/// Optional Inoreader app-registration file: `{"app_id": "…", "app_key":
+/// "…"}`. The pair every Reader-API request must carry; see
+/// `network::inoreader::inoreader_app_credentials` for the full
+/// resolution chain.
+pub fn inoreader_app_config_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("inoreader.json"))
+}
+
 pub fn opml_path() -> Result<PathBuf> {
     Ok(data_dir()?.join("local.opml"))
 }
@@ -69,6 +83,7 @@ pub fn ensure_dirs() -> Result<()> {
     for dir in [
         data_dir()?,
         cache_dir()?,
+        config_dir()?,
         favicon_cache_dir()?,
         image_cache_dir()?,
         video_thumb_cache_dir()?,

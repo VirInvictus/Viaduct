@@ -1,7 +1,9 @@
 use chrono::Utc;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use viaduct_core::database::accounts::Account;
 use viaduct_core::database::articles::SortOrder;
+use viaduct_core::database::delegate::{AccountDelegate, LocalAccountDelegate};
 use viaduct_core::database::worker::{
     read_channel, spawn_db_worker, spawn_read_workers, spawn_sync_worker,
 };
@@ -43,9 +45,18 @@ async fn test_account_update_feed_integration() {
     // open onto an already-initialized articles DB.
     let (read_tx, read_rx) = read_channel();
 
-    let account = Account::new(db_tx, Some(read_tx), sync_tx)
-        .await
-        .expect("Failed to create account");
+    // Pin the local delegate instead of letting Account::new derive it
+    // from the session keyring: on a machine with stored viaduct
+    // Inoreader credentials the derived choice is the Inoreader delegate,
+    // and this test's sync no-op assertion would make a real API call.
+    let account = Account::new_with_delegate(
+        db_tx,
+        Some(read_tx),
+        sync_tx,
+        Arc::new(LocalAccountDelegate) as Arc<dyn AccountDelegate>,
+    )
+    .await
+    .expect("Failed to create account");
 
     spawn_read_workers(read_rx).expect("Failed to spawn read workers");
 

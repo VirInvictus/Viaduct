@@ -6,6 +6,88 @@ use crate::error::{NetworkError, Result, ViaductError};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+/// The Inoreader app registration (`AppId`/`AppKey`) every Reader-API
+/// request must carry (Inoreader answers 403 "AppId required!" without
+/// it). v4.4.3 resolves it at runtime instead of only from build-time
+/// environment variables, so a from-source build can sync without
+/// being rebuilt:
+///
+/// 1. `$XDG_CONFIG_HOME/viaduct/inoreader.json` (fallback
+///    `~/.config/viaduct/inoreader.json`):
+///    `{"app_id": "…", "app_key": "…"}`
+/// 2. Runtime environment: `INOREADER_APP_ID` / `INOREADER_APP_KEY`
+/// 3. Build-time environment (`option_env!`, how release builds inject
+///    the pair — the NNW `SecretKey` model)
+/// 4. Empty strings: every call 403s until one of the above exists.
+///
+/// A registration is free at <https://www.inoreader.com/developers/>.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InoreaderAppCredentials {
+    pub app_id: String,
+    pub app_key: String,
+}
+
+#[derive(Deserialize)]
+struct InoreaderAppConfigFile {
+    app_id: String,
+    app_key: String,
+}
+
+/// Resolve the app registration for one outgoing request. Reads the
+/// config file per call (it is a tiny local file, and edits apply
+/// without an app restart).
+pub fn inoreader_app_credentials() -> InoreaderAppCredentials {
+    let from_file =
+        std::fs::read_to_string(crate::paths::inoreader_app_config_path().unwrap_or_default())
+            .ok()
+            .and_then(|json| parse_app_config(&json));
+    resolve_app_credentials(
+        from_file,
+        |key| std::env::var(key).ok().filter(|v| !v.is_empty()),
+        (
+            option_env!("INOREADER_APP_ID"),
+            option_env!("INOREADER_APP_KEY"),
+        ),
+    )
+}
+
+/// Whether a usable registration exists. Callers use this to hand the
+/// user an actionable message instead of a doomed network round trip.
+pub fn inoreader_app_credentials_configured() -> bool {
+    let creds = inoreader_app_credentials();
+    !creds.app_id.is_empty() && !creds.app_key.is_empty()
+}
+
+fn parse_app_config(json: &str) -> Option<InoreaderAppCredentials> {
+    let config: InoreaderAppConfigFile = serde_json::from_str(json).ok()?;
+    if config.app_id.is_empty() || config.app_key.is_empty() {
+        return None;
+    }
+    Some(InoreaderAppCredentials {
+        app_id: config.app_id,
+        app_key: config.app_key,
+    })
+}
+
+/// Pure resolution chain, injected so tests never touch the real
+/// filesystem or process environment.
+fn resolve_app_credentials(
+    from_file: Option<InoreaderAppCredentials>,
+    env: impl Fn(&str) -> Option<String>,
+    build: (Option<&str>, Option<&str>),
+) -> InoreaderAppCredentials {
+    if let Some(config) = from_file {
+        return config;
+    }
+    if let (Some(app_id), Some(app_key)) = (env("INOREADER_APP_ID"), env("INOREADER_APP_KEY")) {
+        return InoreaderAppCredentials { app_id, app_key };
+    }
+    InoreaderAppCredentials {
+        app_id: build.0.unwrap_or_default().to_string(),
+        app_key: build.1.unwrap_or_default().to_string(),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReaderAPIVariant {
     Inoreader,
@@ -381,9 +463,11 @@ impl ReaderAPICaller {
 
     fn add_variant_headers(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if self.variant == ReaderAPIVariant::Inoreader {
-            // These come from compile-time environment variables.
-            request = request.header("AppId", option_env!("INOREADER_APP_ID").unwrap_or(""));
-            request = request.header("AppKey", option_env!("INOREADER_APP_KEY").unwrap_or(""));
+            // v4.4.3: resolved per request (config file → runtime env →
+            // build-time env → empty); see inoreader_app_credentials.
+            let creds = inoreader_app_credentials();
+            request = request.header("AppId", creds.app_id);
+            request = request.header("AppKey", creds.app_key);
         }
         request
     }
@@ -1028,6 +1112,68 @@ impl ReaderAPICaller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_config_file_parses_and_rejects_empty_fields() {
+        let good = parse_app_config(r#"{"app_id": "1000001414", "app_key": "kk18irx"}"#);
+        assert_eq!(
+            good,
+            Some(InoreaderAppCredentials {
+                app_id: "1000001414".to_string(),
+                app_key: "kk18irx".to_string(),
+            })
+        );
+        // An empty field falls through the chain rather than sending a
+        // half registration that would 403 anyway.
+        assert_eq!(
+            parse_app_config(r#"{"app_id": "", "app_key": "kk18irx"}"#),
+            None
+        );
+        assert_eq!(parse_app_config("not json"), None);
+    }
+
+    #[test]
+    fn app_credentials_resolution_prefers_file_then_env_then_build() {
+        let file = || {
+            Some(InoreaderAppCredentials {
+                app_id: "from-file".to_string(),
+                app_key: "file-key".to_string(),
+            })
+        };
+        let no_file = || None;
+        let env_with = |_: &str| Some("from-env".to_string());
+        let env_none = |_: &str| None;
+
+        // 1. Config file wins over everything.
+        assert_eq!(
+            resolve_app_credentials(file(), env_with, (Some("build"), Some("build"))),
+            InoreaderAppCredentials {
+                app_id: "from-file".to_string(),
+                app_key: "file-key".to_string(),
+            }
+        );
+        // 2. Runtime env wins over build-time env.
+        assert_eq!(
+            resolve_app_credentials(no_file(), env_with, (Some("build"), Some("build"))),
+            InoreaderAppCredentials {
+                app_id: "from-env".to_string(),
+                app_key: "from-env".to_string(),
+            }
+        );
+        // 3. Build-time env (the release-injection path).
+        assert_eq!(
+            resolve_app_credentials(no_file(), env_none, (Some("id"), Some("key"))),
+            InoreaderAppCredentials {
+                app_id: "id".to_string(),
+                app_key: "key".to_string(),
+            }
+        );
+        // 4. Nothing configured: empty strings, exactly what makes
+        // `inoreader_app_credentials_configured()` return false.
+        let none = resolve_app_credentials(no_file(), env_none, (None, None));
+        assert_eq!(none.app_id, "");
+        assert_eq!(none.app_key, "");
+    }
 
     fn make_entry(article_id: &str) -> ReaderAPIEntry {
         ReaderAPIEntry {

@@ -114,6 +114,19 @@ meson compile -C builddir
 sudo meson install -C builddir
 ```
 
+### Inoreader sync setup
+
+Inoreader's API requires an **app registration** (`AppId`/`AppKey`) on every request; registering an app is free at [inoreader.com/developers](https://www.inoreader.com/developers/). Log in through the sidebar's gear menu → *Update Inoreader Credentials…*, then give viaduct the app pair through any one of:
+
+1. A config file at `~/.config/viaduct/inoreader.json` (or `$XDG_CONFIG_HOME/viaduct/inoreader.json`):
+   ```json
+   {"app_id": "1000001414", "app_key": "kk18irx…"}
+   ```
+2. Runtime environment variables `INOREADER_APP_ID` / `INOREADER_APP_KEY`.
+3. Build-time environment variables of the same names, compiled in via `option_env!` (how packagers inject the pair; the same model NetNewsWire's `SecretKey` uses).
+
+Without a pair, refresh shows a toast naming the missing registration instead of a doomed API call. The config file applies without restarting viaduct.
+
 ## Architecture
 
 - **Cargo workspace** with two crates: `viaduct-core` (headless: database, network, parser, models, errors, paths, runtime helpers, with no GTK deps) and `viaduct` (binary: GTK4 + WebKit UI, no libadwaita). The split makes architectural boundaries a *compile error*, not a code-review rule.
