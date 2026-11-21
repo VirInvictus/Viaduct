@@ -1,5 +1,17 @@
 # viaduct: Patch Notes
 
+## Unreleased
+
+- **vir-gtk adopted at 1.5.0** (consumer wave, lock bump): the base
+  sheet's checked/active default went quiet (upstream issue #1; state
+  display stops spending the accent). Viaduct restates no button state
+  rules, so its three checked-toggle surfaces (the sidebar search
+  toggle, the "This feed" scope toggle, and the Reader View toggle)
+  now render the quiet lift instead of the dragonRed paint; the
+  cascade verified no other surface changes and the display pass on
+  the three toggles stays on Brandon's list.
+  `data/cargo-sources.json` regenerated against the moved lock.
+
 ## v4.4.3: Inoreader login works end to end (2026-11-13)
 
 Fixes the whole first-login journey reported in issue #1. 310 tests; clippy `-D warnings` clean.

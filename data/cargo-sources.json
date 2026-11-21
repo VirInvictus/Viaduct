@@ -2,8 +2,8 @@
     {
         "type": "git",
         "url": "https://github.com/virinvictus/vir-gtk",
-        "commit": "3f61143715da8582c6248211afd84b08f2b70d97",
-        "dest": "flatpak-cargo/git/vir-gtk-3f61143"
+        "commit": "d37ef6ec5c7b30d51e354a54f68843096ad983d6",
+        "dest": "flatpak-cargo/git/vir-gtk-d37ef6e"
     },
     {
         "type": "archive",
@@ -4441,12 +4441,12 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/vir-gtk-3f61143/.\" \"cargo/vendor/vir-gtk\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/vir-gtk-d37ef6e/.\" \"cargo/vendor/vir-gtk\""
         ]
     },
     {
         "type": "inline",
-        "contents": "[workspace]\nmembers = [\"capi\"]\n\n[workspace.package]\nversion = \"1.4.3\"\nedition = \"2021\"\nlicense = \"MIT\"\nrust-version = \"1.92\"\n\n[package]\nname = \"vir-gtk\"\nversion = \"1.4.3\"\nedition = \"2021\"\nlicense = \"MIT\"\nrust-version = \"1.92\"\ndescription = \"Shared GTK4 styling and D-Bus portal layer for the VirInvictus desktop suite: the libadwaita replacement\"\nrepository = \"https://github.com/VirInvictus/vir-gtk\"\nkeywords = [\"gtk4\", \"theme\", \"kanagawa\", \"portal\", \"dark-mode\"]\ncategories = [\"gui\"]\n\n[dependencies.gtk4]\nversion = \"0.11\"\nfeatures = [\"v4_14\"]\n",
+        "contents": "[workspace]\nmembers = [\"capi\"]\n\n[workspace.package]\nversion = \"1.5.0\"\nedition = \"2021\"\nlicense = \"MIT\"\nrust-version = \"1.92\"\n\n[package]\nname = \"vir-gtk\"\nversion = \"1.5.0\"\nedition = \"2021\"\nlicense = \"MIT\"\nrust-version = \"1.92\"\ndescription = \"Shared GTK4 styling and D-Bus portal layer for the VirInvictus desktop suite: the libadwaita replacement\"\nrepository = \"https://github.com/VirInvictus/vir-gtk\"\nkeywords = [\"gtk4\", \"theme\", \"kanagawa\", \"portal\", \"dark-mode\"]\ncategories = [\"gui\"]\n\n[dependencies.gtk4]\nversion = \"0.11\"\nfeatures = [\"v4_14\"]\n",
         "dest": "cargo/vendor/vir-gtk",
         "dest-filename": "Cargo.toml"
     },
