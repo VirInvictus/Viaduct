@@ -3535,7 +3535,6 @@ dependencies = [
 name = "viaduct-core"
 version = "4.4.4"
 dependencies = [
- "ammonia",
  "anyhow",
  "ashpd 0.10.3",
  "chrono",

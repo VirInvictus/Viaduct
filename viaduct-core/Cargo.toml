@@ -13,7 +13,6 @@ reqwest.workspace = true
 quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ammonia.workspace = true
 crossbeam-channel.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
