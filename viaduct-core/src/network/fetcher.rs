@@ -23,10 +23,11 @@ const CACHE_CONTROL_MAX_MAX_AGE_SECS: i64 = 5 * 60 * 60;
 /// full re-sync. openrss.org and rachelbythebay.com are excluded.
 const CONDITIONAL_GET_EXPIRY_DAYS: i64 = 8;
 
-/// Port of NNW's `defaultRetryAfter`. Some hosts (Reddit) answer 429
-/// without a `Retry-After` header; without a fallback we'd record no
-/// cooldown at all and hammer them again on the very next cycle, which
-/// is the opposite of what the 429 asked for.
+/// Port of NNW's `defaultRetryAfter`. Some hosts answer 429 without a
+/// `Retry-After` header; without a fallback we'd record no cooldown at
+/// all and hammer them again on the very next cycle, which is the
+/// opposite of what the 429 asked for. (NNW `c9bd65b1f`, motivated by
+/// Reddit, which no longer serves feeds at all since `519c5598e`.)
 const DEFAULT_RETRY_AFTER_SECS: i64 = 10 * 60;
 
 /// v2.6.9: cap on simultaneously-running per-feed pipelines inside a
@@ -425,21 +426,18 @@ impl AccountRefresher {
         let total_input = feeds.len();
         let mut skipped = 0usize;
 
-        // Per-session throttle picks, computed before the loop consumes
-        // `feeds`. NNW `80a090c5b`: Reddit rate-limits to one feed per
-        // minute, so the session refreshes only the least-recently-checked
-        // Reddit feed. NNW `5355d805a`: openrss.org allows one feed per
-        // client per hour. Both gates ride the same per-feed skip path,
+        // Per-session throttle pick, computed before the loop consumes
+        // `feeds`. NNW `5355d805a`: openrss.org allows one feed per
+        // client per hour. The gate rides the same per-feed skip path,
         // so the activity log records every skipped feed and the GTK
         // progress counter still reaches 100%. Force bypasses the skip
-        // checks entirely (below), so neither pick matters there.
-        let (reddit_url_to_refresh, openrss_url_to_refresh) = if force {
-            (None, None)
+        // checks entirely (below), so the pick does not matter there.
+        // Reddit needs no pick since NNW `519c5598e`: every reddit.com
+        // feed skips unconditionally now.
+        let openrss_url_to_refresh = if force {
+            None
         } else {
-            (
-                Self::lru_url_for_domain(&feeds, REDDIT_DOMAIN),
-                self.openrss_session_pick(&feeds).await,
-            )
+            self.openrss_session_pick(&feeds).await
         };
 
         // v2.6.9: cap in-flight per-feed pipelines to keep peak RSS
@@ -460,7 +458,6 @@ impl AccountRefresher {
                     &feed,
                     &settings,
                     special_case_cutoff_date,
-                    reddit_url_to_refresh.as_deref(),
                     openrss_url_to_refresh.as_deref(),
                 )
             {
@@ -543,10 +540,16 @@ impl AccountRefresher {
         feed: &Feed,
         settings: &FeedSettings,
         special_case_cutoff_date: DateTime<Utc>,
-        reddit_url_to_refresh: Option<&str>,
         openrss_url_to_refresh: Option<&str>,
     ) -> Option<crate::network::activity::SkipReason> {
         use crate::network::activity::SkipReason;
+
+        // NNW `519c5598e`: Reddit no longer offers RSS feeds, so every
+        // reddit.com feed skips unconditionally, first in the skip order
+        // (before cache-control and every other gate).
+        if url_host_matches_domain(&feed.url, &[REDDIT_DOMAIN]) {
+            return Some(SkipReason::RedditNoRss);
+        }
 
         if let Ok(url) = url::Url::parse(&feed.url)
             && let Some(host) = url.host_str()
@@ -566,16 +569,6 @@ impl AccountRefresher {
             if elapsed < max_age {
                 return Some(SkipReason::CacheControl);
             }
-        }
-
-        // NNW `80a090c5b`: Reddit allows one feed per refresh session; the
-        // session's least-recently-checked pick runs, the rest skip. A
-        // missing pick (unreachable: the pick is computed from this same
-        // set) throttles every Reddit feed, the safe direction.
-        if url_host_matches_domain(&feed.url, &[REDDIT_DOMAIN])
-            && feed.url != reddit_url_to_refresh.unwrap_or_default()
-        {
-            return Some(SkipReason::RedditRateLimit);
         }
 
         // NNW `5355d805a`: openrss.org allows one feed per client-hour; a
@@ -692,9 +685,10 @@ const MINIMUM_TIME_BETWEEN_CHECKS_MINUTES: i64 = 9;
 /// `SpecialCase.openRSSOrgHostName`.
 const SPECIAL_CASE_DOMAINS: &[&str] = &["rachelbythebay.com", OPENRSS_DOMAIN];
 
-/// Reddit's host for the one-feed-per-session throttle (NNW
-/// `SpecialCase.redditHostName`, `80a090c5b`). Matches subdomains via
-/// `url_host_matches_domain`.
+/// Reddit's host for the unconditional refresh skip (NNW
+/// `SpecialCase.redditHostName`; the feed-side matcher survives the
+/// `80a090c5b` throttle, which `519c5598e` retired when Reddit dropped
+/// RSS). Matches subdomains via `url_host_matches_domain`.
 const REDDIT_DOMAIN: &str = "reddit.com";
 
 /// openrss.org's host. Doubles as the special-case entry above and the
@@ -1124,8 +1118,8 @@ mod tests {
 
     #[test]
     fn retry_after_secs_defaults_when_absent_or_unusable() {
-        // Reddit 429s with no Retry-After at all; before the default we
-        // recorded no cooldown and hit it again on the next cycle.
+        // Some hosts 429 with no Retry-After at all; before the default
+        // we recorded no cooldown and hit them again on the next cycle.
         assert_eq!(retry_after_secs(None), DEFAULT_RETRY_AFTER_SECS);
         // An HTTP-date Retry-After is legal but we don't parse it.
         assert_eq!(
@@ -1169,43 +1163,47 @@ mod tests {
         }
     }
 
-    /// NNW `80a090c5b`: within one refresh session only the picked Reddit
-    /// feed runs; the rest skip with the Reddit reason.
+    /// NNW `519c5598e`: Reddit no longer offers RSS feeds, so every
+    /// reddit.com feed skips unconditionally, first in the skip order.
     #[test]
-    fn reddit_feeds_skip_except_the_session_pick() {
+    fn reddit_feeds_skip_unconditionally() {
         let feed = throttle_feed("https://old.reddit.com/r/rust/.rss");
         let settings = throttle_settings(None);
         let cutoff = Utc::now() - Duration::hours(1);
 
-        let reason = AccountRefresher::skip_reason(
-            &feed,
-            &settings,
-            cutoff,
-            Some("https://old.reddit.com/r/other/.rss"),
-            None,
-        );
-        assert_eq!(reason, Some(SkipReason::RedditRateLimit));
+        // Never-checked Reddit feed: no pick to consult, skips.
+        let reason = AccountRefresher::skip_reason(&feed, &settings, cutoff, None);
+        assert_eq!(reason, Some(SkipReason::RedditNoRss));
 
-        // The session's pick itself passes every check (never-checked
-        // feed: no timing throttle either).
-        let reason = AccountRefresher::skip_reason(
-            &feed,
-            &settings,
-            cutoff,
-            Some("https://old.reddit.com/r/rust/.rss"),
-            None,
-        );
-        assert_eq!(reason, None);
+        // Even inside a cache-control freshness window the Reddit gate
+        // runs first (upstream moved the check to the front).
+        let mut fresh = throttle_settings(Some(Utc::now()));
+        fresh.max_age = Some(3600);
+        let reason = AccountRefresher::skip_reason(&feed, &fresh, cutoff, None);
+        assert_eq!(reason, Some(SkipReason::RedditNoRss));
+
+        // Every reddit.com subdomain skips; lookalike hosts do not match.
+        for url in [
+            "https://www.reddit.com/r/rust/.rss",
+            "https://reddit.com/r/rust/.rss",
+            "https://np.reddit.com/r/rust/.rss",
+        ] {
+            let reason =
+                AccountRefresher::skip_reason(&throttle_feed(url), &settings, cutoff, None);
+            assert_eq!(reason, Some(SkipReason::RedditNoRss), "url: {url}");
+        }
+        for url in [
+            "https://notreddit.com/feed",
+            "https://reddit.com.evil.example/feed",
+        ] {
+            let reason =
+                AccountRefresher::skip_reason(&throttle_feed(url), &settings, cutoff, None);
+            assert_eq!(reason, None, "lookalike must not match: {url}");
+        }
 
         // Non-Reddit feeds never hit the gate.
         let other = throttle_feed("https://example.com/feed.xml");
-        let reason = AccountRefresher::skip_reason(
-            &other,
-            &settings,
-            cutoff,
-            Some("https://old.reddit.com/r/other/.rss"),
-            None,
-        );
+        let reason = AccountRefresher::skip_reason(&other, &settings, cutoff, None);
         assert_eq!(reason, None);
     }
 
@@ -1217,14 +1215,13 @@ mod tests {
         let settings = throttle_settings(None);
         let cutoff = Utc::now() - Duration::hours(1);
 
-        let reason = AccountRefresher::skip_reason(&feed, &settings, cutoff, None, None);
+        let reason = AccountRefresher::skip_reason(&feed, &settings, cutoff, None);
         assert_eq!(reason, Some(SkipReason::OpenRssThrottle));
 
         let reason = AccountRefresher::skip_reason(
             &feed,
             &settings,
             cutoff,
-            None,
             Some("https://openrss.org/www.example.com"),
         );
         assert_eq!(reason, None);
@@ -1252,16 +1249,19 @@ mod tests {
                 throttle_settings(None),
             ),
         ];
-        let pick = AccountRefresher::lru_url_for_domain(&feeds, REDDIT_DOMAIN);
+        let pick = AccountRefresher::lru_url_for_domain(&feeds, OPENRSS_DOMAIN);
+        assert_eq!(pick, None, "no openrss feed in the set, no pick");
+
+        let reddit_pick = AccountRefresher::lru_url_for_domain(&feeds, REDDIT_DOMAIN);
         assert_eq!(
-            pick.as_deref(),
+            reddit_pick.as_deref(),
             Some("https://old.reddit.com/r/c/.rss"),
             "never-checked feeds sort first"
         );
 
         let empty: Vec<(Feed, FeedSettings)> = Vec::new();
         assert_eq!(
-            AccountRefresher::lru_url_for_domain(&empty, REDDIT_DOMAIN),
+            AccountRefresher::lru_url_for_domain(&empty, OPENRSS_DOMAIN),
             None
         );
     }

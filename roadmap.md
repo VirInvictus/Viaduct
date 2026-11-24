@@ -1,6 +1,6 @@
 # viaduct: Roadmap
 
-What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.4.3.
+What's done, what's next, what's deferred. Sequenced for maximum performance, full NetNewsWire **local-account and Inoreader** feature parity, and a strictly defined 1.0 Wayland/Linux release. Updated as of v4.4.4.
 
 ---
 
@@ -366,6 +366,32 @@ Surfaced by fast-forwarding `.netnewswire` to `8c02fb3ba` (post-7.0.6) and `.new
 - [ ] **Watch item, no action:** NewsFlash migrated its sidebar + tag lists from `GtkListView` back to `GtkListBox` (keeping `TreeListModel`, #731). A mature GTK4/Rust peer judged `ListView` painful for a tree sidebar; we use `ListView`. Not a directive (we port from NNW), but a flag to revisit if our sidebar `ListView` ever fights us.
 - [ ] **Lower-priority UX ideas seen upstream:** swipe-between-articles gesture (#173), category/folder-wide settings (#910), don't-restore-collapsed-sidebar (#918).
 
+## Upstream Sync Candidates (November 23, 2026)
+
+Surfaced by fast-forwarding `.netnewswire` to `cea2aeccf` (+152 commits over `f3a0102c3`, Nov 8 – Nov 22); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `AGENTS.md` §2 for the sync note. The window is the `mac-7.3` release line plus upstream's primary-media arc; three ports shipped in v4.4.4.
+
+### Ported from NetNewsWire
+
+- [x] **Reddit feeds skipped wholesale** (NNW `519c5598e`, `b8f938f4b`, `7f7a67583`) *(shipped v4.4.4)*. Reddit no longer offers RSS feeds; the v3.6.0 one-feed-per-session throttle (`80a090c5b`) is retired and every reddit.com feed skips unconditionally, first in the skip order (`SkipReason::RedditNoRss`, the openrss.org pick stays). Supersedes the July 2026 throttle item below.
+- [x] **Tiqoe Dark + Verdana Revival stylesheet byte-syncs** (aggregate to `cea2aeccf`; `774f9a187`, `04fe6788b`, `60e4da830`, `6ef43dd44`, `96da879b8`, `359811417`, `9c787187b`) *(shipped v4.4.4)*. Tiqoe: TechCrunch affiliate-disclaimer and Macworld newsletter hides plus the 7.3 primary-media/enclosure styles (inert until the arc lands); Verdana Revival: the enclosure-caption underline selector.
+- [x] **Atom xhtml CDATA title test** (NNW `81345183c`, #5484) *(shipped v4.4.4)*. Tests-only regression pin in `parser/xml.rs`: a `<title type="xhtml">` with a CDATA body yields the plain text.
+
+### Deferred candidates (not yet ported)
+
+- [ ] **Primary-media arc addenda, merged into the images & media candidate (see the November 8, 2026 section)**: the `[[primary_media]]` renderer (`1d8ae6abe`, `2631c157a`, `9aea5204a`, `898c44f96`, `f28c08c45`, `409c55b39`, `5fc54daa6`, `9c787187b`, `632e4a68e`; `ArticleRenderer+PrimaryMedia`, the rewritten enclosures renderer, and the per-site image-identity special cases), the RSParser attachment metadata trio (`39cd96839` Guardian widest-rendition merge, `9e0c28fcc` Gravatar as author avatar, `d8417db7d` feed-image enclosure skip), the `template7.3.html` theme mechanism plus the Gray and Plum bundles (`6ba1b38e1`, `32e88baac`, `9e71cec4b`, `518ef1cf5`; our macro processor prints unknown `[[key]]` tags literally, so the templates land with the renderer), and the grayscale-feed-icons feature (`cfb4c32a5`, `f02250d38`, `7f6aca32b`, `b528ad3d5`, `1875a0f9e`, `fcfd7d207`, `cdaaef1dc`; gdk-pixbuf desaturation on the GTK thread, no new deps).
+- [ ] **In-article find** (NNW `abb71358b`, `84e653a23`, `63edb5cbc`, `68d3f0ae4`, `ea3ee6d0a`): upstream's platform halves are WKWebView/UIFindInteraction plumbing, but WebKitGTK ships a find controller, so the feature itself is portable. Small, self-contained UI work; no upstream logic to port.
+
+### Watch / inapplicable (this window)
+
+- rust-lang.org noscript unwrap (`bdcca49c0`): ammonia strips `noscript` tags while keeping their content and our JS is always off; nothing to do.
+- Optimole `data-opt-src` (`d3a3aa16d`): main.js, dead under the §7.4 lockdown.
+- Images tuning (`a509c7d01` eviction de-aggression + `MemoryPressureMonitor` deletion, `d0b79171d`/`d404cf18a` logging, `7908c801b` Low Data Mode): our `ImageCache` is a byte-bounded LRU with no memory-pressure eviction; we never had an NSCache or a monitor to remove.
+- Default-theme rework (`798c6fc58` and the shared `stylesheet.css`/`core.css`/`template.html` changes): files we do not bundle (recorded divergence); revisit only if a rule generalizes the way text-autospace did.
+- Platform clusters (Find-in-Article halves, `24a5bd964` arrow keys, `0f5046bbb` sidebar identity, `1c66fd474` accountID+articleID key, `97b5311f9`/`35c27e3b5` double-click mark read, `970c28e7c` web-view pool, `e2c41220f` scroll restoration, the Duo/iPad and iOS-settings-SwiftUI waves, themes-gallery UI): AppKit/UIKit/WKWebView work with no GTK counterpart.
+- `c573795bd` (register defaults earlier): AppKit window-restoration lifecycle; GSettings defaults are schema-registered at process start.
+
+---
+
 ## Upstream Sync Candidates (November 8, 2026)
 
 Surfaced by fast-forwarding `.netnewswire` to `65b51f262` (+352 commits over `70c5dce65`, Oct 24 – Nov 8, plus a same-day follow-up window to `f3a0102c3`); `.newsflash` and `.liferea` were not reviewed (weekly-sync charter: NNW only). See `AGENTS.md` §2 for the sync note. The window is upstream's images/thumbnails infrastructure arc; one port shipped in v4.4.2.
@@ -595,7 +621,7 @@ Surfaced by fast-forwarding `.netnewswire` to `08d10f501` (+85 commits over `4c8
 
 ### Deferred candidates (not yet ported)
 
-- [x] **Reddit one-feed-per-minute throttle** (NNW `e3aed79d1`, `80a090c5b`, `88aa60160`) *(shipped v3.6.0, exactly the shape the item predicted)*. `refresh_feeds_inner` computes `reddit_url_to_refresh` (least-recently-checked, min `last_check_date` from `FeedSettings`), threads it into `skip_reason`, and a `SkipReason::RedditRateLimit` variant lands in `activity.rs`, checked after cache-control/disallowed-host and before timing. One divergence: `88aa60160`'s skip message names the URL being refreshed; our Activity Log subtitles are static strings, so the reason stays generic (the row itself shows the skipped feed).
+- [x] **Reddit one-feed-per-minute throttle** (NNW `e3aed79d1`, `80a090c5b`, `88aa60160`) *(shipped v3.6.0, exactly the shape the item predicted)*. `refresh_feeds_inner` computes `reddit_url_to_refresh` (least-recently-checked, min `last_check_date` from `FeedSettings`), threads it into `skip_reason`, and a `SkipReason::RedditRateLimit` variant lands in `activity.rs`, checked after cache-control/disallowed-host and before timing. One divergence: `88aa60160`'s skip message names the URL being refreshed; our Activity Log subtitles are static strings, so the reason stays generic (the row itself shows the skipped feed). **Superseded in v4.4.4** (NNW `519c5598e`): Reddit no longer offers RSS feeds, so the throttle is retired and every reddit.com feed skips unconditionally.
 - [x] **`ArticleStringFormatter.sanitizedTitle`** (NNW `3eac947dd`, `de464b6a3`) *(ported v3.2.0, 2026-08-08)*. `viaduct-core/src/text.rs::sanitized_title`, a byte-level single-pass port with the full fix set: tags matched by name so attributes are ignored, the 22-tag allowlist (`abbr` included), the `tagWasClosed` guard so an unclosed tag never gains a synthesized `>` (#4742), and NNW's exact-byte (case-sensitive) allowlist lookup ported as-is. Applied at the article-pane title substitution, replacing the wholesale `escape_html`; 10 unit tests port NNW's cases plus the behavior matrix. Timeline was and stays plain `set_text`.
 - [x] **`core.css`: `scrollbar-gutter: stable`** (NNW `808403b00`). Evaluate against `VIADUCT_PANE_OVERRIDE_CSS`, which already hand-styles the WebKit scrollbar and re-enables `overflow: auto`. Cheap to try; affects article-pane layout shift only. *(Adopted v3.7.5: the upstream rule rides verbatim in `VIADUCT_PANE_OVERRIDE_CSS` (`html { scrollbar-gutter: stable; }`), reserving the gutter so the article's leading edge stops shifting between a long article and a short one. Evaluation against the existing sheet: no conflict. `overflow: auto !important` stays (pinned by test, since losing it would re-clip long articles), the custom 6→10 px currentColor scrollbar is untouched, and on a WebKit build without the property the declaration simply drops out. New regression test asserts both the rule and the overflow invariant; 223 tests.)*
 - [ ] **Feed-declared icon URLs + ignore list** (NNW `1af39fe86`, `24b294a87`). Inapplicable today: `favicon_discovery.rs` resolves only from the home page's `<link rel=icon>` and never reads a feed-declared icon, so NNW's `feedURLSubstringsToIgnoreFeedIconURL` has no counterpart. If feed-declared icons are ever added, bring the list and its substring semantics together. NNW's companion fix (one image URL shared by several feeds left all but the last un-iconed) is worth knowing then.

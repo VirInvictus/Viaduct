@@ -1672,6 +1672,28 @@ mod tests {
     }
 
     #[test]
+    fn atom_xhtml_title_with_cdata_yields_the_plain_text() {
+        // Regression pin for NNW #5484 (upstream `81345183c`, tests-only):
+        // a `<title type="xhtml">` whose body is a CDATA section must
+        // yield the plain text. Our parser routes the CData event through
+        // the same title branch as Text; the xhtml raw-inner capture is
+        // deliberately scoped to content/summary.
+        let xml = br#"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>t</title><id>urn:t</id>
+  <entry>
+    <id>urn:t:1</id>
+    <title type="xhtml"><![CDATA[Wheels within (mouse) wheels]]></title>
+    <updated>2020-05-01T00:00:00Z</updated>
+    <content>Body.</content>
+  </entry>
+</feed>"#;
+        let feed = parse_atom(xml, "https://example.com/feed").unwrap();
+        let item = &feed.items[0];
+        assert_eq!(item.title.as_deref(), Some("Wheels within (mouse) wheels"));
+    }
+
+    #[test]
     fn atom_summary_and_content_kept_separate() {
         // Both elements present — each lands in its own field. Port of
         // NNW's `summaryAndContentKeptSeparate` test (d6eb8df7d).

@@ -25,8 +25,9 @@ pub enum SkipReason {
     DisallowedHost,
     CacheControl,
     Throttled,
-    /// Reddit allows one feed per refresh session (NNW `80a090c5b`).
-    RedditRateLimit,
+    /// Reddit no longer offers RSS feeds (NNW `519c5598e`); every
+    /// reddit.com feed skips unconditionally.
+    RedditNoRss,
     /// openrss.org allows one feed per client per hour (NNW
     /// `5355d805a`).
     OpenRssThrottle,

@@ -1,16 +1,13 @@
 # viaduct: Patch Notes
 
-## Unreleased
+## v4.4.4: Reddit feeds stop getting fetched (2026-11-23)
 
-- **vir-gtk adopted at 1.5.0** (consumer wave, lock bump): the base
-  sheet's checked/active default went quiet (upstream issue #1; state
-  display stops spending the accent). Viaduct restates no button state
-  rules, so its three checked-toggle surfaces (the sidebar search
-  toggle, the "This feed" scope toggle, and the Reader View toggle)
-  now render the quiet lift instead of the dragonRed paint; the
-  cascade verified no other surface changes and the display pass on
-  the three toggles stays on Brandon's list.
-  `data/cargo-sources.json` regenerated against the moved lock.
+Three ports from the November 23 NetNewsWire sync (f3a0102c3 to cea2aeccf, +152 commits; the mac-7.3 release line plus the primary-media and themes arc). 311 tests; clippy `-D warnings` clean.
+
+- **Changed:** every reddit.com feed now skips refresh unconditionally, first in the skip order (NNW 519c5598e, b8f938f4b, 7f7a67583): Reddit no longer offers RSS feeds, so upstream deleted the one-feed-per-minute throttle we shipped in v3.6.0 (80a090c5b) and skips the host wholesale. The activity log reads "Skipped · Reddit no longer offers RSS feeds". The openrss.org one-per-client-hour pick stays. Closes the July 2026 roadmap line "Reddit one-feed-per-minute throttle" by supersession.
+- **Changed:** the bundled Tiqoe Dark stylesheet is fast-forwarded to byte-identical with upstream (two site-specific hides: the TechCrunch affiliate disclaimer and Macworld newsletter signup; the 7.3 primary-media/enclosure styles, inert until the media arc lands; whitespace fixes) and Verdana Revival gains the one enclosure-caption underline selector.
+- **Tests:** an Atom `<title type="xhtml">` whose body is a CDATA section yields the plain text (NNW 81345183c, #5484). Our parser already behaves, so this is a regression pin.
+- **Carried from the v4.4.3 window:** vir-gtk adopted at 1.5.0 (consumer wave, lock bump): the base sheet's checked/active default went quiet (upstream issue #1; state display stops spending the accent). Viaduct restates no button state rules, so its three checked-toggle surfaces (the sidebar search toggle, the "This feed" scope toggle, and the Reader View toggle) now render the quiet lift instead of the dragonRed paint; the cascade verified no other surface changes. `data/cargo-sources.json` regenerated against the moved lock.
 
 ## v4.4.3: Inoreader login works end to end (2026-11-13)
 
